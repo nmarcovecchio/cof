@@ -5,6 +5,7 @@
 #include <HTTPClient.h>
 #include <OneWire.h>
 #include <Preferences.h>
+#include <PubSubClient.h>
 #include <U8g2lib.h>
 #include <Update.h>
 #include <WiFi.h>
@@ -26,11 +27,15 @@ constexpr eth_phy_type_t kEthPhyType = ETH_PHY_LAN8720;
 constexpr uint32_t kDisplayIntervalMs = 1000;
 constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
+constexpr uint32_t kMqttReconnectIntervalMs = 5000;
+constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogTimeoutSeconds = 60;
 
 HardwareSerial ModemSerial(2);
+WiFiClient mqttNetworkClient;
+PubSubClient mqttClient(mqttNetworkClient);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 Adafruit_SHT31 sht31;
 OneWire oneWire(COF_PIN_ONEWIRE);
@@ -42,6 +47,8 @@ struct RuntimeState {
   bool ethernetConnected = false;
   bool wifiConfigured = false;
   bool wifiConnected = false;
+  bool mqttConfigured = false;
+  bool mqttConnected = false;
   bool oledReady = false;
   bool sht31Ready = false;
   bool ds18b20Ready = false;
@@ -63,6 +70,11 @@ struct RuntimeState {
   String ipAddress = "-";
   String wifiSsid = "";
   String wifiIpAddress = "-";
+  String mqttHost = "";
+  int mqttPort = 1883;
+  String mqttDeviceId = "cof-test";
+  String mqttUsername = "";
+  String mqttPassword = "";
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
@@ -77,6 +89,8 @@ RuntimeState state;
 uint32_t lastDisplayMs = 0;
 uint32_t lastSensorMs = 0;
 uint32_t lastModemMs = 0;
+uint32_t lastMqttReconnectMs = 0;
+uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastManifestMs = 0;
 bool didInitialManifestCheck = false;
 bool lastButtonPressed = false;
@@ -205,6 +219,211 @@ void clearSavedWiFi() {
   state.wifiIpAddress = "-";
   WiFi.disconnect(true, true);
   setStatus("WiFi cleared");
+}
+
+String mqttTopic(const String& suffix) {
+  return "devices/" + state.mqttDeviceId + "/" + suffix;
+}
+
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  String body;
+  body.reserve(length);
+  for (unsigned int i = 0; i < length; i++) {
+    body += static_cast<char>(payload[i]);
+  }
+
+  Serial.printf("[mqtt] message topic=%s payload=%s\n", topic, body.c_str());
+  setStatus("MQTT msg");
+}
+
+void loadSavedMqttConfig() {
+  state.mqttHost = preferences.getString("mqttHost", "");
+  state.mqttPort = preferences.getInt("mqttPort", 1883);
+  state.mqttDeviceId = preferences.getString("mqttDeviceId", "cof-test");
+  state.mqttUsername = preferences.getString("mqttUser", "");
+  state.mqttPassword = preferences.getString("mqttPass", "");
+  state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
+
+  if (state.mqttConfigured) {
+    mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
+    mqttClient.setCallback(onMqttMessage);
+    mqttClient.setBufferSize(1024);
+    Serial.printf("[mqtt] saved config host=%s port=%d device=%s\n",
+                  state.mqttHost.c_str(),
+                  state.mqttPort,
+                  state.mqttDeviceId.c_str());
+  } else {
+    Serial.println("[mqtt] no saved config");
+  }
+}
+
+void saveMqttConfig(const String& host, int port, const String& deviceId, const String& username, const String& password) {
+  state.mqttHost = host;
+  state.mqttPort = port;
+  state.mqttDeviceId = deviceId;
+  state.mqttUsername = username;
+  state.mqttPassword = password;
+  state.mqttConfigured = true;
+
+  preferences.putString("mqttHost", host);
+  preferences.putInt("mqttPort", port);
+  preferences.putString("mqttDeviceId", deviceId);
+  preferences.putString("mqttUser", username);
+  preferences.putString("mqttPass", password);
+
+  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(1024);
+  setStatus("MQTT saved");
+}
+
+void clearMqttConfig() {
+  preferences.remove("mqttHost");
+  preferences.remove("mqttPort");
+  preferences.remove("mqttDeviceId");
+  preferences.remove("mqttUser");
+  preferences.remove("mqttPass");
+  state.mqttConfigured = false;
+  state.mqttConnected = false;
+  state.mqttHost = "";
+  state.mqttPort = 1883;
+  state.mqttDeviceId = "cof-test";
+  state.mqttUsername = "";
+  state.mqttPassword = "";
+  mqttClient.disconnect();
+  setStatus("MQTT cleared");
+}
+
+String currentIpAddress() {
+  if (state.ethernetConnected) {
+    return state.ipAddress;
+  }
+  if (state.wifiConnected) {
+    return state.wifiIpAddress;
+  }
+  return "-";
+}
+
+bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = false, uint8_t qos = 0) {
+  if (!state.mqttConnected) {
+    return false;
+  }
+
+  char payload[768];
+  const size_t length = serializeJson(doc, payload, sizeof(payload));
+  const String topic = mqttTopic(suffix);
+  const bool ok = mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
+  Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
+  (void)qos;
+  return ok;
+}
+
+void publishDeviceStatus(const char* status, bool retained = true) {
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["status"] = status;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["ip"] = currentIpAddress();
+  doc["ethernet"] = state.ethernetConnected;
+  doc["wifi"] = state.wifiConnected;
+  doc["modem_ready"] = state.modemReady;
+  doc["sim_ready"] = state.simReady;
+  doc["lte_signal"] = state.signalQuality;
+  publishMqttJson("status", doc, retained, 1);
+}
+
+void publishTelemetryNow() {
+  if (!state.mqttConnected) {
+    Serial.println("[mqtt] telemetry skipped, not connected");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["uptime_seconds"] = millis() / 1000;
+  doc["ip"] = currentIpAddress();
+  doc["ethernet"] = state.ethernetConnected;
+  doc["wifi"] = state.wifiConnected;
+  if (isnan(state.dsTemperature)) {
+    doc["temperature_1"] = nullptr;
+  } else {
+    doc["temperature_1"] = state.dsTemperature;
+  }
+  if (isnan(state.shtTemperature)) {
+    doc["temperature_2"] = nullptr;
+  } else {
+    doc["temperature_2"] = state.shtTemperature;
+  }
+  if (isnan(state.shtHumidity)) {
+    doc["humidity"] = nullptr;
+  } else {
+    doc["humidity"] = state.shtHumidity;
+  }
+  doc["mains_voltage"] = nullptr;
+  doc["zmpt_raw"] = state.zmptRaw;
+  doc["modem_ready"] = state.modemReady;
+  doc["sim_ready"] = state.simReady;
+  doc["lte_signal"] = state.signalQuality;
+  doc["input_1"] = lastButtonPressed;
+  doc["output_1"] = false;
+  doc["output_2"] = false;
+  publishMqttJson("telemetry", doc, false, 0);
+}
+
+void connectMqttIfNeeded() {
+  if (!state.mqttConfigured || !networkConnected()) {
+    return;
+  }
+
+  if (mqttClient.connected()) {
+    state.mqttConnected = true;
+    mqttClient.loop();
+    return;
+  }
+
+  state.mqttConnected = false;
+  const uint32_t now = millis();
+  if (now - lastMqttReconnectMs < kMqttReconnectIntervalMs) {
+    return;
+  }
+  lastMqttReconnectMs = now;
+
+  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
+  mqttClient.setCallback(onMqttMessage);
+
+  const String clientId = state.mqttDeviceId + "-" + String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX);
+  const String willTopic = mqttTopic("status");
+  const String willPayload = "{\"status\":\"offline\",\"device_id\":\"" + state.mqttDeviceId + "\"}";
+  const char* username = state.mqttUsername.length() > 0 ? state.mqttUsername.c_str() : nullptr;
+  const char* password = state.mqttUsername.length() > 0 ? state.mqttPassword.c_str() : nullptr;
+
+  Serial.printf("[mqtt] connecting host=%s port=%d device=%s\n",
+                state.mqttHost.c_str(),
+                state.mqttPort,
+                state.mqttDeviceId.c_str());
+
+  const bool ok = mqttClient.connect(
+      clientId.c_str(),
+      username,
+      password,
+      willTopic.c_str(),
+      1,
+      true,
+      willPayload.c_str());
+
+  if (!ok) {
+    Serial.printf("[mqtt] connect failed state=%d\n", mqttClient.state());
+    setStatus("MQTT fail");
+    return;
+  }
+
+  state.mqttConnected = true;
+  mqttClient.subscribe(mqttTopic("config/desired").c_str(), 1);
+  mqttClient.subscribe(mqttTopic("command").c_str(), 1);
+  publishDeviceStatus("online", true);
+  publishTelemetryNow();
+  setStatus("MQTT OK");
 }
 
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
@@ -434,7 +653,7 @@ void drawDisplay() {
   }
   display.drawStr(0, 41, line);
 
-  snprintf(line, sizeof(line), "ADC %d LTE %s", state.zmptRaw, state.modemReady ? "OK" : "--");
+  snprintf(line, sizeof(line), "ADC %d MQTT %s", state.zmptRaw, state.mqttConnected ? "OK" : "--");
   display.drawStr(0, 52, line);
 
   String footer = state.statusLine;
@@ -751,6 +970,10 @@ void printSerialHelp() {
   Serial.println("  wifi SSID PASSWORD  save and connect WiFi");
   Serial.println("  wifi-clear          forget saved WiFi");
   Serial.println("  wifi-status         print WiFi status");
+  Serial.println("  mqtt HOST PORT DEVICE_ID [USER PASSWORD]");
+  Serial.println("  mqtt-clear          forget saved MQTT config");
+  Serial.println("  mqtt-status         print MQTT status");
+  Serial.println("  pub                 publish telemetry now");
   Serial.println("  AT...      send raw AT command to modem");
   Serial.println();
 }
@@ -771,6 +994,12 @@ void printRuntimeStatus() {
                 state.wifiConfigured ? "YES" : "NO",
                 state.wifiSsid.c_str(),
                 state.wifiIpAddress.c_str());
+  Serial.printf("MQTT: %s configured=%s host=%s port=%d device=%s\n",
+                state.mqttConnected ? "OK" : "NO",
+                state.mqttConfigured ? "YES" : "NO",
+                state.mqttHost.c_str(),
+                state.mqttPort,
+                state.mqttDeviceId.c_str());
   Serial.printf("SHT31: %s temp=%.2f humidity=%.2f\n",
                 state.sht31Ready ? "OK" : "NO", state.shtTemperature, state.shtHumidity);
   Serial.printf("DS18B20: %s temp=%.2f\n", state.ds18b20Ready ? "OK" : "NO", state.dsTemperature);
@@ -829,6 +1058,60 @@ void handleSerialCommand(const String& command) {
                   state.wifiSsid.c_str(),
                   state.wifiIpAddress.c_str(),
                   state.wifiConnected ? WiFi.RSSI() : 0);
+    return;
+  }
+
+  if (command.startsWith("mqtt ")) {
+    String args = command.substring(5);
+    args.trim();
+
+    String tokens[5];
+    int count = 0;
+    while (args.length() > 0 && count < 5) {
+      const int separator = args.indexOf(' ');
+      if (separator < 0) {
+        tokens[count++] = args;
+        break;
+      }
+      tokens[count++] = args.substring(0, separator);
+      args = args.substring(separator + 1);
+      args.trim();
+    }
+
+    if (count != 3 && count != 5) {
+      Serial.println("[mqtt] usage: mqtt HOST PORT DEVICE_ID [USER PASSWORD]");
+      return;
+    }
+
+    const int port = tokens[1].toInt();
+    if (port <= 0 || port > 65535) {
+      Serial.println("[mqtt] invalid port");
+      return;
+    }
+
+    saveMqttConfig(tokens[0], port, tokens[2], count == 5 ? tokens[3] : "", count == 5 ? tokens[4] : "");
+    connectMqttIfNeeded();
+    return;
+  }
+
+  if (command.equalsIgnoreCase("mqtt-clear")) {
+    clearMqttConfig();
+    return;
+  }
+
+  if (command.equalsIgnoreCase("mqtt-status")) {
+    Serial.printf("[mqtt] configured=%s connected=%s host=%s port=%d device=%s state=%d\n",
+                  state.mqttConfigured ? "yes" : "no",
+                  state.mqttConnected ? "yes" : "no",
+                  state.mqttHost.c_str(),
+                  state.mqttPort,
+                  state.mqttDeviceId.c_str(),
+                  mqttClient.state());
+    return;
+  }
+
+  if (command.equalsIgnoreCase("pub")) {
+    publishTelemetryNow();
     return;
   }
 
@@ -915,6 +1198,7 @@ void setup() {
   printSerialHelp();
 
   preferences.begin("cof", false);
+  loadSavedMqttConfig();
   pinMode(COF_PIN_ZMPT_ADC, INPUT);
 
   Wire.begin(COF_PIN_I2C_SDA, COF_PIN_I2C_SCL);
@@ -950,6 +1234,13 @@ void loop() {
   if (now - lastDisplayMs >= kDisplayIntervalMs) {
     lastDisplayMs = now;
     drawDisplay();
+  }
+
+  connectMqttIfNeeded();
+
+  if (state.mqttConnected && now - lastTelemetryPublishMs >= kTelemetryPublishIntervalMs) {
+    lastTelemetryPublishMs = now;
+    publishTelemetryNow();
   }
 
   if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress) {

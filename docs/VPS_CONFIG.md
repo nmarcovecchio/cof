@@ -71,6 +71,30 @@ Current Docker Compose publishes Mosquitto only on localhost:
 
 This is intentional until TLS/authentication are configured.
 
+For a short lab test from an ESP32 outside the VPS, set this in `.env`:
+
+```text
+MQTT_BIND_ADDRESS=0.0.0.0
+```
+
+Then recreate services:
+
+```bash
+docker compose up -d --build
+```
+
+Open port `1883/tcp` only temporarily in AWS Lightsail and UFW:
+
+```bash
+sudo ufw allow 1883/tcp
+```
+
+Close it after the test:
+
+```bash
+sudo ufw delete allow 1883/tcp
+```
+
 ## Initial server packages
 
 ```bash
@@ -240,6 +264,43 @@ docker compose logs -f mqtt-worker
 ```
 
 Expected result: the MQTT worker logs the incoming telemetry payload.
+
+## MQTT ESP32 lab test
+
+Preconditions:
+
+- Firmware with MQTT support is running on the ESP32.
+- ESP32 has Ethernet or WiFi internet.
+- VPS `.env` has `MQTT_BIND_ADDRESS=0.0.0.0`.
+- AWS Lightsail and UFW allow temporary `1883/tcp`.
+
+From PlatformIO Monitor:
+
+```text
+mqtt <VPS_STATIC_IP> 1883 cof-test
+mqtt-status
+pub
+```
+
+Or, after DNS is configured:
+
+```text
+mqtt mqtt.callonfail.com.ar 1883 cof-test
+mqtt-status
+pub
+```
+
+Watch the VPS:
+
+```bash
+docker compose logs -f mqtt-worker
+```
+
+Refresh:
+
+```text
+http://<VPS_STATIC_IP>/dashboard
+```
 
 ## Current security posture
 

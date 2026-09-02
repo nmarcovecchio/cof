@@ -127,6 +127,67 @@ docker compose logs -f mqtt-worker
 Antes de conectar equipos reales desde internet hay que agregar autenticacion y
 TLS en `8883`.
 
+### Prueba ESP32 -> VPS por MQTT
+
+Para una prueba corta de laboratorio, se puede exponer MQTT sin TLS en `1883`.
+No dejar esto asi para produccion.
+
+En `.env` del VPS:
+
+```text
+MQTT_BIND_ADDRESS=0.0.0.0
+```
+
+Recrear servicios:
+
+```bash
+docker compose up -d --build
+```
+
+Abrir temporalmente el puerto en UFW:
+
+```bash
+sudo ufw allow 1883/tcp
+```
+
+Tambien abrir `1883/tcp` en el firewall de Lightsail/AWS.
+
+En el ESP32, desde PlatformIO Monitor:
+
+```text
+mqtt mqtt.callonfail.com.ar 1883 cof-test
+```
+
+O usando la IP publica:
+
+```text
+mqtt IP_DEL_VPS 1883 cof-test
+```
+
+Publicar telemetria manual:
+
+```text
+pub
+```
+
+Ver logs en el VPS:
+
+```bash
+docker compose logs -f mqtt-worker
+```
+
+Luego refrescar:
+
+```text
+http://IP_DEL_VPS/dashboard
+```
+
+Cuando termine la prueba, cerrar `1883`:
+
+```bash
+sudo ufw delete allow 1883/tcp
+```
+
 ## IDE recomendado
 
 Usa **Visual Studio Code + PlatformIO**.
@@ -167,6 +228,10 @@ r      reiniciar ESP32
 wifi SSID PASSWORD  guardar WiFi y conectar
 wifi-clear          borrar WiFi guardado
 wifi-status         ver estado WiFi
+mqtt HOST PORT DEVICE_ID [USER PASSWORD]
+mqtt-clear          borrar MQTT guardado
+mqtt-status         ver estado MQTT
+pub                 publicar telemetria ahora
 AT...  enviar comando AT crudo al modem
 ```
 
@@ -196,6 +261,14 @@ wifi-clear
 ```
 
 Nota: por ahora el comando simple no soporta espacios en el SSID o password.
+
+Para configurar MQTT desde Serial:
+
+```text
+mqtt IP_DEL_VPS 1883 cof-test
+mqtt-status
+pub
+```
 
 El firmware tambien habilita el watchdog interno del ESP32 con timeout amplio
 para pruebas. Si el programa se cuelga, el ESP32 deberia reiniciarse solo.
