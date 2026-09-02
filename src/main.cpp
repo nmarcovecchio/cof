@@ -38,6 +38,7 @@ Preferences preferences;
 struct RuntimeState {
   bool ethernetStarted = false;
   bool ethernetConnected = false;
+  bool oledReady = false;
   bool sht31Ready = false;
   bool ds18b20Ready = false;
   bool modemReady = false;
@@ -54,6 +55,7 @@ struct RuntimeState {
   float dsTemperature = NAN;
   int zmptRaw = 0;
   int signalQuality = -1;
+  uint8_t oledAddress = COF_OLED_ADDRESS;
   String ipAddress = "-";
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
@@ -209,6 +211,44 @@ bool sendAT(const String& command, const String& expected = "OK", uint32_t timeo
   return expected.length() == 0 || response.indexOf(expected) >= 0;
 }
 
+bool i2cDevicePresent(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+void scanI2cBus() {
+  Serial.printf("[i2c] scan SDA=%d SCL=%d\n", COF_PIN_I2C_SDA, COF_PIN_I2C_SCL);
+  uint8_t found = 0;
+  for (uint8_t address = 1; address < 127; address++) {
+    if (i2cDevicePresent(address)) {
+      Serial.printf("[i2c] found device at 0x%02X\n", address);
+      found++;
+    }
+  }
+  if (found == 0) {
+    Serial.println("[i2c] no devices found");
+  }
+}
+
+void initDisplay() {
+  scanI2cBus();
+
+  if (i2cDevicePresent(0x3C)) {
+    state.oledAddress = 0x3C;
+  } else if (i2cDevicePresent(0x3D)) {
+    state.oledAddress = 0x3D;
+  } else {
+    state.oledReady = false;
+    setStatus("OLED no I2C");
+    return;
+  }
+
+  display.setI2CAddress(state.oledAddress << 1);
+  display.begin();
+  state.oledReady = true;
+  setStatus("OLED 0x" + String(state.oledAddress, HEX) + " OK");
+}
+
 bool modemWaitForPrompt(uint32_t timeoutMs) {
   const String response = readModemUntil(timeoutMs, ">");
   Serial.println("[modem] << " + response);
@@ -272,6 +312,10 @@ void readSensors() {
 }
 
 void drawDisplay() {
+  if (!state.oledReady) {
+    return;
+  }
+
   char line[32];
   display.clearBuffer();
   display.setFont(u8g2_font_5x8_tf);
@@ -609,9 +653,8 @@ void setup() {
   pinMode(COF_PIN_ZMPT_ADC, INPUT);
 
   Wire.begin(COF_PIN_I2C_SDA, COF_PIN_I2C_SCL);
-  display.setI2CAddress(COF_OLED_ADDRESS << 1);
-  display.begin();
-  setStatus("OLED OK");
+  Wire.setClock(100000);
+  initDisplay();
   drawDisplay();
 
   state.sht31Ready = sht31.begin(COF_SHT31_ADDRESS);

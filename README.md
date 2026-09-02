@@ -244,3 +244,36 @@ La pantalla muestra:
 - ADC crudo del ZMPT101B.
 - Estado modem/LTE.
 - Estado actual: OTA, llamada, audio, errores.
+
+## Si el OLED queda apagado
+
+Checklist rapido:
+
+1. Despues de subir firmware, sacar `IO0` de GND y resetear. Si `IO0`
+   queda a GND, el WT32 queda en modo programacion y no corre el programa.
+2. Confirmar que el OLED este conectado a los pines configurados:
+
+   ```text
+   OLED SDA -> WT32 IO32 / CFG
+   OLED SCL -> WT32 IO33 / 485_EN
+   OLED VCC -> WT32 3V3
+   OLED GND -> WT32 GND
+   ```
+
+3. No usar GPIO21/GPIO22: en este firmware el bus I2C esta en IO32/IO33.
+4. Probar invertir SDA/SCL si hay duda de serigrafia.
+5. Abrir Monitor a 115200 y buscar:
+
+   ```text
+   [i2c] scan SDA=32 SCL=33
+   [i2c] found device at 0x3C
+   ```
+
+   o:
+
+   ```text
+   [i2c] no devices found
+   ```
+
+6. Si no aparece ningun dispositivo I2C, revisar alimentacion, GND comun,
+   SDA/SCL y soldaduras del pin header.
