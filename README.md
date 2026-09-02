@@ -23,6 +23,12 @@ El repo incluye una base deployable para VPS:
 - Worker MQTT Python.
 - Caddy como reverse proxy.
 
+La bitacora/configuracion persistente del VPS queda en:
+
+```text
+docs/VPS_CONFIG.md
+```
+
 ### Deploy inicial en VPS
 
 En el VPS, despues de instalar Docker:
