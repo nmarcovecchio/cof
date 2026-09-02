@@ -270,6 +270,17 @@ mqtt-status
 pub
 ```
 
+La build de laboratorio trae por defecto:
+
+```text
+MQTT host: mqtt.callonfail.com.ar
+MQTT port: 1883
+Device ID: cof-test
+```
+
+Si no hay otra configuracion MQTT guardada en el ESP32, intenta conectar ahi
+automaticamente.
+
 El firmware tambien habilita el watchdog interno del ESP32 con timeout amplio
 para pruebas. Si el programa se cuelga, el ESP32 deberia reiniciarse solo.
 

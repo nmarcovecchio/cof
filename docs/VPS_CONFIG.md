@@ -290,6 +290,17 @@ mqtt-status
 pub
 ```
 
+Firmware lab default:
+
+```text
+MQTT host: mqtt.callonfail.com.ar
+MQTT port: 1883
+Device ID: cof-test
+```
+
+If no MQTT config is saved in the ESP32 preferences, firmware attempts to
+connect to this endpoint automatically.
+
 Watch the VPS:
 
 ```bash

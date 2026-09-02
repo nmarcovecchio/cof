@@ -70,11 +70,11 @@ struct RuntimeState {
   String ipAddress = "-";
   String wifiSsid = "";
   String wifiIpAddress = "-";
-  String mqttHost = "";
-  int mqttPort = 1883;
-  String mqttDeviceId = "cof-test";
-  String mqttUsername = "";
-  String mqttPassword = "";
+  String mqttHost = COF_DEFAULT_MQTT_HOST;
+  int mqttPort = COF_DEFAULT_MQTT_PORT;
+  String mqttDeviceId = COF_DEFAULT_MQTT_DEVICE_ID;
+  String mqttUsername = COF_DEFAULT_MQTT_USERNAME;
+  String mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
@@ -237,11 +237,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 }
 
 void loadSavedMqttConfig() {
-  state.mqttHost = preferences.getString("mqttHost", "");
-  state.mqttPort = preferences.getInt("mqttPort", 1883);
-  state.mqttDeviceId = preferences.getString("mqttDeviceId", "cof-test");
-  state.mqttUsername = preferences.getString("mqttUser", "");
-  state.mqttPassword = preferences.getString("mqttPass", "");
+  state.mqttHost = preferences.getString("mqttHost", COF_DEFAULT_MQTT_HOST);
+  state.mqttPort = preferences.getInt("mqttPort", COF_DEFAULT_MQTT_PORT);
+  state.mqttDeviceId = preferences.getString("mqttDeviceId", COF_DEFAULT_MQTT_DEVICE_ID);
+  state.mqttUsername = preferences.getString("mqttUser", COF_DEFAULT_MQTT_USERNAME);
+  state.mqttPassword = preferences.getString("mqttPass", COF_DEFAULT_MQTT_PASSWORD);
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -283,15 +283,15 @@ void clearMqttConfig() {
   preferences.remove("mqttDeviceId");
   preferences.remove("mqttUser");
   preferences.remove("mqttPass");
-  state.mqttConfigured = false;
   state.mqttConnected = false;
-  state.mqttHost = "";
-  state.mqttPort = 1883;
-  state.mqttDeviceId = "cof-test";
-  state.mqttUsername = "";
-  state.mqttPassword = "";
+  state.mqttHost = COF_DEFAULT_MQTT_HOST;
+  state.mqttPort = COF_DEFAULT_MQTT_PORT;
+  state.mqttDeviceId = COF_DEFAULT_MQTT_DEVICE_ID;
+  state.mqttUsername = COF_DEFAULT_MQTT_USERNAME;
+  state.mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
+  state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
   mqttClient.disconnect();
-  setStatus("MQTT cleared");
+  setStatus("MQTT defaults");
 }
 
 String currentIpAddress() {
