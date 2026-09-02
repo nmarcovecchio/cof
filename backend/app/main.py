@@ -1,9 +1,12 @@
+import hashlib
+import json
 import os
 from html import escape
 from datetime import datetime, timezone
 
+import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, jsonify
+from flask import Flask, jsonify, redirect, request, url_for
 from sqlalchemy import text
 
 from .extensions import db
@@ -51,6 +54,47 @@ def create_app() -> Flask:
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
         return render_device_detail(device, recent_telemetry, recent_events, configs)
 
+    @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
+    def device_config(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        latest_config = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).first()
+
+        if request.method == "POST":
+            raw_payload = request.form.get("payload", "")
+            try:
+                payload = json.loads(raw_payload)
+            except json.JSONDecodeError as exc:
+                return render_config_form(device, raw_payload, error=f"JSON invalido: {exc}")
+
+            next_version = (latest_config.version + 1) if latest_config else 1
+            payload["schema_version"] = payload.get("schema_version", 1)
+            payload["device_id"] = device.device_uid
+            requested_version = int(payload.get("config_version") or next_version)
+            if latest_config and requested_version <= latest_config.version:
+                requested_version = next_version
+            payload["config_version"] = requested_version
+
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            config_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            payload["config_hash"] = config_hash
+
+            config = DeviceConfig(
+                device_id=device.id,
+                version=payload["config_version"],
+                status="desired",
+                config_hash=config_hash,
+                desired_payload=payload,
+            )
+            db.session.add(config)
+            device.desired_config_version = payload["config_version"]
+            db.session.commit()
+
+            publish_config_desired(device, payload)
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
+
+        payload = latest_config.desired_payload if latest_config else default_device_config(device)
+        return render_config_form(device, json.dumps(payload, indent=2, ensure_ascii=False))
+
     @app.get("/health")
     def health():
         return jsonify(
@@ -94,6 +138,62 @@ def check_redis() -> dict:
         return {"ok": True}
     except Exception as exc:  # pragma: no cover - visible in health endpoint
         return {"ok": False, "error": str(exc)}
+
+
+def publish_config_desired(device: Device, payload: dict):
+    topic = f"devices/{device.device_uid}/config/desired"
+    mqtt_host = os.environ.get("MQTT_HOST", "mosquitto")
+    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
+    auth = None
+    username = os.environ.get("MQTT_USERNAME", "")
+    if username:
+        auth = {"username": username, "password": os.environ.get("MQTT_PASSWORD", "")}
+
+    mqtt_publish.single(
+        topic,
+        payload=json.dumps(payload, separators=(",", ":")),
+        qos=1,
+        retain=True,
+        hostname=mqtt_host,
+        port=mqtt_port,
+        auth=auth,
+    )
+
+
+def default_device_config(device: Device) -> dict:
+    return {
+        "schema_version": 1,
+        "config_version": (device.desired_config_version or 0) + 1,
+        "device_id": device.device_uid,
+        "telemetry_interval_seconds": 60,
+        "sensors": [
+            {"id": "temp_1", "name": "DS18B20", "type": "temperature", "enabled": True, "source": "ds18b20"},
+            {
+                "id": "temp_2",
+                "name": "SHT31 temperatura",
+                "type": "temperature",
+                "enabled": True,
+                "source": "sht31_temperature",
+            },
+            {"id": "humidity_1", "name": "SHT31 humedad", "type": "humidity", "enabled": True, "source": "sht31_humidity"},
+            {"id": "mains_1", "name": "Red electrica", "type": "mains_voltage", "enabled": True, "source": "zmpt101b"},
+        ],
+        "outputs": [
+            {"id": "output_1", "name": "Salida 1", "type": "relay", "enabled": True},
+            {"id": "output_2", "name": "Salida 2", "type": "relay", "enabled": True},
+        ],
+        "audio": [
+            {
+                "id": "test_call",
+                "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/audio/cof_test.wav",
+                "sha256": "",
+                "modem_path": "C:/cof_test.wav",
+                "format": "wav_pcm_8000_mono_16bit",
+            }
+        ],
+        "rules": [],
+        "flows": [],
+    }
 
 
 def serialize_device(device: Device) -> dict:
@@ -210,6 +310,7 @@ def render_device_detail(device, recent_telemetry, recent_events, configs) -> st
           <li>Ultima conexion: {device.last_seen_at or '-'}</li>
           <li>Config deseada/reportada: {device.desired_config_version or '-'} / {device.reported_config_version or '-'}</li>
         </ul>
+        <p><a href="/devices/{escape(device.device_uid)}/config">Editar/publicar configuracion</a></p>
         <h2>Telemetria</h2>
         <table>
           <thead><tr><th>Fecha</th><th>Temp 1</th><th>Temp 2</th><th>Hum</th><th>VAC</th></tr></thead>
@@ -225,6 +326,23 @@ def render_device_detail(device, recent_telemetry, recent_events, configs) -> st
           <thead><tr><th>Version</th><th>Estado</th><th>Hash</th><th>Aplicada</th></tr></thead>
           <tbody>{config_rows or '<tr><td colspan="4">Sin configuraciones</td></tr>'}</tbody>
         </table>
+        """,
+    )
+
+
+def render_config_form(device, payload: str, error: str | None = None) -> str:
+    error_html = f"<p style=\"color: #b00020;\"><strong>{escape(error)}</strong></p>" if error else ""
+    return render_page(
+        f"Config {device.device_uid}",
+        f"""
+        <p><a href="/devices/{escape(device.device_uid)}">Volver al dispositivo</a></p>
+        {error_html}
+        <p>Al guardar, el backend publica este JSON en
+        <code>devices/{escape(device.device_uid)}/config/desired</code> con retain.</p>
+        <form method="post">
+          <textarea name="payload" rows="28" style="width: 100%; font-family: monospace;">{escape(payload)}</textarea>
+          <p><button type="submit">Guardar y publicar config</button></p>
+        </form>
         """,
     )
 

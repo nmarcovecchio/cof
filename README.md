@@ -182,6 +182,15 @@ Luego refrescar:
 http://IP_DEL_VPS/dashboard
 ```
 
+Para probar configuracion web -> ESP32 -> ACK:
+
+```text
+http://IP_DEL_VPS/devices/cof-test
+```
+
+Entrar a `Editar/publicar configuracion`, guardar el JSON y esperar que el
+dispositivo reporte la misma version en `Config deseada/reportada`.
+
 Cuando termine la prueba, cerrar `1883`:
 
 ```bash

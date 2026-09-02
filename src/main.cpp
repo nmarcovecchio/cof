@@ -75,6 +75,8 @@ struct RuntimeState {
   String mqttDeviceId = COF_DEFAULT_MQTT_DEVICE_ID;
   String mqttUsername = COF_DEFAULT_MQTT_USERNAME;
   String mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
+  int reportedConfigVersion = 0;
+  String reportedConfigHash = "";
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
@@ -96,6 +98,11 @@ bool didInitialManifestCheck = false;
 bool lastButtonPressed = false;
 uint32_t buttonPressedAtMs = 0;
 String serialCommandBuffer;
+bool pendingConfigReport = false;
+bool pendingConfigApplied = false;
+int pendingConfigVersion = 0;
+String pendingConfigHash = "";
+String pendingConfigError = "";
 
 void setStatus(const String& line) {
   state.statusLine = line;
@@ -234,6 +241,38 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   Serial.printf("[mqtt] message topic=%s payload=%s\n", topic, body.c_str());
   setStatus("MQTT msg");
+
+  const String topicString(topic);
+  if (topicString == mqttTopic("config/desired")) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, body);
+    pendingConfigVersion = 0;
+    pendingConfigHash = "";
+    pendingConfigApplied = false;
+    pendingConfigError = "";
+
+    if (error) {
+      pendingConfigError = "invalid JSON";
+    } else {
+      const String targetDevice = doc["device_id"] | "";
+      pendingConfigVersion = doc["config_version"] | 0;
+      pendingConfigHash = doc["config_hash"] | "";
+
+      if (targetDevice.length() > 0 && targetDevice != state.mqttDeviceId) {
+        pendingConfigError = "device_id mismatch";
+      } else if (pendingConfigVersion <= 0) {
+        pendingConfigError = "missing config_version";
+      } else {
+        state.reportedConfigVersion = pendingConfigVersion;
+        state.reportedConfigHash = pendingConfigHash;
+        preferences.putInt("reportedCfgVersion", state.reportedConfigVersion);
+        preferences.putString("reportedCfgHash", state.reportedConfigHash);
+        pendingConfigApplied = true;
+      }
+    }
+
+    pendingConfigReport = true;
+  }
 }
 
 void loadSavedMqttConfig() {
@@ -242,6 +281,8 @@ void loadSavedMqttConfig() {
   state.mqttDeviceId = preferences.getString("mqttDeviceId", COF_DEFAULT_MQTT_DEVICE_ID);
   state.mqttUsername = preferences.getString("mqttUser", COF_DEFAULT_MQTT_USERNAME);
   state.mqttPassword = preferences.getString("mqttPass", COF_DEFAULT_MQTT_PASSWORD);
+  state.reportedConfigVersion = preferences.getInt("reportedCfgVersion", 0);
+  state.reportedConfigHash = preferences.getString("reportedCfgHash", "");
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -329,7 +370,24 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   doc["modem_ready"] = state.modemReady;
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
+  doc["reported_config_version"] = state.reportedConfigVersion;
   publishMqttJson("status", doc, retained, 1);
+}
+
+void publishConfigReported() {
+  JsonDocument doc;
+  doc["schema_version"] = 1;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["config_version"] = pendingConfigVersion;
+  doc["applied"] = pendingConfigApplied;
+  doc["config_hash"] = pendingConfigHash;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  if (pendingConfigApplied) {
+    doc["message"] = "config applied";
+  } else {
+    doc["error"] = pendingConfigError;
+  }
+  publishMqttJson("config/reported", doc, false, 1);
 }
 
 void publishTelemetryNow() {
@@ -1000,6 +1058,9 @@ void printRuntimeStatus() {
                 state.mqttHost.c_str(),
                 state.mqttPort,
                 state.mqttDeviceId.c_str());
+  Serial.printf("Reported config: version=%d hash=%s\n",
+                state.reportedConfigVersion,
+                state.reportedConfigHash.c_str());
   Serial.printf("SHT31: %s temp=%.2f humidity=%.2f\n",
                 state.sht31Ready ? "OK" : "NO", state.shtTemperature, state.shtHumidity);
   Serial.printf("DS18B20: %s temp=%.2f\n", state.ds18b20Ready ? "OK" : "NO", state.dsTemperature);
@@ -1237,6 +1298,11 @@ void loop() {
   }
 
   connectMqttIfNeeded();
+
+  if (state.mqttConnected && pendingConfigReport) {
+    publishConfigReported();
+    pendingConfigReport = false;
+  }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= kTelemetryPublishIntervalMs) {
     lastTelemetryPublishMs = now;

@@ -255,3 +255,34 @@ reported config version
 applied/pending/error
 last config report time
 ```
+
+## MVP web test flow
+
+1. Open the device page:
+
+   ```text
+   http://<VPS_STATIC_IP>/devices/cof-test
+   ```
+
+2. Click `Editar/publicar configuracion`.
+3. Save the JSON.
+4. The backend stores a new `device_configs` row.
+5. The backend publishes the payload retained to:
+
+   ```text
+   devices/cof-test/config/desired
+   ```
+
+6. Firmware receives the config, stores `config_version` and `config_hash`, then publishes:
+
+   ```text
+   devices/cof-test/config/reported
+   ```
+
+7. The MQTT worker stores the report and updates the device's reported config
+   version.
+8. Refresh the device page and verify:
+
+   ```text
+   Config deseada/reportada: <same version> / <same version>
+   ```
