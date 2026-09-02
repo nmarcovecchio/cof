@@ -3,6 +3,7 @@
 Primer firmware base para CallOnFail usando:
 
 - WT32-ETH01 / WT32-S1 con Ethernet.
+- WiFi opcional por credenciales cargadas desde Serial.
 - OLED I2C 1.3" SH1106.
 - SHT31 por I2C.
 - DS18B20 por OneWire.
@@ -48,6 +49,9 @@ o      forzar chequeo manifest/OTA
 a      forzar chequeo manifest/audio
 c      hacer llamada de prueba si llamadas estan habilitadas
 r      reiniciar ESP32
+wifi SSID PASSWORD  guardar WiFi y conectar
+wifi-clear          borrar WiFi guardado
+wifi-status         ver estado WiFi
 AT...  enviar comando AT crudo al modem
 ```
 
@@ -62,6 +66,21 @@ AT+CSQ
 AT+CCMXPLAY=?
 AT+CFTRANRX=?
 ```
+
+Para cargar WiFi desde Serial:
+
+```text
+wifi MiRed MiPassword
+```
+
+El firmware guarda SSID/password en flash y vuelve a conectarse despues de un
+reset. Para borrar:
+
+```text
+wifi-clear
+```
+
+Nota: por ahora el comando simple no soporta espacios en el SSID o password.
 
 El firmware tambien habilita el watchdog interno del ESP32 con timeout amplio
 para pruebas. Si el programa se cuelga, el ESP32 deberia reiniciarse solo.
@@ -211,7 +230,7 @@ AT+CCMXPLAY=?
 AT+CFTRANRX=?
 ```
 
-## OTA por Ethernet
+## OTA por Ethernet o WiFi
 
 El ESP32 consulta:
 
@@ -237,8 +256,9 @@ Para publicar una nueva version:
 4. Actualizar `actual_version/manifest.json` con la nueva version.
 5. Commit + push.
 
-Los equipos instalados descargaran el firmware por Ethernet cuando vean una version
-mayor en el manifest.
+Los equipos instalados descargaran el firmware por Ethernet o WiFi cuando vean
+una version mayor en el manifest. Ethernet queda como red principal; WiFi sirve
+como fallback y para pruebas.
 
 ## Audio de llamada
 

@@ -40,6 +40,8 @@ Preferences preferences;
 struct RuntimeState {
   bool ethernetStarted = false;
   bool ethernetConnected = false;
+  bool wifiConfigured = false;
+  bool wifiConnected = false;
   bool oledReady = false;
   bool sht31Ready = false;
   bool ds18b20Ready = false;
@@ -59,6 +61,8 @@ struct RuntimeState {
   int signalQuality = -1;
   uint8_t oledAddress = COF_OLED_ADDRESS;
   String ipAddress = "-";
+  String wifiSsid = "";
+  String wifiIpAddress = "-";
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
@@ -82,6 +86,10 @@ String serialCommandBuffer;
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+
+bool networkConnected() {
+  return state.ethernetConnected || state.wifiConnected;
 }
 
 void beginInternalWatchdog() {
@@ -129,6 +137,18 @@ void onNetworkEvent(WiFiEvent_t event) {
       state.ipAddress = "-";
       setStatus("ETH stopped");
       break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      state.wifiConnected = true;
+      state.wifiIpAddress = WiFi.localIP().toString();
+      setStatus("WiFi IP " + state.wifiIpAddress);
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      state.wifiConnected = false;
+      state.wifiIpAddress = "-";
+      if (state.wifiConfigured) {
+        setStatus("WiFi disconnected");
+      }
+      break;
     default:
       break;
   }
@@ -143,8 +163,52 @@ void beginEthernet() {
 #endif
 }
 
+void connectWiFi(const String& ssid, const String& password, bool saveCredentials) {
+  if (ssid.length() == 0) {
+    Serial.println("[wifi] missing SSID");
+    return;
+  }
+
+  state.wifiConfigured = true;
+  state.wifiSsid = ssid;
+  if (saveCredentials) {
+    preferences.putString("wifiSsid", ssid);
+    preferences.putString("wifiPass", password);
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  setStatus("WiFi connecting");
+  Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+}
+
+void beginSavedWiFi() {
+  const String ssid = preferences.getString("wifiSsid", "");
+  const String password = preferences.getString("wifiPass", "");
+  state.wifiConfigured = ssid.length() > 0;
+  state.wifiSsid = ssid;
+
+  if (!state.wifiConfigured) {
+    Serial.println("[wifi] no saved credentials");
+    return;
+  }
+
+  connectWiFi(ssid, password, false);
+}
+
+void clearSavedWiFi() {
+  preferences.remove("wifiSsid");
+  preferences.remove("wifiPass");
+  state.wifiConfigured = false;
+  state.wifiConnected = false;
+  state.wifiSsid = "";
+  state.wifiIpAddress = "-";
+  WiFi.disconnect(true, true);
+  setStatus("WiFi cleared");
+}
+
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
-  if (!state.ethernetConnected) {
+  if (!networkConnected()) {
     return false;
   }
 
@@ -347,7 +411,13 @@ void drawDisplay() {
   snprintf(line, sizeof(line), "FW %s", COF_FIRMWARE_VERSION);
   display.drawStr(72, 8, line);
 
-  snprintf(line, sizeof(line), "ETH: %s", state.ethernetConnected ? state.ipAddress.c_str() : "NO");
+  if (state.ethernetConnected) {
+    snprintf(line, sizeof(line), "ETH %s", state.ipAddress.c_str());
+  } else if (state.wifiConnected) {
+    snprintf(line, sizeof(line), "WIFI %s", state.wifiIpAddress.c_str());
+  } else {
+    snprintf(line, sizeof(line), "NET NO");
+  }
   display.drawStr(0, 19, line);
 
   if (state.sht31Ready && !isnan(state.shtTemperature) && !isnan(state.shtHumidity)) {
@@ -435,7 +505,7 @@ void pollModem() {
 }
 
 bool uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion) {
-  if (!state.ethernetConnected || !state.modemReady || !state.modemFileTransferSupported) {
+  if (!networkConnected() || !state.modemReady || !state.modemFileTransferSupported) {
     return false;
   }
 
@@ -507,7 +577,7 @@ bool uploadAudioToModem(const String& url, const String& modemPath, const String
 }
 
 bool performOta(const String& url, const String& newVersion) {
-  if (!state.ethernetConnected) {
+  if (!networkConnected()) {
     return false;
   }
 
@@ -678,6 +748,9 @@ void printSerialHelp() {
   Serial.println("  a          force manifest/audio sync check");
   Serial.println("  c          place test call if calls are enabled");
   Serial.println("  r          restart ESP32");
+  Serial.println("  wifi SSID PASSWORD  save and connect WiFi");
+  Serial.println("  wifi-clear          forget saved WiFi");
+  Serial.println("  wifi-status         print WiFi status");
   Serial.println("  AT...      send raw AT command to modem");
   Serial.println();
 }
@@ -693,6 +766,11 @@ void printRuntimeStatus() {
   }
   Serial.println();
   Serial.printf("Ethernet: %s IP=%s\n", state.ethernetConnected ? "OK" : "NO", state.ipAddress.c_str());
+  Serial.printf("WiFi: %s configured=%s SSID=%s IP=%s\n",
+                state.wifiConnected ? "OK" : "NO",
+                state.wifiConfigured ? "YES" : "NO",
+                state.wifiSsid.c_str(),
+                state.wifiIpAddress.c_str());
   Serial.printf("SHT31: %s temp=%.2f humidity=%.2f\n",
                 state.sht31Ready ? "OK" : "NO", state.shtTemperature, state.shtHumidity);
   Serial.printf("DS18B20: %s temp=%.2f\n", state.ds18b20Ready ? "OK" : "NO", state.dsTemperature);
@@ -721,6 +799,36 @@ void handleSerialCommand(const String& command) {
 
   if (command.startsWith("AT") || command.startsWith("at")) {
     sendAT(command, "", 5000);
+    return;
+  }
+
+  if (command.startsWith("wifi ")) {
+    String args = command.substring(5);
+    args.trim();
+    const int separator = args.indexOf(' ');
+    if (separator <= 0) {
+      Serial.println("[wifi] usage: wifi SSID PASSWORD");
+      return;
+    }
+    String ssid = args.substring(0, separator);
+    String password = args.substring(separator + 1);
+    password.trim();
+    connectWiFi(ssid, password, true);
+    return;
+  }
+
+  if (command.equalsIgnoreCase("wifi-clear")) {
+    clearSavedWiFi();
+    return;
+  }
+
+  if (command.equalsIgnoreCase("wifi-status")) {
+    Serial.printf("[wifi] configured=%s connected=%s SSID=%s IP=%s RSSI=%d\n",
+                  state.wifiConfigured ? "yes" : "no",
+                  state.wifiConnected ? "yes" : "no",
+                  state.wifiSsid.c_str(),
+                  state.wifiIpAddress.c_str(),
+                  state.wifiConnected ? WiFi.RSSI() : 0);
     return;
   }
 
@@ -823,6 +931,7 @@ void setup() {
 
   detectPcf8574();
   beginEthernet();
+  beginSavedWiFi();
   initModem();
   readSensors();
   drawDisplay();
@@ -852,7 +961,7 @@ void loop() {
     handleButton();
   }
 
-  if (state.ethernetConnected && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+  if (networkConnected() && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
     if (!didInitialManifestCheck && now > kManifestInitialDelayMs) {
       didInitialManifestCheck = true;
       lastManifestMs = now;
