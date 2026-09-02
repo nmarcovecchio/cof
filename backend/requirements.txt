@@ -1,0 +1,5 @@
+Flask
+gunicorn
+paho-mqtt
+psycopg[binary]
+redis

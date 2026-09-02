@@ -12,6 +12,109 @@ Primer firmware base para CallOnFail usando:
 - OTA por Ethernet desde `actual_version/manifest.json`.
 - Audio de prueba descargado por Ethernet y cargado al modem con `AT+CFTRANRX`.
 
+## Backend MVP con Docker
+
+El repo incluye una base deployable para VPS:
+
+- Flask + Gunicorn.
+- PostgreSQL.
+- Redis.
+- Mosquitto MQTT interno.
+- Worker MQTT Python.
+- Caddy como reverse proxy.
+
+### Deploy inicial en VPS
+
+En el VPS, despues de instalar Docker:
+
+```bash
+sudo mkdir -p /opt/callonfail
+sudo chown -R ubuntu:ubuntu /opt/callonfail
+git clone https://github.com/nmarcovecchio/cof.git /opt/callonfail
+cd /opt/callonfail
+cp .env.example .env
+nano .env
+```
+
+Si estas probando una rama antes de mergearla a `main`:
+
+```bash
+git clone -b NOMBRE_DE_RAMA https://github.com/nmarcovecchio/cof.git /opt/callonfail
+```
+
+Para una primera prueba sin dominio/TLS, dejar:
+
+```text
+APP_DOMAIN=:80
+```
+
+Cuando `app.callonfail.com.ar` apunte al VPS, cambiar:
+
+```text
+APP_DOMAIN=app.callonfail.com.ar
+ACME_EMAIL=tu-email
+```
+
+Levantar servicios:
+
+```bash
+docker compose up -d --build
+```
+
+Ver estado:
+
+```bash
+docker compose ps
+docker compose logs -f web
+docker compose logs -f mqtt-worker
+```
+
+Probar desde el VPS:
+
+```bash
+curl http://localhost/health
+curl http://localhost/api/status
+```
+
+Probar desde navegador:
+
+```text
+http://IP_DEL_VPS/
+```
+
+o, si ya configuraste DNS:
+
+```text
+https://app.callonfail.com.ar/
+```
+
+### Comandos Docker utiles
+
+```bash
+docker compose up -d
+docker compose up -d --build
+docker compose ps
+docker compose logs -f
+docker compose logs -f web
+docker compose restart web
+docker compose down
+```
+
+### MQTT MVP
+
+Mosquitto escucha internamente en `1883` y Docker lo publica solo en
+`127.0.0.1:1883`, para que no quede abierto a internet sin TLS.
+
+Para probar desde el VPS:
+
+```bash
+docker compose exec mosquitto mosquitto_pub -h localhost -t devices/cof-test/telemetry -m '{"temperature":25.1}'
+docker compose logs -f mqtt-worker
+```
+
+Antes de conectar equipos reales desde internet hay que agregar autenticacion y
+TLS en `8883`.
+
 ## IDE recomendado
 
 Usa **Visual Studio Code + PlatformIO**.
