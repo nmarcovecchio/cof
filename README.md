@@ -33,6 +33,39 @@ pio run -t upload
 pio device monitor -b 115200
 ```
 
+## Comandos por Serial
+
+Abrir PlatformIO Monitor a `115200`. El firmware acepta comandos para probar
+hardware sin recompilar:
+
+```text
+h      ayuda
+s      imprimir estado general
+i      escanear bus I2C
+t      leer sensores ahora
+m      reinicializar modem
+o      forzar chequeo manifest/OTA
+a      forzar chequeo manifest/audio
+c      hacer llamada de prueba si llamadas estan habilitadas
+r      reiniciar ESP32
+AT...  enviar comando AT crudo al modem
+```
+
+Ejemplos:
+
+```text
+i
+s
+AT
+AT+CPIN?
+AT+CSQ
+AT+CCMXPLAY=?
+AT+CFTRANRX=?
+```
+
+El firmware tambien habilita el watchdog interno del ESP32 con timeout amplio
+para pruebas. Si el programa se cuelga, el ESP32 deberia reiniciarse solo.
+
 ## Configuracion antes de llamar
 
 Por seguridad, las llamadas estan deshabilitadas por defecto.

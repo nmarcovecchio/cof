@@ -12,6 +12,7 @@
 #include <Wire.h>
 #include <Adafruit_SHT31.h>
 #include <esp_arduino_version.h>
+#include <esp_task_wdt.h>
 
 #include "cof_config.h"
 
@@ -27,6 +28,7 @@ constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
+constexpr uint32_t kWatchdogTimeoutSeconds = 60;
 
 HardwareSerial ModemSerial(2);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
@@ -75,10 +77,30 @@ uint32_t lastManifestMs = 0;
 bool didInitialManifestCheck = false;
 bool lastButtonPressed = false;
 uint32_t buttonPressedAtMs = 0;
+String serialCommandBuffer;
 
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+
+void beginInternalWatchdog() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_task_wdt_config_t config = {
+    .timeout_ms = kWatchdogTimeoutSeconds * 1000,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+    .trigger_panic = true,
+  };
+  esp_task_wdt_init(&config);
+#else
+  esp_task_wdt_init(kWatchdogTimeoutSeconds, true);
+#endif
+  esp_task_wdt_add(nullptr);
+  Serial.printf("[wdt] internal watchdog enabled: %lu seconds\n", kWatchdogTimeoutSeconds);
+}
+
+void feedWatchdog() {
+  esp_task_wdt_reset();
 }
 
 void onNetworkEvent(WiFiEvent_t event) {
@@ -184,6 +206,7 @@ String readModemUntil(uint32_t timeoutMs, const String& token = "") {
   String response;
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
+    feedWatchdog();
     while (ModemSerial.available()) {
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
@@ -455,6 +478,7 @@ bool uploadAudioToModem(const String& url, const String& modemPath, const String
   uint8_t buffer[512];
   int remaining = size;
   while (remaining > 0) {
+    feedWatchdog();
     const size_t chunk = min(static_cast<int>(sizeof(buffer)), remaining);
     const int bytesRead = stream->readBytes(buffer, chunk);
     if (bytesRead <= 0) {
@@ -642,12 +666,145 @@ void handleButton() {
   lastButtonPressed = pressed;
 }
 
+void printSerialHelp() {
+  Serial.println();
+  Serial.println("CallOnFail serial commands:");
+  Serial.println("  h          help");
+  Serial.println("  s          print status");
+  Serial.println("  i          scan I2C bus");
+  Serial.println("  t          read sensors now");
+  Serial.println("  m          re-init modem");
+  Serial.println("  o          force manifest/OTA check");
+  Serial.println("  a          force manifest/audio sync check");
+  Serial.println("  c          place test call if calls are enabled");
+  Serial.println("  r          restart ESP32");
+  Serial.println("  AT...      send raw AT command to modem");
+  Serial.println();
+}
+
+void printRuntimeStatus() {
+  Serial.println();
+  Serial.println("CallOnFail status");
+  Serial.println("-----------------");
+  Serial.println("Firmware: " COF_FIRMWARE_VERSION);
+  Serial.printf("OLED: %s", state.oledReady ? "OK" : "NO");
+  if (state.oledReady) {
+    Serial.printf(" 0x%02X", state.oledAddress);
+  }
+  Serial.println();
+  Serial.printf("Ethernet: %s IP=%s\n", state.ethernetConnected ? "OK" : "NO", state.ipAddress.c_str());
+  Serial.printf("SHT31: %s temp=%.2f humidity=%.2f\n",
+                state.sht31Ready ? "OK" : "NO", state.shtTemperature, state.shtHumidity);
+  Serial.printf("DS18B20: %s temp=%.2f\n", state.ds18b20Ready ? "OK" : "NO", state.dsTemperature);
+  Serial.printf("ZMPT ADC raw: %d\n", state.zmptRaw);
+  Serial.printf("PCF8574: %s", state.pcfReady ? "OK" : "NO");
+  if (state.pcfReady) {
+    Serial.printf(" 0x%02X", state.pcfAddress);
+  }
+  Serial.println();
+  Serial.printf("Modem: %s SIM=%s CSQ=%d audio=%s transfer=%s\n",
+                state.modemReady ? "OK" : "NO",
+                state.simReady ? "OK" : "NO",
+                state.signalQuality,
+                state.modemAudioPlaybackSupported ? "OK" : "NO",
+                state.modemFileTransferSupported ? "OK" : "NO");
+  Serial.printf("Manifest firmware: %s\n", state.manifestFirmwareVersion.c_str());
+  Serial.printf("Manifest audio: %s\n", state.manifestAudioVersion.c_str());
+  Serial.printf("Status: %s\n", state.statusLine.c_str());
+  Serial.println();
+}
+
+void handleSerialCommand(const String& command) {
+  if (command.length() == 0) {
+    return;
+  }
+
+  if (command.startsWith("AT") || command.startsWith("at")) {
+    sendAT(command, "", 5000);
+    return;
+  }
+
+  if (command.length() != 1) {
+    Serial.println("[serial] unknown command. Type h for help.");
+    return;
+  }
+
+  switch (command[0]) {
+    case 'h':
+    case 'H':
+      printSerialHelp();
+      break;
+    case 's':
+    case 'S':
+      printRuntimeStatus();
+      break;
+    case 'i':
+    case 'I':
+      scanI2cBus();
+      break;
+    case 't':
+    case 'T':
+      readSensors();
+      drawDisplay();
+      printRuntimeStatus();
+      break;
+    case 'm':
+    case 'M':
+      initModem();
+      break;
+    case 'o':
+    case 'O':
+      checkManifest(true);
+      break;
+    case 'a':
+    case 'A':
+      checkManifest(false);
+      break;
+    case 'c':
+    case 'C':
+      placeCallAndPlayAudio();
+      break;
+    case 'r':
+    case 'R':
+      Serial.println("[serial] restarting ESP32");
+      delay(200);
+      ESP.restart();
+      break;
+    default:
+      Serial.println("[serial] unknown command. Type h for help.");
+      break;
+  }
+}
+
+void handleSerialInput() {
+  while (Serial.available()) {
+    const char c = static_cast<char>(Serial.read());
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      serialCommandBuffer.trim();
+      handleSerialCommand(serialCommandBuffer);
+      serialCommandBuffer = "";
+      continue;
+    }
+    if (serialCommandBuffer.length() < 120) {
+      serialCommandBuffer += c;
+    } else {
+      serialCommandBuffer = "";
+      Serial.println("[serial] command too long, buffer cleared");
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
+  beginInternalWatchdog();
   Serial.println();
   Serial.println("CallOnFail boot");
   Serial.println("Firmware " COF_FIRMWARE_VERSION);
+  printSerialHelp();
 
   preferences.begin("cof", false);
   pinMode(COF_PIN_ZMPT_ADC, INPUT);
@@ -673,6 +830,8 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+  feedWatchdog();
+  handleSerialInput();
 
   if (now - lastSensorMs >= kSensorIntervalMs) {
     lastSensorMs = now;
