@@ -7,6 +7,10 @@ import time
 
 import paho.mqtt.client as mqtt
 
+from .extensions import db
+from .main import create_app
+from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
+
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
@@ -29,6 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("callonfail.mqtt_worker")
 running = True
+flask_app = create_app()
 
 
 def on_connect(client, userdata, flags, rc):
@@ -63,6 +68,116 @@ def on_message(client, userdata, message):
         message.retain,
         decoded,
     )
+    persist_message(message.topic, decoded)
+
+
+def persist_message(topic, payload):
+    parts = topic.split("/")
+    if len(parts) < 3 or parts[0] != "devices":
+        logger.warning("Ignoring unsupported topic=%s", topic)
+        return
+
+    device_uid = parts[1]
+    message_type = "/".join(parts[2:])
+
+    if not isinstance(payload, dict):
+        payload = {"raw": payload}
+
+    with flask_app.app_context():
+        try:
+            device = get_or_create_device(device_uid)
+            device.last_seen_at = utcnow()
+            device.status = "online"
+            device.firmware_version = payload.get("firmware") or payload.get("firmware_version") or device.firmware_version
+            device.ip_address = payload.get("ip") or payload.get("ip_address") or device.ip_address
+
+            if message_type == "telemetry":
+                db.session.add(
+                    Telemetry(
+                        device_id=device.id,
+                        payload=payload,
+                        firmware_version=device.firmware_version,
+                        mains_voltage=to_float(payload.get("mains_voltage")),
+                        temperature_1=to_float(payload.get("temperature_1") or payload.get("temp_1")),
+                        temperature_2=to_float(payload.get("temperature_2") or payload.get("temp_2")),
+                        humidity=to_float(payload.get("humidity")),
+                        water_leak=to_bool_or_none(payload.get("water_leak")),
+                    )
+                )
+            elif message_type == "event":
+                db.session.add(
+                    Event(
+                        device_id=device.id,
+                        type=str(payload.get("type", "event")),
+                        severity=str(payload.get("severity", "info")),
+                        message=payload.get("message"),
+                        payload=payload,
+                    )
+                )
+            elif message_type == "status":
+                device.status = str(payload.get("status", "online"))
+            elif message_type == "config/reported":
+                version = payload.get("config_version")
+                if isinstance(version, int):
+                    device.reported_config_version = version
+                    config = DeviceConfig.query.filter_by(device_id=device.id, version=version).first()
+                    if config is not None:
+                        config.reported_payload = payload
+                        config.status = "applied" if payload.get("applied") else "reported"
+                        config.applied_at = utcnow() if payload.get("applied") else None
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Failed to persist MQTT message topic=%s", topic)
+
+
+def get_or_create_device(device_uid):
+    device = Device.query.filter_by(device_uid=device_uid).first()
+    if device is not None:
+        return device
+
+    tenant = Tenant.query.filter_by(slug="demo").first()
+    if tenant is None:
+        tenant = Tenant(name="Demo CallOnFail", slug="demo")
+        db.session.add(tenant)
+        db.session.flush()
+
+    site = Site.query.filter_by(tenant_id=tenant.id, name="Banco de pruebas").first()
+    if site is None:
+        site = Site(tenant_id=tenant.id, name="Banco de pruebas")
+        db.session.add(site)
+        db.session.flush()
+
+    device = Device(
+        tenant_id=tenant.id,
+        site_id=site.id,
+        device_uid=device_uid,
+        name=f"Dispositivo {device_uid}",
+        status="online",
+    )
+    db.session.add(device)
+    db.session.flush()
+    return device
+
+
+def to_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def to_bool_or_none(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def handle_signal(signum, frame):

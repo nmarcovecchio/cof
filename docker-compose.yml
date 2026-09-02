@@ -4,7 +4,7 @@ services:
       context: ./backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-callonfail}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-callonfail}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-callonfail}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-callonfail}
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -17,9 +17,9 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
-    command: ["python", "-m", "app.mqtt_worker"]
+    command: ["sh", "-c", "python -m app.init_db && python -m app.mqtt_worker"]
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-callonfail}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-callonfail}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-callonfail}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-callonfail}
       REDIS_URL: redis://redis:6379/0
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883

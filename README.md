@@ -29,6 +29,12 @@ La bitacora/configuracion persistente del VPS queda en:
 docs/VPS_CONFIG.md
 ```
 
+El contrato inicial para configuracion de dispositivos queda en:
+
+```text
+docs/DEVICE_CONFIG_V1.md
+```
+
 ### Deploy inicial en VPS
 
 En el VPS, despues de instalar Docker:
