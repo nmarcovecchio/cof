@@ -272,11 +272,19 @@ def create_app() -> Flask:
     @app.post("/devices/<device_uid>/commands/ota-check")
     @login_required
     def device_command_ota_check(device_uid):
+        return send_device_command(device_uid, "ota_check", "OTA check command sent")
+
+    @app.post("/devices/<device_uid>/commands/status-report")
+    @login_required
+    def device_command_status_report(device_uid):
+        return send_device_command(device_uid, "status_report", "Status report command sent")
+
+    def send_device_command(device_uid, command, message):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         command_id = str(uuid.uuid4())
         payload = {
             "command_id": command_id,
-            "command": "ota_check",
+            "command": command,
             "device_id": device.device_uid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -286,7 +294,7 @@ def create_app() -> Flask:
                 device_id=device.id,
                 type="command_sent",
                 severity="info",
-                message="OTA check command sent",
+                message=message,
                 payload=payload,
             )
         )

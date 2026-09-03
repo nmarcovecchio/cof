@@ -268,6 +268,11 @@ El ESP32 responde en:
 devices/cof-test/ack
 ```
 
+Si se borra un dispositivo mientras el ESP32 sigue conectado, puede recrearse
+primero por telemetria y aparecer sin hardware profile hasta que llegue un
+`status`. El firmware publica status cada 5 minutos y tambien se puede pedir
+desde `/devices/<device_id>` con `Solicitar estado`.
+
 Cuando termine la prueba, cerrar `1883`:
 
 ```bash

@@ -407,6 +407,20 @@ devices/cof-000001/command
 }
 ```
 
+### Force status/capabilities report
+
+```json
+{
+  "command_id": "uuid",
+  "command": "status_report",
+  "device_id": "cof-000001",
+  "created_at": "2026-09-03T00:00:00Z"
+}
+```
+
+The device responds with an ACK and publishes a fresh retained `status` message
+including `hardware_profile`, `capabilities`, and `discovered`.
+
 The device responds to:
 
 ```text
