@@ -1,7 +1,7 @@
 #pragma once
 
 // Firmware version shown on OLED and used by OTA comparison.
-#define COF_FIRMWARE_VERSION "0.2.11"
+#define COF_FIRMWARE_VERSION "0.2.12"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/manifest.json"
@@ -29,7 +29,7 @@
 // mqtt HOST PORT DEVICE_ID [USER PASSWORD]
 // Device username should match device_uid for Mosquitto ACL.
 #define COF_DEFAULT_MQTT_HOST "mqtt.callonfail.com.ar"
-#define COF_DEFAULT_MQTT_PORT 8883
+#define COF_DEFAULT_MQTT_PORT 1883
 #define COF_DEFAULT_MQTT_DEVICE_ID "cof-test"
 #define COF_DEFAULT_MQTT_USERNAME "cof-test"
 // Keep in sync with MQTT_DEVICE_PASSWORD on the VPS (.env). Private repo only.
