@@ -320,6 +320,12 @@ devices/cof-000001/telemetry
 ## Hardware profile and discovery
 
 Devices publish capabilities and discovered resources in `status` messages.
+These payloads are retained and event-driven, not high-frequency telemetry.
+Devices publish them:
+
+- when MQTT connects,
+- when hardware discovery changes,
+- when the backend sends `status_report`.
 
 Example:
 

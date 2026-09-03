@@ -29,7 +29,6 @@ constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
-constexpr uint32_t kStatusPublishIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogTimeoutSeconds = 60;
@@ -94,7 +93,6 @@ uint32_t lastSensorMs = 0;
 uint32_t lastModemMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastTelemetryPublishMs = 0;
-uint32_t lastStatusPublishMs = 0;
 uint32_t lastManifestMs = 0;
 bool didInitialManifestCheck = false;
 bool lastButtonPressed = false;
@@ -1413,11 +1411,6 @@ void loop() {
   if (state.mqttConnected && now - lastTelemetryPublishMs >= kTelemetryPublishIntervalMs) {
     lastTelemetryPublishMs = now;
     publishTelemetryNow();
-  }
-
-  if (state.mqttConnected && now - lastStatusPublishMs >= kStatusPublishIntervalMs) {
-    lastStatusPublishMs = now;
-    publishDeviceStatus("online", true);
   }
 
   if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress) {
