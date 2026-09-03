@@ -23,6 +23,7 @@
           <th>Slug</th>
           <th>Sitios</th>
           <th>Dispositivos</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -32,15 +33,25 @@
           <td><code>{{ tenant.slug }}</code></td>
           <td>
             {% for site in tenant.sites %}
-              <span class="badge text-bg-light border">{{ site.name }}</span>
+              <form class="d-inline" method="post" action="{{ url_for('site_delete', site_id=site.id) }}" onsubmit="return confirm('Eliminar sitio {{ site.name }}? Los dispositivos quedaran sin sitio.');">
+                <span class="badge text-bg-light border">
+                  {{ site.name }}
+                  <button class="btn btn-sm btn-link text-danger p-0 ms-1 align-baseline" type="submit">x</button>
+                </span>
+              </form>
             {% else %}
               <span class="text-muted">Sin sitios</span>
             {% endfor %}
           </td>
           <td>{{ tenant.devices|length }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('tenant_delete', tenant_id=tenant.id) }}" onsubmit="return confirm('Eliminar cliente {{ tenant.name }} con sus sitios, dispositivos e historial?');">
+              <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
+            </form>
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="text-muted">Sin clientes todavia.</td></tr>
+        <tr><td colspan="5" class="text-muted">Sin clientes todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -126,6 +126,14 @@ def create_app() -> Flask:
                     error = "Ya existe un cliente con ese slug"
         return render_template("tenant_form.html", error=error)
 
+    @app.post("/tenants/<int:tenant_id>/delete")
+    @login_required
+    def tenant_delete(tenant_id):
+        tenant = Tenant.query.get_or_404(tenant_id)
+        db.session.delete(tenant)
+        db.session.commit()
+        return redirect(url_for("tenants"))
+
     @app.route("/sites/new", methods=["GET", "POST"])
     @login_required
     def site_new():
@@ -145,6 +153,15 @@ def create_app() -> Flask:
                     db.session.rollback()
                     error = "Ya existe un sitio con ese nombre para el cliente"
         return render_template("site_form.html", tenants=tenants_rows, error=error)
+
+    @app.post("/sites/<int:site_id>/delete")
+    @login_required
+    def site_delete(site_id):
+        site = Site.query.get_or_404(site_id)
+        Device.query.filter_by(site_id=site.id).update({"site_id": None})
+        db.session.delete(site)
+        db.session.commit()
+        return redirect(url_for("tenants"))
 
     @app.get("/devices")
     @login_required
@@ -180,6 +197,14 @@ def create_app() -> Flask:
                     error = "Ya existe un dispositivo con ese Device ID"
 
         return render_template("device_form.html", tenants=tenants_rows, sites=sites, error=error)
+
+    @app.post("/devices/<device_uid>/delete")
+    @login_required
+    def device_delete(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        db.session.delete(device)
+        db.session.commit()
+        return redirect(url_for("devices"))
 
     @app.get("/devices/<device_uid>")
     @login_required

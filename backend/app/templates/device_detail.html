@@ -59,6 +59,9 @@
       <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}">
         <button class="btn btn-outline-secondary" type="submit">Forzar chequeo OTA</button>
       </form>
+      <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Eliminar dispositivo {{ device.device_uid }} y todo su historial?');">
+        <button class="btn btn-outline-danger" type="submit">Eliminar dispositivo</button>
+      </form>
     </div>
   </div>
 </div>

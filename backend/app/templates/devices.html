@@ -23,6 +23,7 @@
           <th>Estado</th>
           <th>Firmware</th>
           <th>Ultima conexion</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -35,9 +36,14 @@
           <td><span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span></td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>{{ device.last_seen_at|datetime_local }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Eliminar dispositivo {{ device.device_uid }} y todo su historial?');">
+              <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
+            </form>
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="text-muted">Sin dispositivos todavia.</td></tr>
+        <tr><td colspan="8" class="text-muted">Sin dispositivos todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>

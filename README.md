@@ -134,6 +134,11 @@ Flujo multi-cliente inicial:
 4. Usar el mismo `Device ID` que usa el firmware en MQTT.
 5. Entrar al dispositivo y publicar config o forzar OTA.
 
+Los datos de prueba se pueden borrar desde la web:
+
+- `/devices`: eliminar dispositivos y su historial.
+- `/tenants`: eliminar clientes completos o sitios individuales.
+
 o, si ya configuraste DNS:
 
 ```text
