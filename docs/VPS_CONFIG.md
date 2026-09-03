@@ -82,11 +82,25 @@ is not the target setup.
 Static HTML lives in the repo under `website/` and is served by Caddy:
 
 ```text
-https://www.callonfail.com.ar/     -> files in /opt/callonfail/website
+https://www.callonfail.com.ar/     -> website/index.html
+https://www.callonfail.com.ar/sala/    -> pack Sala / Rack
+https://www.callonfail.com.ar/energia/ -> pack Energía
+https://www.callonfail.com.ar/ot/      -> pack OT / Tablero
+https://www.callonfail.com.ar/frio/    -> pack Cadena de frío
 https://callonfail.com.ar/         -> redirect to www
 https://app.callonfail.com.ar/     -> Flask app
 ```
 
+SEO helpers in `website/`:
+
+```text
+robots.txt
+sitemap.xml
+```
+
+After deploy, submit `https://www.callonfail.com.ar/sitemap.xml` in Google Search Console.
+For ads, point campaigns to the pack URLs (`/sala/`, `/energia/`, `/ot/`, `/frio/`)
+with unique WhatsApp prefill text per landing.
 Do **not** open the Flask app by raw IP (`https://<VPS_IP>/...`). After
 `APP_DOMAIN=app.callonfail.com.ar`, Caddy only routes the app on that hostname.
 Use:

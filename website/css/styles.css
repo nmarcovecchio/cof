@@ -544,11 +544,176 @@ a {
   }
 }
 
+.section-equipo {
+  max-width: var(--content);
+  margin: 0 auto;
+}
+
+.pack-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.pack-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1.35rem 1.25rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(22, 27, 32, 0.72);
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+  min-height: 100%;
+}
+
+.pack-card:hover {
+  border-color: rgba(232, 163, 23, 0.55);
+  transform: translateY(-3px);
+  background: rgba(22, 27, 32, 0.95);
+}
+
+.pack-kicker {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+.pack-card h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.55rem, 3vw, 1.85rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+
+.pack-pitch {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+  line-height: 1.45;
+  flex: 1;
+}
+
+.pack-card ul {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pack-card li {
+  font-size: 0.9rem;
+  color: var(--ink);
+  padding-left: 0.85rem;
+  position: relative;
+}
+
+.pack-card li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.4rem;
+  height: 1px;
+  background: var(--amber);
+}
+
+.pack-more {
+  margin-top: 0.85rem;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--amber);
+}
+
+.footer-packs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin: 0.55rem 0 0.15rem;
+  font-size: 0.9rem;
+}
+
+.footer-packs a {
+  color: var(--muted);
+}
+
+.footer-packs a:hover {
+  color: var(--amber);
+}
+
+/* —— Pack landings —— */
+.page-hero {
+  position: relative;
+  min-height: min(72svh, 640px);
+  display: grid;
+  align-items: end;
+  overflow: hidden;
+}
+
+.page-hero .hero-copy {
+  padding-bottom: 3.5rem;
+}
+
+.crumb {
+  margin: 0 0 0.85rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.crumb a:hover {
+  color: var(--amber);
+}
+
+.pack-note {
+  margin: 1.25rem 0 0;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid var(--amber);
+  background: rgba(232, 163, 23, 0.08);
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.pack-note strong {
+  color: var(--ink);
+}
+
+.other-packs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1.5rem;
+}
+
+.other-packs a {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.other-packs a:hover {
+  border-color: rgba(232, 163, 23, 0.55);
+  color: var(--amber);
+}
+
 @media (min-width: 860px) {
   .section-split {
     grid-template-columns: 1.05fr 0.95fr;
     padding-left: 1.25rem;
     padding-right: 1.25rem;
+  }
+
+  .pack-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 1.1rem;
   }
 
   .nav {

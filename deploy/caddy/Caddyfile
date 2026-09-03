@@ -15,6 +15,7 @@ mqtt.callonfail.com.ar {
 www.callonfail.com.ar {
 	root * /srv/website
 	encode gzip
+	try_files {path} {path}/index.html
 	file_server
 }
 

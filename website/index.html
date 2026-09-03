@@ -6,34 +6,51 @@
     <title>Call On Fail — Si es crítico, te llamamos</title>
     <meta
       name="description"
-      content="Monitoreo de salas técnicas y racks. Si se va la luz o hay agua, te suena el teléfono. LTE y batería si se cae la red. CABA · todo el país."
+      content="Monitoreo con llamada al celular para sala técnica, UPS/generador, tablero OT y cadena de frío. LTE + batería si se cae la red. CABA · todo el país."
     />
+    <link rel="canonical" href="https://www.callonfail.com.ar/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="es_AR" />
+    <meta property="og:url" content="https://www.callonfail.com.ar/" />
     <meta property="og:title" content="Call On Fail — Si es crítico, te llamamos" />
     <meta
       property="og:description"
-      content="Te llama al celular cuando la sala falla. Si no contestás, llama al siguiente. Puede reiniciar el modem si se cayó Internet."
+      content="Sala, energía, tablero o frío. Si es crítico, te llama al celular — aunque se caiga la red."
     />
-    <meta property="og:image" content="assets/logo.png" />
-    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <meta property="og:image" content="https://www.callonfail.com.ar/assets/logo.png" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" href="/assets/logo.png" type="image/png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="/css/styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Call On Fail",
+        "url": "https://www.callonfail.com.ar/",
+        "logo": "https://www.callonfail.com.ar/assets/logo.png",
+        "email": "marcovecchio.n.a@gmail.com",
+        "telephone": "+54-11-6861-9589",
+        "areaServed": "AR",
+        "sameAs": ["https://www.linkedin.com/company/callonfail"],
+        "description": "Equipo de monitoreo que llama al celular ante fallas críticas en sala, energía, tablero OT y cadena de frío."
+      }
+    </script>
   </head>
   <body>
     <header class="top">
-      <a class="brand" href="#inicio" aria-label="Call On Fail inicio">
-        <img src="assets/logo.png" alt="Call On Fail" width="160" height="160" />
+      <a class="brand" href="/" aria-label="Call On Fail inicio">
+        <img src="/assets/logo.png" alt="Call On Fail" width="160" height="160" />
       </a>
-      <nav class="nav">
-        <a href="#monitorea">Sensores</a>
-        <a href="#actua">Relés</a>
-        <a href="#avisos">Alertas</a>
+      <nav class="nav" aria-label="Principal">
+        <a href="#packs">Packs</a>
+        <a href="#avisos">Cómo avisa</a>
         <a href="#diferencia">Si se cae la red</a>
-        <a href="#respaldo">Respaldo</a>
         <a
           href="https://www.linkedin.com/company/callonfail"
           target="_blank"
@@ -47,16 +64,16 @@
     <main id="inicio">
       <section class="hero">
         <div class="hero-media" aria-hidden="true">
-          <img src="assets/hero-sala.jpg" alt="" />
+          <img src="/assets/hero-sala.jpg" alt="" />
         </div>
         <div class="hero-veil"></div>
         <div class="hero-copy">
           <p class="brand-mark">Call On Fail</p>
           <h1>Si es crítico,<br />te llamamos.</h1>
           <p class="lead">
-            Un equipo para tu sala técnica o rack. Si se va la luz, hay una fuga
-            o se corta Internet, <strong>te llama al celular</strong> — aunque
-            el switch del sitio esté muerto.
+            Un equipo para sala técnica, energía, tablero o cámara de frío. Si
+            algo crítico pasa, <strong>te llama al celular</strong> — aunque se
+            caiga el switch o se vaya la luz.
           </p>
           <div class="cta-row">
             <a
@@ -73,76 +90,85 @@
               </svg>
               <span>Pedir piloto</span>
             </a>
-            <a class="btn btn-ghost" href="#avisos">Ver ejemplos</a>
+            <a class="btn btn-ghost" href="#packs">Ver packs</a>
           </div>
         </div>
         <div class="hero-scroll" aria-hidden="true"><span></span></div>
       </section>
 
-      <section id="monitorea" class="section section-split">
-        <div class="section-text reveal">
-          <h2>Qué mira</h2>
-          <p>
-            Temperatura, humedad, agua, luz, red. Lo de siempre en una sala
-            chica… pero con un equipo que no se calla si se cae el switch.
-          </p>
-          <ul class="feature-list">
-            <li>Temperatura en el rack, cerca del AA y en el ambiente</li>
-            <li>Humedad</li>
-            <li>Fuga de agua en el piso</li>
-            <li>Corte de luz y problemas de tensión</li>
-            <li>Si se cayó Ethernet o Internet</li>
-            <li>Contactos secos: puerta, alarma del edificio, lo que cablees</li>
-            <li>Pantalla y LEDs en el frente</li>
-          </ul>
-        </div>
-        <figure class="section-visual reveal">
-          <img
-            src="assets/producto-nodo.png"
-            alt="Concepto del nodo Call On Fail montado en rack con antena LTE"
-            width="1600"
-            height="900"
-          />
-        </figure>
-      </section>
-
-      <section id="actua" class="section section-dark">
+      <section id="packs" class="section">
         <div class="narrow reveal">
-          <h2>Y si hace falta, mueve algo</h2>
+          <h2>Packs</h2>
           <p>
-            Hay dos relés. Sirven para más que prender una lucecita.
+            Misma caja, mismo cerebro. Lo que cambia es cómo lo cableás y qué
+            alarmas configurás.
           </p>
-          <ul class="backup-list">
-            <li>
-              <strong>Internet abajo</strong>
-              <span
-                >Le corta la luz al modem unos segundos, lo reinicia y te avisa.
-                A veces con eso alcanza.</span
-              >
-            </li>
-            <li>
-              <strong>Algo grave</strong>
-              <span>Puede disparar una sirena en la sala mientras te está llamando.</span>
-            </li>
-            <li>
-              <strong>Como lo armes</strong>
-              <span
-                >Vos elegís qué relé usa cada alarma y cuánto dura el pulso. Sin
-                reiniciar el modem cada dos minutos.</span
-              >
-            </li>
-          </ul>
+          <div class="pack-grid">
+            <a class="pack-card" href="/sala/">
+              <p class="pack-kicker">Pack</p>
+              <h3>Sala / Rack</h3>
+              <p class="pack-pitch">
+                Si se va la luz, hay fuga o se corta la red → te llamamos.
+              </p>
+              <ul>
+                <li>Temp, humedad, agua, luz/tensión</li>
+                <li>Ethernet / Internet y puerta</li>
+                <li>Relé para reiniciar modem</li>
+              </ul>
+              <span class="pack-more">Ver pack</span>
+            </a>
+            <a class="pack-card" href="/energia/">
+              <p class="pack-kicker">Pack</p>
+              <h3>Energía</h3>
+              <p class="pack-pitch">
+                Si el respaldo falla cuando más hace falta → te llamamos.
+              </p>
+              <ul>
+                <li>UPS en batería / ATS</li>
+                <li>Grupo que no arrancó</li>
+                <li>Corte de red eléctrica</li>
+              </ul>
+              <span class="pack-more">Ver pack</span>
+            </a>
+            <a class="pack-card" href="/ot/">
+              <p class="pack-kicker">Pack</p>
+              <h3>OT / Tablero</h3>
+              <p class="pack-pitch">
+                La alarma del tablero llega donde mirás; si no, suena el
+                teléfono.
+              </p>
+              <ul>
+                <li>Contactos secos / PLC</li>
+                <li>WhatsApp y llamada si no hay ack</li>
+                <li>Modbus: próximamente</li>
+              </ul>
+              <span class="pack-more">Ver pack</span>
+            </a>
+            <a class="pack-card" href="/frio/">
+              <p class="pack-kicker">Pack</p>
+              <h3>Cadena de frío</h3>
+              <p class="pack-pitch">
+                Si se va de rango → te llamamos; queda el registro.
+              </p>
+              <ul>
+                <li>Temperatura (y humedad)</li>
+                <li>Alarmas por rango</li>
+                <li>Historial y reporte PDF</li>
+              </ul>
+              <span class="pack-more">Ver pack</span>
+            </a>
+          </div>
         </div>
       </section>
 
-      <section id="avisos" class="section">
+      <section id="avisos" class="section section-dark">
         <div class="section-block">
           <div class="narrow reveal">
-            <h2>Primero te llama a vos</h2>
+            <h2>Cómo avisa</h2>
             <p>
-              Suena el celular y escuchás qué pasó: luz, agua, temperatura. Si
-              ya lo viste, respondés <strong>OK</strong> o <strong>1</strong> por
-              SMS y listo. Si no contestás, llama al siguiente de la lista.
+              Primero te llama. Suena el celular y escuchás qué pasó. Si ya lo
+              viste, respondés <strong>OK</strong> o <strong>1</strong> por SMS
+              y listo. Si no contestás, llama al siguiente de la lista.
               WhatsApp y mail pueden ir al mismo tiempo; la llamada es lo que no
               se pierde en la bandeja.
             </p>
@@ -155,11 +181,13 @@
               <picture>
                 <source
                   media="(max-width: 719px)"
-                  srcset="assets/flujos-alertas-mobile.png"
+                  srcset="/assets/flujos-alertas-mobile.png"
                 />
                 <img
-                  src="assets/flujos-alertas.png"
-                  alt="Ejemplos reales: corte de luz, temperatura, humedad, fuga de agua, tensión, caída de internet con reinicio del modem"
+                  src="/assets/flujos-alertas.png"
+                  alt="Ejemplos de alertas: corte de luz, temperatura, humedad, fuga de agua, tensión, caída de internet con reinicio del modem"
+                  width="1536"
+                  height="1024"
                 />
               </picture>
             </figure>
@@ -171,51 +199,64 @@
         <div class="narrow reveal">
           <h2>Si se cae la red</h2>
           <p>
-            Casi todos los monitores de sala te avisan por la misma red que se
-            acaba de caer. Ahí no sirven. Este equipo trae chip LTE y batería: si
-            se va el switch o la luz, igual te puede llamar.
-          </p>
-          <ul class="feature-list">
-            <li>La llamada sale del modem en la sala, no de un mail perdido</li>
-            <li>Batería propia: sigue andando con corte de luz (horas, no minutos)</li>
-            <li>Si vos no atendés, llama al segundo número</li>
-            <li>Si se cayó Internet, puede reiniciar el modem del cliente</li>
-            <li>
-              SNMP: lo sumás a Zabbix, PRTG o lo que ya tengas
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <section id="respaldo" class="section section-dark">
-        <div class="narrow reveal">
-          <h2>Día a día y plan B</h2>
-          <p>
-            Con red normal usa el cable. El celular y la batería están por si las
-            cosas se ponen feas.
+            Casi todos los monitores te avisan por la misma red que se acaba de
+            caer. Ahí no sirven. Este equipo trae chip LTE y batería: si se va el
+            switch o la luz, igual te puede llamar.
           </p>
           <ul class="backup-list">
             <li>
               <strong>Ethernet</strong>
-              <span>Para el día a día: estable y sin drama</span>
+              <span>Día a día: estable y sin drama</span>
             </li>
             <li>
-              <strong>Se cae la red del rack</strong>
+              <strong>Se cae la red</strong>
               <span>Sigue por LTE y te llama igual</span>
             </li>
             <li>
               <strong>Se corta la luz</strong>
               <span>Entra la batería; el equipo no se apaga de una</span>
             </li>
+            <li>
+              <strong>Escalamiento</strong>
+              <span>Si vos no atendés, llama al segundo número</span>
+            </li>
+            <li>
+              <strong>SNMP</strong>
+              <span>Opcional: Zabbix, PRTG o lo que ya tengas</span>
+            </li>
           </ul>
         </div>
       </section>
 
+      <section id="equipo" class="section section-split section-equipo">
+        <div class="section-text reveal">
+          <h2>El mismo equipo</h2>
+          <p>
+            Sensores, contactos secos y dos relés. Lo configurás según el sitio:
+            sala, UPS, tablero o cámara.
+          </p>
+          <ul class="feature-list">
+            <li>Temperatura, humedad, agua, luz/tensión</li>
+            <li>Ethernet / Internet y contactos secos</li>
+            <li>Relés: reiniciar modem, sirena, lo que armes</li>
+            <li>Pantalla y LEDs en el frente</li>
+          </ul>
+        </div>
+        <figure class="section-visual reveal">
+          <img
+            src="/assets/producto-nodo.png"
+            alt="Nodo Call On Fail con antena LTE"
+            width="1600"
+            height="900"
+          />
+        </figure>
+      </section>
+
       <section id="piloto" class="section section-cta">
         <div class="cta-panel reveal">
-          <h2>¿Tenés una sala para probarlo?</h2>
+          <h2>¿Tenés un sitio para probarlo?</h2>
           <p>
-            Lo instalamos en tu sala o rack y lo dejamos andando. Estamos en
+            Lo instalamos en tu instalación y lo dejamos andando. Estamos en
             CABA y llegamos a donde haga falta.
           </p>
           <div class="cta-row">
@@ -264,10 +305,16 @@
 
     <footer class="footer">
       <div class="footer-inner">
-        <img src="assets/logo.png" alt="" width="48" height="48" />
+        <img src="/assets/logo.png" alt="" width="48" height="48" />
         <div>
           <p><strong>Call On Fail</strong> · Si es crítico, te llamamos.</p>
           <p>CABA · Todo el país</p>
+          <div class="footer-packs" aria-label="Packs">
+            <a href="/sala/">Sala</a>
+            <a href="/energia/">Energía</a>
+            <a href="/ot/">OT</a>
+            <a href="/frio/">Frío</a>
+          </div>
           <div class="footer-links">
             <a
               class="footer-link"
