@@ -485,10 +485,10 @@ alarm calls still require `calling.enabled=true`.
 ```
 
 The device ACKs immediately, syncs test audio if the manifest version changed,
-then publishes an `event` of type `test_call` with the result. Firmware 0.2.19+
-reports radio/IMS and `AT+CEER` in the event. If IMS is not registered, it tries
-GSM first; if GSM does not attach it restores LTE and attempts CSFB instead of
-dialing in `NO SERVICE`.
+then publishes an `event` of type `test_call` with the result. A result that
+starts with `Call done` is success, even when radio/IMS/CEER details are
+appended. Voice on Claro LTE without IMS uses CSFB; if the first dial fails the
+device bounces radio and retries once instead of camping on GSM.
 
 ### Test SMS
 

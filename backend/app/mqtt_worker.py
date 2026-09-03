@@ -9,7 +9,7 @@ from datetime import timedelta
 import paho.mqtt.client as mqtt
 
 from .extensions import db
-from .main import create_app
+from .main import create_app, event_display_severity
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
 
 
@@ -132,12 +132,18 @@ def persist_message(topic, payload):
                     )
                 )
             elif message_type == "event":
+                event_type = str(payload.get("type", "event"))
+                message = payload.get("message")
                 db.session.add(
                     Event(
                         device_id=device.id,
-                        type=str(payload.get("type", "event")),
-                        severity=str(payload.get("severity", "info")),
-                        message=payload.get("message"),
+                        type=event_type,
+                        severity=event_display_severity(
+                            event_type,
+                            message,
+                            str(payload.get("severity", "info")),
+                        ),
+                        message=message,
                         payload=payload,
                     )
                 )

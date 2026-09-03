@@ -34,6 +34,16 @@ def wants_json() -> bool:
     return request.args.get("format") == "json" or request.accept_mimetypes.best == "application/json"
 
 
+def event_display_severity(event_type, message, severity="info"):
+    text = (message or "").strip()
+    kind = (event_type or "").strip()
+    if kind == "test_call" and text.startswith("Call done"):
+        return "info"
+    if kind == "test_sms" and text.startswith("SMS sent"):
+        return "info"
+    return severity or "info"
+
+
 def slugify(value: str) -> str:
     slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in value.strip())
     return "-".join(part for part in slug.split("-") if part)
@@ -82,6 +92,14 @@ def create_app() -> Flask:
     @app.template_filter("json_pretty")
     def json_pretty(value):
         return json.dumps(value or {}, indent=2, ensure_ascii=False, sort_keys=True)
+
+    @app.template_filter("event_severity")
+    def event_severity(event):
+        return event_display_severity(
+            getattr(event, "type", ""),
+            getattr(event, "message", ""),
+            getattr(event, "severity", "info"),
+        )
 
     @app.before_request
     def csrf_protect():

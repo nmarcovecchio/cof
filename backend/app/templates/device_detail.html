@@ -131,7 +131,7 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.19+. Si el ACK dice unsupported, primero pulsá OTA.
+        Requiere firmware 0.2.20+. Si el ACK dice unsupported, primero pulsá OTA.
       </p>
     </form>
     {% endif %}
@@ -209,6 +209,9 @@
                 IMS {{ 'OK' if cell.get('ims') else 'NO' }}
               </span>
             {% endif %}
+            {% if cell.get('voice_path') %}
+              <span class="badge text-bg-light border">Voz {{ cell.get('voice_path') }}</span>
+            {% endif %}
           {% endif %}
           {% if device.discovered.get('pcf8574') %}
             <span class="badge text-bg-light border">PCF8574</span>
@@ -275,12 +278,15 @@
           <div class="event-main">
             <div class="event-body">
               <div class="event-title">
-                {% if event.severity == 'warning' %}
-                  <span class="badge text-bg-warning text-dark">{{ event.severity }}</span>
-                {% elif event.severity == 'error' %}
-                  <span class="badge text-bg-danger">{{ event.severity }}</span>
+                {% set sev = event|event_severity %}
+                {% if sev == 'warning' %}
+                  <span class="badge text-bg-warning text-dark">{{ sev }}</span>
+                {% elif sev == 'error' %}
+                  <span class="badge text-bg-danger">{{ sev }}</span>
+                {% elif event.type in ['test_call', 'test_sms'] %}
+                  <span class="badge text-bg-success">ok</span>
                 {% else %}
-                  <span class="badge text-bg-light border">{{ event.severity }}</span>
+                  <span class="badge text-bg-light border">{{ sev }}</span>
                 {% endif %}
                 <code class="small">{{ event.type }}</code>
               </div>

@@ -71,6 +71,7 @@ struct RuntimeState {
   int imsVoice = -1;
   int imsReg = -1;
   bool forcedGsmForCall = false;
+  bool skipGsmVoice = false;
   bool callInProgress = false;
   bool otaInProgress = false;
   bool audioSyncInProgress = false;
@@ -434,6 +435,7 @@ void loadSavedMqttConfig() {
   const int telemetrySeconds = preferences.getInt("telemetrySec", 60);
   state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
   state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", COF_ENABLE_CALLS != 0));
+  state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -595,6 +597,8 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   cellular["ims"] = state.imsReg == 1;
   cellular["ims_reg"] = state.imsReg;
   cellular["ims_voice"] = state.imsVoice;
+  cellular["gsm_usable"] = !state.skipGsmVoice;
+  cellular["voice_path"] = state.skipGsmVoice ? "csfb" : "auto";
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
   for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
@@ -1497,6 +1501,15 @@ String queryCallFailCause() {
   return value;
 }
 
+String voiceContextSuffix(const String& bearer, const String& ceer = "");
+void restoreAutoRadio();
+String waitForOutgoingCall(uint32_t timeoutMs);
+
+void persistSkipGsm(bool skip) {
+  state.skipGsmVoice = skip;
+  preferences.putBool("skipGsm", skip);
+}
+
 String prepareVoiceBearer() {
   refreshCellularStatus();
   if (imsVoiceReady()) {
@@ -1505,29 +1518,58 @@ String prepareVoiceBearer() {
   if (radioIsGsm()) {
     return "gsm";
   }
+  return "csfb";
+}
 
-  setStatus("Voice via GSM");
-  Serial.println("[call] LTE without IMS, trying GSM for voice");
-  if (!sendAT("AT+CNMP=13", "OK", 10000)) {
-    return "gsm force fail";
-  }
-  state.forcedGsmForCall = true;
-  if (waitForRadioService(45000, true)) {
-    return "gsm fallback";
-  }
-
-  setStatus("Restore LTE");
-  Serial.println("[call] no GSM, restoring LTE for CSFB");
+void bounceRadioForCsfb() {
+  setStatus("Voice retry");
+  Serial.println("[call] bouncing radio for CSFB retry");
+  sendAT("AT+CNMP=13", "OK", 8000);
+  waitWithWatchdog(4000);
   sendAT("AT+CNMP=2", "OK", 10000);
   state.forcedGsmForCall = false;
-  if (!waitForRadioService(25000, false)) {
-    return "no radio";
+  persistSkipGsm(true);
+  waitForRadioService(25000, false);
+}
+
+bool shouldRetryVoice(const String& result) {
+  return result.startsWith("Call failed") ||
+         result.startsWith("Call no carrier") ||
+         result.startsWith("Call not connected") ||
+         result.startsWith("Call dial timeout") ||
+         result.startsWith("No voice radio");
+}
+
+String playConnectedCallAudio() {
+  waitWithWatchdog(1500);
+  setStatus("Playing audio");
+  sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
+  readModemUntil(45000, "+AUDIOSTATE: audio play stop");
+  sendAT("ATH", "OK", 5000);
+  setStatus("Call done");
+  return "Call done";
+}
+
+String dialAndMaybePlay(const String& phone, const String& bearer) {
+  if (!radioHasService()) {
+    return "No voice radio" + voiceContextSuffix(bearer);
   }
-  refreshCellularStatus();
-  if (imsVoiceReady()) {
-    return "ims after restore";
+
+  setStatus("Calling");
+  if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
+    const String ceer = queryCallFailCause();
+    sendAT("ATH", "OK", 3000);
+    return "Call failed" + voiceContextSuffix(bearer, ceer);
   }
-  return "csfb";
+
+  const String progress = waitForOutgoingCall(35000);
+  if (progress != "Call connected") {
+    const String ceer = queryCallFailCause();
+    sendAT("ATH", "OK", 3000);
+    return progress + voiceContextSuffix(bearer, ceer);
+  }
+
+  return playConnectedCallAudio() + voiceContextSuffix(bearer);
 }
 
 void restoreAutoRadio() {
@@ -1539,7 +1581,7 @@ void restoreAutoRadio() {
   waitForRadioService(20000, false);
 }
 
-String voiceContextSuffix(const String& bearer, const String& ceer = "") {
+String voiceContextSuffix(const String& bearer, const String& ceer) {
   String suffix = " [";
   suffix += state.radioMode.length() > 0 ? state.radioMode : "?";
   suffix += " IMS=";
@@ -1640,45 +1682,19 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     checkManifest(false);
   }
 
-  const String bearer = prepareVoiceBearer();
-  if (bearer == "no radio" || bearer == "gsm force fail" || !radioHasService()) {
-    restoreAutoRadio();
-    state.callInProgress = false;
-    setStatus("No voice radio");
-    return "No voice radio" + voiceContextSuffix(bearer);
-  }
-
   state.callInProgress = true;
-  setStatus("Calling");
-  if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
-    const String ceer = queryCallFailCause();
-    sendAT("ATH", "OK", 3000);
-    restoreAutoRadio();
-    state.callInProgress = false;
-    setStatus("Call failed");
-    return "Call failed" + voiceContextSuffix(bearer, ceer);
+  String bearer = prepareVoiceBearer();
+  String result = dialAndMaybePlay(phone, bearer);
+  if (shouldRetryVoice(result)) {
+    bounceRadioForCsfb();
+    refreshCellularStatus();
+    bearer = imsVoiceReady() ? "ims after bounce" : "csfb retry";
+    result = dialAndMaybePlay(phone, bearer);
   }
-
-  const String progress = waitForOutgoingCall(35000);
-  if (progress != "Call connected") {
-    const String ceer = queryCallFailCause();
-    sendAT("ATH", "OK", 3000);
-    restoreAutoRadio();
-    state.callInProgress = false;
-    setStatus(progress);
-    return progress + voiceContextSuffix(bearer, ceer);
-  }
-
-  waitWithWatchdog(1500);
-  setStatus("Playing audio");
-  sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
-  readModemUntil(45000, "+AUDIOSTATE: audio play stop");
-  sendAT("ATH", "OK", 5000);
 
   restoreAutoRadio();
   state.callInProgress = false;
-  setStatus("Call done");
-  return "Call done" + voiceContextSuffix(bearer);
+  return result;
 }
 
 String resolveTestPhone(const String& phoneOverride) {
@@ -2087,7 +2103,7 @@ void loop() {
     const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
     pendingTestCallPhone = "";
     connectMqttIfNeeded();
-    const bool ok = result == "Call done";
+    const bool ok = result.startsWith("Call done");
     publishDeviceEvent("test_call", ok ? "info" : "warning", result);
   }
 

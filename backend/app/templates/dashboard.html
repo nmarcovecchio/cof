@@ -127,12 +127,15 @@
         {% for event in recent_events %}
         <li class="event-item">
           <div class="event-title">
-            {% if event.severity == 'warning' %}
-              <span class="badge text-bg-warning text-dark">{{ event.severity }}</span>
-            {% elif event.severity == 'error' %}
-              <span class="badge text-bg-danger">{{ event.severity }}</span>
+            {% set sev = event|event_severity %}
+            {% if sev == 'warning' %}
+              <span class="badge text-bg-warning text-dark">{{ sev }}</span>
+            {% elif sev == 'error' %}
+              <span class="badge text-bg-danger">{{ sev }}</span>
+            {% elif event.type in ['test_call', 'test_sms'] %}
+              <span class="badge text-bg-success">ok</span>
             {% else %}
-              <span class="badge text-bg-light border">{{ event.severity }}</span>
+              <span class="badge text-bg-light border">{{ sev }}</span>
             {% endif %}
             <code class="small">{{ event.type }}</code>
             <span class="small text-muted">{{ event.device.device_uid }}</span>
