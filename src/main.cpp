@@ -110,6 +110,9 @@ bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
+bool pendingTestSmsCommand = false;
+String pendingTestSmsPhone = "";
+String pendingTestSmsText = "";
 bool pendingCommandAck = false;
 String pendingCommandId = "";
 String pendingCommandName = "";
@@ -381,6 +384,14 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallPhone.trim();
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test call scheduled";
+      } else if (pendingCommandName == "test_sms") {
+        pendingTestSmsCommand = true;
+        pendingTestSmsPhone = doc["phone"] | "";
+        pendingTestSmsPhone.trim();
+        pendingTestSmsText = doc["text"] | "CallOnFail prueba SMS";
+        pendingTestSmsText.trim();
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "Test SMS scheduled";
       } else {
         pendingCommandMessage = "unsupported command";
       }
@@ -531,6 +542,7 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   capabilities["wifi"] = true;
   capabilities["modem_a7672"] = true;
   capabilities["phone_calls"] = true;
+  capabilities["sms"] = true;
   capabilities["audio_playback"] = state.modemAudioPlaybackSupported;
   capabilities["modem_file_transfer"] = state.modemFileTransferSupported;
   capabilities["sht31"] = true;
@@ -1224,6 +1236,65 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   return "Call done";
 }
 
+String resolveTestPhone(const String& phoneOverride) {
+  String phone = phoneOverride;
+  phone.trim();
+  if (!phoneLooksValid(phone)) {
+    phone = state.manifestPhoneNumber;
+    phone.trim();
+  }
+  return phone;
+}
+
+String sendTestSms(const String& phoneOverride, const String& text) {
+  if (!state.modemReady || !state.simReady) {
+    setStatus("No modem/SIM");
+    return "No modem/SIM";
+  }
+
+  const String phone = resolveTestPhone(phoneOverride);
+  if (!phoneLooksValid(phone)) {
+    setStatus("No phone cfg");
+    return "No phone cfg";
+  }
+
+  String body = text;
+  body.trim();
+  if (body.length() == 0) {
+    body = "CallOnFail prueba SMS";
+  }
+  if (body.length() > 160) {
+    body = body.substring(0, 160);
+  }
+
+  if (!sendAT("AT+CMGF=1", "OK", 3000)) {
+    setStatus("SMS mode fail");
+    return "SMS mode fail";
+  }
+
+  flushModemInput();
+  Serial.println("[modem] >> AT+CMGS=\"" + phone + "\"");
+  ModemSerial.print("AT+CMGS=\"");
+  ModemSerial.print(phone);
+  ModemSerial.print("\"\r");
+  if (!modemWaitForPrompt(10000)) {
+    setStatus("SMS prompt fail");
+    return "SMS prompt fail";
+  }
+
+  ModemSerial.print(body);
+  ModemSerial.write(static_cast<uint8_t>(0x1A));
+  const String response = readModemUntil(60000, "OK");
+  Serial.println("[modem] << " + response);
+  if (response.indexOf("+CMGS") < 0 && response.indexOf("OK") < 0) {
+    setStatus("SMS failed");
+    return "SMS failed";
+  }
+
+  setStatus("SMS sent");
+  return "SMS sent";
+}
+
 void handleButton() {
   const bool pressed = readTestButton();
   const uint32_t now = millis();
@@ -1559,6 +1630,16 @@ void loop() {
     connectMqttIfNeeded();
     const bool ok = result == "Call done";
     publishDeviceEvent("test_call", ok ? "info" : "warning", result);
+  }
+
+  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+    pendingTestSmsCommand = false;
+    const String result = sendTestSms(pendingTestSmsPhone, pendingTestSmsText);
+    pendingTestSmsPhone = "";
+    pendingTestSmsText = "";
+    connectMqttIfNeeded();
+    const bool ok = result == "SMS sent";
+    publishDeviceEvent("test_sms", ok ? "info" : "warning", result);
   }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {

@@ -59,7 +59,30 @@
       .action-bar {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: 0.5rem;
+      }
+
+      .action-bar form {
+        margin: 0;
+        display: flex;
+        align-items: center;
+      }
+
+      .action-bar .btn {
+        flex: 0 0 auto;
+        height: 38px;
+      }
+
+      .test-actions {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--cof-border);
+      }
+
+      .test-actions .form-control,
+      .test-actions .btn {
+        height: 38px;
       }
 
       .json-box,
@@ -176,7 +199,7 @@
 
       @media (max-width: 991.98px) {
         .action-bar .btn {
-          flex: 1 1 auto;
+          flex: 0 0 auto;
         }
       }
     </style>

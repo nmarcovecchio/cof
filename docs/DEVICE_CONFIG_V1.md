@@ -479,6 +479,22 @@ alarm calls still require `calling.enabled=true`.
 The device ACKs immediately, syncs test audio if the manifest version changed,
 then publishes an `event` of type `test_call` with the result.
 
+### Test SMS
+
+```json
+{
+  "command_id": "uuid",
+  "command": "test_sms",
+  "device_id": "cof-000001",
+  "phone": "+5491112345678",
+  "text": "CallOnFail prueba SMS",
+  "created_at": "2026-09-03T00:00:00Z"
+}
+```
+
+The device ACKs immediately, sends the SMS with `AT+CMGF=1` / `AT+CMGS`,
+then publishes an `event` of type `test_sms` with the result.
+
 The device responds to:
 
 ```text

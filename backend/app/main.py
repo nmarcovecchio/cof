@@ -417,6 +417,28 @@ def create_app() -> Flask:
             extra={"phone": phone},
         )
 
+    @app.post("/devices/<device_uid>/commands/test-sms")
+    @login_required
+    def device_command_test_sms(device_uid):
+        phone = normalize_phone(request.form.get("phone", ""))
+        text = (request.form.get("text") or "").strip() or "CallOnFail prueba SMS"
+        if len(text) > 160:
+            text = text[:160]
+        if not is_e164_phone(phone):
+            return send_device_command(
+                device_uid,
+                "test_sms",
+                "Test SMS rejected: invalid phone",
+                extra={"phone": phone, "text": text},
+                publish=False,
+            )
+        return send_device_command(
+            device_uid,
+            "test_sms",
+            f"Test SMS command sent to {phone}",
+            extra={"phone": phone, "text": text},
+        )
+
     def send_device_command(device_uid, command, message, extra=None, publish=True):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         if device.archived_at is not None:
