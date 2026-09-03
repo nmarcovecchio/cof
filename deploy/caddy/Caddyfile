@@ -6,6 +6,12 @@
 	reverse_proxy web:8000
 }
 
+# Issue/renew a public certificate for MQTT TLS. Mosquitto reuses these certs
+# via deploy/mosquitto/sync-certs-from-caddy.sh
+mqtt.callonfail.com.ar {
+	respond "CallOnFail MQTT endpoint. Use port 8883 with TLS." 200
+}
+
 www.callonfail.com.ar {
 	root * /srv/website
 	encode gzip

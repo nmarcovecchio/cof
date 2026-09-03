@@ -1,0 +1,3 @@
+# Certs synced from Caddy / Let's Encrypt. Do not commit private keys.
+*
+!.gitignore

@@ -8,6 +8,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      MQTT_USERNAME: ${MQTT_BACKEND_USERNAME:-backend}
+      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD:-change-me-backend-mqtt}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       APP_TIMEZONE: ${APP_TIMEZONE:-America/Argentina/Buenos_Aires}
       SECRET_KEY: ${SECRET_KEY:-change-this-secret-key}
@@ -31,6 +33,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       MQTT_HOST: mosquitto
       MQTT_PORT: 1883
+      MQTT_USERNAME: ${MQTT_BACKEND_USERNAME:-backend}
+      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD:-change-me-backend-mqtt}
       MQTT_AUTO_PROVISION: ${MQTT_AUTO_PROVISION:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -67,9 +71,13 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
-      - "${MQTT_BIND_ADDRESS:-127.0.0.1}:1883:1883"
+      # Public MQTT over TLS only. Plain 1883 stays internal to Docker.
+      - "8883:8883"
     volumes:
       - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./deploy/mosquitto/acl:/mosquitto/config/acl:ro
+      - ./deploy/mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./deploy/mosquitto/certs:/mosquitto/certs:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
 

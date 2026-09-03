@@ -34,8 +34,9 @@ constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogTimeoutSeconds = 60;
 
 HardwareSerial ModemSerial(2);
-WiFiClient mqttNetworkClient;
-PubSubClient mqttClient(mqttNetworkClient);
+WiFiClient mqttPlainClient;
+WiFiClientSecure mqttTlsClient;
+PubSubClient mqttClient;
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 Adafruit_SHT31 sht31;
 OneWire oneWire(COF_PIN_ONEWIRE);
@@ -113,9 +114,27 @@ String pendingCommandName = "";
 String pendingCommandStatus = "";
 String pendingCommandMessage = "";
 
+void onMqttMessage(char* topic, byte* payload, unsigned int length);
+
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+
+bool mqttUsesTls() {
+  return state.mqttPort == 8883 || state.mqttPort == 8884;
+}
+
+void configureMqttClientTransport() {
+  if (mqttUsesTls()) {
+    mqttTlsClient.setInsecure();
+    mqttClient.setClient(mqttTlsClient);
+  } else {
+    mqttClient.setClient(mqttPlainClient);
+  }
+  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(4096);
 }
 
 bool applyDesiredConfig(JsonDocument& doc) {
@@ -377,13 +396,28 @@ void loadSavedMqttConfig() {
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
-    mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
-    mqttClient.setCallback(onMqttMessage);
-    mqttClient.setBufferSize(4096);
-    Serial.printf("[mqtt] saved config host=%s port=%d device=%s\n",
+    // Migrate previous plaintext lab endpoint to TLS + auth defaults.
+    if (state.mqttHost == "mqtt.callonfail.com.ar" && state.mqttPort == 1883) {
+      state.mqttPort = COF_DEFAULT_MQTT_PORT;
+      if (state.mqttUsername.length() == 0) {
+        state.mqttUsername = COF_DEFAULT_MQTT_USERNAME;
+      }
+      if (state.mqttPassword.length() == 0) {
+        state.mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
+      }
+      preferences.putInt("mqttPort", state.mqttPort);
+      preferences.putString("mqttUser", state.mqttUsername);
+      preferences.putString("mqttPass", state.mqttPassword);
+      Serial.println("[mqtt] migrated lab endpoint to TLS :8883");
+    }
+
+    configureMqttClientTransport();
+    Serial.printf("[mqtt] saved config host=%s port=%d device=%s user=%s tls=%s\n",
                   state.mqttHost.c_str(),
                   state.mqttPort,
-                  state.mqttDeviceId.c_str());
+                  state.mqttDeviceId.c_str(),
+                  state.mqttUsername.c_str(),
+                  mqttUsesTls() ? "yes" : "no");
     Serial.printf("[config] reported=v%d telemetry=%lus calling=%s\n",
                   state.reportedConfigVersion,
                   static_cast<unsigned long>(state.telemetryIntervalMs / 1000UL),
@@ -407,9 +441,7 @@ void saveMqttConfig(const String& host, int port, const String& deviceId, const 
   preferences.putString("mqttUser", username);
   preferences.putString("mqttPass", password);
 
-  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
-  mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(4096);
+  configureMqttClientTransport();
   setStatus("MQTT saved");
 }
 
@@ -601,8 +633,7 @@ void connectMqttIfNeeded() {
   }
   lastMqttReconnectMs = now;
 
-  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
-  mqttClient.setCallback(onMqttMessage);
+  configureMqttClientTransport();
 
   const String clientId = state.mqttDeviceId + "-" + String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX);
   const String willTopic = mqttTopic("status");
@@ -610,10 +641,12 @@ void connectMqttIfNeeded() {
   const char* username = state.mqttUsername.length() > 0 ? state.mqttUsername.c_str() : nullptr;
   const char* password = state.mqttUsername.length() > 0 ? state.mqttPassword.c_str() : nullptr;
 
-  Serial.printf("[mqtt] connecting host=%s port=%d device=%s\n",
+  Serial.printf("[mqtt] connecting host=%s port=%d device=%s user=%s tls=%s\n",
                 state.mqttHost.c_str(),
                 state.mqttPort,
-                state.mqttDeviceId.c_str());
+                state.mqttDeviceId.c_str(),
+                state.mqttUsername.c_str(),
+                mqttUsesTls() ? "yes" : "no");
 
   const bool ok = mqttClient.connect(
       clientId.c_str(),

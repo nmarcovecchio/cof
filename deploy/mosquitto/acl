@@ -1,0 +1,7 @@
+# Backend services can read/write everything.
+user backend
+topic readwrite #
+
+# Device usernames should match device_uid.
+# Example: user cof-test can only use devices/cof-test/#
+pattern readwrite devices/%u/#

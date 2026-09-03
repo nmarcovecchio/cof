@@ -454,22 +454,116 @@ Current MVP state:
 - Marketing site and Web/API run behind Caddy with Let's Encrypt.
 - PostgreSQL is internal to Docker.
 - Redis is internal to Docker.
-- Mosquitto is internal/localhost only.
-- MQTT authentication/TLS for external devices is not configured yet.
+- Mosquitto:
+  - `1883` internal only (Docker network) for web + mqtt-worker
+  - `8883` public with TLS + password auth + ACLs for devices
 
-Before connecting deployed devices over the internet, add:
+## MQTT TLS + auth setup
 
-- MQTT username/password or certificates per device.
-- MQTT TLS on `8883`.
-- ACLs so each device can only access its own topics.
-- Backup automation for PostgreSQL.
-- Basic server monitoring.
+### 1) DNS
+
+Ensure Cloudflare has:
+
+```text
+mqtt.callonfail.com.ar   A    <VPS_STATIC_IP>    DNS only
+```
+
+### 2) VPS firewall / Lightsail
+
+Open:
+
+```text
+8883/tcp
+```
+
+Close public `1883/tcp` if it was opened for lab tests:
+
+```bash
+sudo ufw delete allow 1883/tcp || true
+sudo ufw allow 8883/tcp
+sudo ufw status
+```
+
+Also remove `1883` from the Lightsail networking panel if present.
+
+### 3) Update repo and env
+
+```bash
+cd /opt/callonfail
+git pull
+nano .env
+```
+
+Add/update:
+
+```text
+MQTT_BACKEND_USERNAME=backend
+MQTT_BACKEND_PASSWORD=<strong-backend-pass>
+MQTT_DEVICE_USERNAME=cof-test
+MQTT_DEVICE_PASSWORD=<strong-device-pass>
+MQTT_TLS_DOMAIN=mqtt.callonfail.com.ar
+SESSION_COOKIE_SECURE=true
+```
+
+Use the same device password in firmware (`COF_DEFAULT_MQTT_PASSWORD`) before building/OTA.
+
+### 4) Generate Mosquitto users
+
+```bash
+export MQTT_BACKEND_PASSWORD='...'   # same as .env
+export MQTT_DEVICE_PASSWORD='...'    # same as .env
+./deploy/mosquitto/gen-passwd.sh
+```
+
+### 5) Issue MQTT certificate via Caddy
+
+```bash
+docker compose up -d caddy
+curl -I https://mqtt.callonfail.com.ar/
+./deploy/mosquitto/sync-certs-from-caddy.sh
+```
+
+### 6) Start hardened Mosquitto + backend
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f mosquitto
+docker compose logs -f mqtt-worker
+```
+
+### 7) Point the ESP32 to TLS MQTT
+
+After OTA to firmware `>= 0.2.11`, devices previously using
+`mqtt.callonfail.com.ar:1883` migrate automatically to `:8883` with the
+default username/password compiled into firmware.
+
+Manual Serial override:
+
+```text
+mqtt mqtt.callonfail.com.ar 8883 cof-test cof-test <device-password>
+mqtt-status
+```
+
+### 8) Verify
+
+From the VPS:
+
+```bash
+docker compose exec mosquitto mosquitto_pub \
+  -h localhost -p 1883 \
+  -u backend -P "$MQTT_BACKEND_PASSWORD" \
+  -t devices/cof-test/command \
+  -m '{"command":"status_report","device_id":"cof-test"}'
+```
+
+From dashboard: device should stay online and accept OTA/config commands.
 
 ## Next backend milestones
 
 1. Keep DNS grey-cloud for Caddy ACME (or move to CF origin certs if proxying).
 2. Set `SESSION_COOKIE_SECURE=true` once HTTPS is confirmed.
 3. Add database migrations.
-4. Harden MQTT auth/ACLs and expose `8883` only.
+4. Rotate MQTT device passwords per device (not shared lab password).
 5. Add OTA release management under `ota.callonfail.com.ar`.
 6. Add backups and basic server monitoring.
