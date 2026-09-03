@@ -379,9 +379,16 @@ def default_device_config(device: Device) -> dict:
             {"id": "output_1", "name": "Salida 1", "type": "relay", "enabled": True},
             {"id": "output_2", "name": "Salida 2", "type": "relay", "enabled": True},
         ],
+        "calling": {
+            "enabled": False,
+            "max_attempts_per_alarm": 0,
+            "notes": "Enable only for customers that want phone calls.",
+        },
         "audio": [
             {
                 "id": "test_call",
+                "enabled": False,
+                "description": "Audio de prueba. El archivo debe validarse con una llamada real.",
                 "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/audio/cof_test.wav",
                 "sha256": "",
                 "modem_path": "C:/cof_test.wav",

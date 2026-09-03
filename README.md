@@ -36,6 +36,10 @@ El contrato inicial para configuracion de dispositivos queda en:
 docs/DEVICE_CONFIG_V1.md
 ```
 
+La configuracion diferencia capacidades del modem, llamadas habilitadas por
+cliente y estado real de audios. Un modem puede soportar audio, pero el cliente
+puede tener `calling.enabled=false`.
+
 ### Deploy inicial en VPS
 
 En el VPS, despues de instalar Docker:

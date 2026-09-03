@@ -104,9 +104,16 @@ devices/cof-000001/config/desired
       "enabled": true
     }
   ],
+  "calling": {
+    "enabled": false,
+    "max_attempts_per_alarm": 0,
+    "notes": "Enable only for customers that want phone calls."
+  },
   "audio": [
     {
       "id": "test_call",
+      "enabled": false,
+      "description": "Audio de prueba. El archivo debe validarse con una llamada real.",
       "url": "https://ota.callonfail.com.ar/audio/test_call.wav",
       "sha256": "",
       "modem_path": "C:/test_call.wav",
@@ -167,6 +174,88 @@ devices/cof-000001/config/desired
   ]
 }
 ```
+
+## Calling and audio model
+
+Keep these concepts separate:
+
+### Modem capability
+
+Reported by firmware as telemetry/status:
+
+```json
+{
+  "modem_ready": true,
+  "audio_play_supported": true,
+  "file_transfer_supported": true
+}
+```
+
+This only means the modem supports the AT commands. It does **not** prove that
+the customer wants calls enabled or that the audio was heard in a real call.
+
+### Customer/device configuration
+
+Controlled from the web:
+
+```json
+{
+  "calling": {
+    "enabled": false,
+    "max_attempts_per_alarm": 0
+  },
+  "audio": [
+    {
+      "id": "test_call",
+      "enabled": false,
+      "url": "https://ota.callonfail.com.ar/audio/test_call.wav",
+      "sha256": "",
+      "modem_path": "C:/test_call.wav"
+    }
+  ]
+}
+```
+
+If `calling.enabled` is false, the device must not place phone calls even if the
+modem is ready.
+
+Audio assets should be dynamic. A customer may have no audio assets, one shared
+test audio, or different audios per alarm flow.
+
+### Runtime status
+
+Reported by firmware/backend after real operations:
+
+```json
+{
+  "calling_enabled": false,
+  "audio_assets": [
+    {
+      "id": "test_call",
+      "modem_path": "C:/test_call.wav",
+      "sync_status": "not_required",
+      "last_sync_at": null,
+      "last_play_result": null,
+      "validated_by_real_call": false
+    }
+  ]
+}
+```
+
+Recommended status values:
+
+```text
+not_required
+pending
+synced
+sync_failed
+play_command_ok
+play_command_failed
+validated_by_real_call
+```
+
+The product should show audio as "validated" only after a real call test proves
+that the remote side heard the expected audio.
 
 ## Reported config
 
