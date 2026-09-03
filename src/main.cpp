@@ -77,6 +77,8 @@ struct RuntimeState {
   String mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
   int reportedConfigVersion = 0;
   String reportedConfigHash = "";
+  uint32_t telemetryIntervalMs = kTelemetryPublishIntervalMs;
+  bool callingEnabled = false;
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
@@ -114,6 +116,53 @@ String pendingCommandMessage = "";
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+
+bool applyDesiredConfig(JsonDocument& doc) {
+  pendingConfigError = "";
+
+  int telemetrySeconds = doc["telemetry_interval_seconds"] | 60;
+  if (telemetrySeconds < 10 || telemetrySeconds > 3600) {
+    pendingConfigError = "telemetry_interval_seconds out of range";
+    return false;
+  }
+
+  bool callingEnabled = false;
+  if (doc["calling"].is<JsonObject>() || doc["calling"].is<JsonObjectConst>()) {
+    callingEnabled = doc["calling"]["enabled"] | false;
+  } else if (!doc["calling"].isNull()) {
+    pendingConfigError = "calling must be object";
+    return false;
+  }
+
+  if (!preferences.putInt("reportedCfgVersion", pendingConfigVersion)) {
+    pendingConfigError = "failed to store config_version";
+    return false;
+  }
+  if (!preferences.putString("reportedCfgHash", pendingConfigHash)) {
+    pendingConfigError = "failed to store config_hash";
+    return false;
+  }
+  if (!preferences.putInt("telemetrySec", telemetrySeconds)) {
+    pendingConfigError = "failed to store telemetry interval";
+    return false;
+  }
+  if (!preferences.putBool("callingEnabled", callingEnabled)) {
+    pendingConfigError = "failed to store calling flag";
+    return false;
+  }
+
+  state.reportedConfigVersion = pendingConfigVersion;
+  state.reportedConfigHash = pendingConfigHash;
+  state.telemetryIntervalMs = static_cast<uint32_t>(telemetrySeconds) * 1000UL;
+  state.callingEnabled = callingEnabled;
+
+  Serial.printf("[config] applied v%d hash=%s telemetry=%ds calling=%s\n",
+                pendingConfigVersion,
+                pendingConfigHash.c_str(),
+                telemetrySeconds,
+                callingEnabled ? "on" : "off");
+  return true;
 }
 
 bool networkConnected() {
@@ -269,8 +318,13 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingConfigError = "device_id mismatch";
       } else if (pendingConfigVersion <= 0) {
         pendingConfigError = "missing config_version";
+      } else if (!applyDesiredConfig(doc)) {
+        if (pendingConfigError.length() == 0) {
+          pendingConfigError = "config apply failed";
+        }
       } else {
-        pendingConfigError = "config storage/application not implemented";
+        pendingConfigApplied = true;
+        setStatus("Config v" + String(pendingConfigVersion));
       }
     }
 
@@ -317,6 +371,9 @@ void loadSavedMqttConfig() {
   state.mqttPassword = preferences.getString("mqttPass", COF_DEFAULT_MQTT_PASSWORD);
   state.reportedConfigVersion = preferences.getInt("reportedCfgVersion", 0);
   state.reportedConfigHash = preferences.getString("reportedCfgHash", "");
+  const int telemetrySeconds = preferences.getInt("telemetrySec", 60);
+  state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
+  state.callingEnabled = preferences.getBool("callingEnabled", false);
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -327,6 +384,10 @@ void loadSavedMqttConfig() {
                   state.mqttHost.c_str(),
                   state.mqttPort,
                   state.mqttDeviceId.c_str());
+    Serial.printf("[config] reported=v%d telemetry=%lus calling=%s\n",
+                  state.reportedConfigVersion,
+                  static_cast<unsigned long>(state.telemetryIntervalMs / 1000UL),
+                  state.callingEnabled ? "on" : "off");
   } else {
     Serial.println("[mqtt] no saved config");
   }
@@ -1054,6 +1115,11 @@ void placeCallAndPlayAudio() {
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
     return;
   }
+  if (!state.callingEnabled) {
+    setStatus("Calls off cfg");
+    Serial.println("[call] calling.enabled=false in device config");
+    return;
+  }
 
   if (!state.modemReady || !state.simReady) {
     setStatus("No modem/SIM");
@@ -1413,7 +1479,7 @@ void loop() {
     publishDeviceStatus("online", true);
   }
 
-  if (state.mqttConnected && now - lastTelemetryPublishMs >= kTelemetryPublishIntervalMs) {
+  if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
     lastTelemetryPublishMs = now;
     publishTelemetryNow();
   }

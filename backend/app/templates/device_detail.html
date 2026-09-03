@@ -60,8 +60,11 @@
         Deseada: {{ device.desired_config_version or '-' }} /
         Reportada: {{ device.reported_config_version or '-' }}
       </div>
-      {% if device.desired_config_version and device.desired_config_version == device.reported_config_version %}
+      {% set latest_config = configs[0] if configs else none %}
+      {% if latest_config and latest_config.status == 'applied' and device.desired_config_version == device.reported_config_version %}
         <span class="badge text-bg-success mt-2">Aplicada</span>
+      {% elif latest_config and latest_config.status == 'rejected' %}
+        <span class="badge text-bg-danger mt-2">Rechazada</span>
       {% elif device.desired_config_version %}
         <span class="badge text-bg-warning text-dark mt-2">Pendiente</span>
       {% else %}
@@ -200,6 +203,13 @@
               <td>{{ config.status }}</td>
               <td>{{ config.applied_at|datetime_local }}</td>
             </tr>
+            {% if config.reported_payload %}
+            <tr>
+              <td colspan="3">
+                <pre class="bg-light border rounded p-2 mb-0 small"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+              </td>
+            </tr>
+            {% endif %}
             {% else %}
             <tr><td colspan="3" class="text-muted">Sin configs.</td></tr>
             {% endfor %}

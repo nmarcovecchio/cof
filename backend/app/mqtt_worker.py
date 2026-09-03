@@ -159,6 +159,19 @@ def persist_message(topic, payload):
                         config.reported_payload = payload
                         config.status = "applied" if applied else "rejected"
                         config.applied_at = utcnow() if applied else None
+                    db.session.add(
+                        Event(
+                            device_id=device.id,
+                            type="config_applied" if applied else "config_rejected",
+                            severity="info" if applied else "warning",
+                            message=(
+                                f"config v{version} applied"
+                                if applied
+                                else f"config v{version} rejected: {payload.get('error', 'unknown')}"
+                            ),
+                            payload=payload,
+                        )
+                    )
             elif message_type == "ack":
                 command = payload.get("command", "command")
                 status = payload.get("status", "unknown")
