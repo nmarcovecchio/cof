@@ -3,95 +3,116 @@
 {% block title %}{{ device.device_uid }} - CallOnFail{% endblock %}
 
 {% block content %}
+{% set latest_config = configs[0] if configs else none %}
+
 <div class="mb-3">
-  <a href="{{ url_for('dashboard') }}">&larr; Volver al dashboard</a>
+  <a class="text-decoration-none" href="{{ url_for('dashboard') }}">
+    <i class="bi bi-arrow-left"></i> Dashboard
+  </a>
 </div>
 
-<div class="card shadow-sm mb-4">
+<div class="card mb-4">
   <div class="card-body">
     {% if device.archived_at %}
-    <div class="alert alert-warning">
-      Este dispositivo esta archivado desde {{ device.archived_at|datetime_local }}.
-      Si sigue publicando MQTT, el backend registrara eventos de advertencia pero no telemetria normal.
+    <div class="alert alert-warning mb-3">
+      Archivado desde {{ device.archived_at|datetime_local }}.
+      Si sigue publicando MQTT, se registran advertencias pero no telemetria normal.
     </div>
     {% endif %}
-    <div class="d-flex justify-content-between align-items-start">
-      <div>
-        <h1 class="mb-1">{{ device.name }}</h1>
-        <p class="text-muted mb-0">{{ device.device_uid }}</p>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div class="min-w-0">
+        <h1 class="h3 mb-1">{{ device.name }}</h1>
+        <div class="text-muted"><code>{{ device.device_uid }}</code></div>
       </div>
       {% if device.archived_at %}
-      <span class="badge fs-6 text-bg-dark">archivado</span>
+      <span class="badge text-bg-dark">archivado</span>
       {% else %}
-      <span class="badge fs-6 text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
+      <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
       {% endif %}
     </div>
-    <hr>
+
     <div class="row g-3">
-      <div class="col-md-3">
-        <div class="text-muted small">Cliente</div>
-        <strong>{{ device.tenant.name }}</strong>
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="meta-label">Cliente</div>
+        <div class="meta-value">{{ device.tenant.name }}</div>
       </div>
-      <div class="col-md-3">
-        <div class="text-muted small">Sitio</div>
-        <strong>{{ device.site.name if device.site else '-' }}</strong>
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="meta-label">Sitio</div>
+        <div class="meta-value">{{ device.site.name if device.site else '-' }}</div>
       </div>
-      <div class="col-md-3">
-        <div class="text-muted small">Firmware</div>
-        <strong>{{ device.firmware_version or '-' }}</strong>
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="meta-label">Firmware</div>
+        <div class="meta-value">{{ device.firmware_version or '-' }}</div>
       </div>
-      <div class="col-md-3">
-        <div class="text-muted small">Hardware</div>
-        <strong>{{ device.hardware_profile or '-' }}</strong>
+      <div class="col-6 col-md-4 col-xl-3">
+        <div class="meta-label">Hardware</div>
+        <div class="meta-value">{{ device.hardware_profile or '-' }}</div>
       </div>
-      <div class="col-md-3">
-        <div class="text-muted small">Ultima conexion</div>
-        <strong>{{ device.last_seen_at|datetime_local }}</strong>
+      <div class="col-12 col-md-8 col-xl-3">
+        <div class="meta-label">Ultima conexion</div>
+        <div class="meta-value">{{ device.last_seen_at|datetime_local }}</div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="card shadow-sm mb-4">
-  <div class="card-body d-flex justify-content-between align-items-center">
-    <div>
-      <h2 class="h5 mb-1">Configuracion</h2>
-      <div class="text-muted">
-        Deseada: {{ device.desired_config_version or '-' }} /
-        Reportada: {{ device.reported_config_version or '-' }}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Configuracion</h2>
+        <div class="text-muted small">
+          Deseada {{ device.desired_config_version or '-' }}
+          · Reportada {{ device.reported_config_version or '-' }}
+        </div>
+        {% if latest_config and latest_config.status == 'applied' and device.desired_config_version == device.reported_config_version %}
+          <span class="badge text-bg-success mt-2">Aplicada</span>
+        {% elif latest_config and latest_config.status == 'rejected' %}
+          <span class="badge text-bg-danger mt-2">Rechazada</span>
+        {% elif device.desired_config_version %}
+          <span class="badge text-bg-warning text-dark mt-2">Pendiente</span>
+        {% else %}
+          <span class="badge text-bg-secondary mt-2">Sin configuracion</span>
+        {% endif %}
       </div>
-      {% set latest_config = configs[0] if configs else none %}
-      {% if latest_config and latest_config.status == 'applied' and device.desired_config_version == device.reported_config_version %}
-        <span class="badge text-bg-success mt-2">Aplicada</span>
-      {% elif latest_config and latest_config.status == 'rejected' %}
-        <span class="badge text-bg-danger mt-2">Rechazada</span>
-      {% elif device.desired_config_version %}
-        <span class="badge text-bg-warning text-dark mt-2">Pendiente</span>
-      {% else %}
-        <span class="badge text-bg-secondary mt-2">Sin configuracion</span>
-      {% endif %}
     </div>
-    <div class="d-flex gap-2">
+
+    <div class="action-bar">
       {% if device.archived_at %}
-      <a class="btn btn-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar/reasignar</a>
+      <a class="btn btn-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">
+        <i class="bi bi-pencil-square"></i> Editar / reasignar
+      </a>
       <form method="post" action="{{ url_for('device_restore', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-success" type="submit">Restaurar dispositivo</button>
+        <button class="btn btn-outline-success" type="submit">
+          <i class="bi bi-arrow-counterclockwise"></i> Restaurar
+        </button>
       </form>
       {% else %}
-      <a class="btn btn-outline-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar/reasignar</a>
-      <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar/publicar configuracion</a>
+      <a class="btn btn-outline-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">
+        <i class="bi bi-pencil-square"></i> Editar / reasignar
+      </a>
+      <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">
+        <i class="bi bi-sliders"></i> Publicar config
+      </a>
       <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-secondary" type="submit">Forzar chequeo OTA</button>
+        <button class="btn btn-outline-secondary" type="submit">
+          <i class="bi bi-cloud-arrow-down"></i> OTA
+        </button>
       </form>
       <form method="post" action="{{ url_for('device_command_status_report', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-secondary" type="submit">Solicitar estado</button>
+        <button class="btn btn-outline-secondary" type="submit">
+          <i class="bi bi-activity"></i> Estado
+        </button>
       </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
-        <button class="btn btn-outline-danger" type="submit">Archivar dispositivo</button>
+        <button class="btn btn-outline-danger" type="submit">
+          <i class="bi bi-archive"></i> Archivar
+        </button>
       </form>
       {% endif %}
     </div>
@@ -100,25 +121,57 @@
 
 <div class="row g-4 mb-4">
   <div class="col-lg-6">
-    <div class="card shadow-sm h-100">
-      <div class="card-header bg-white"><strong>Capacidades reportadas</strong></div>
+    <div class="card h-100">
+      <div class="card-header">Capacidades</div>
       <div class="card-body">
         {% if device.capabilities %}
-        <pre class="bg-light border rounded p-3 mb-0 small"><code>{{ device.capabilities|json_pretty }}</code></pre>
+        <div class="chip-wrap mb-3">
+          {% for key, value in device.capabilities.items() %}
+            {% if value is sameas true %}
+              <span class="badge text-bg-light border">{{ key }}</span>
+            {% elif value is number %}
+              <span class="badge text-bg-light border">{{ key }}: {{ value }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <details>
+          <summary class="small text-muted">JSON completo</summary>
+          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.capabilities|json_pretty }}</code></pre>
+        </details>
         {% else %}
-        <p class="text-muted mb-0">El dispositivo todavia no reporto capacidades.</p>
+        <p class="text-muted mb-0">Todavia no reporto capacidades.</p>
         {% endif %}
       </div>
     </div>
   </div>
   <div class="col-lg-6">
-    <div class="card shadow-sm h-100">
-      <div class="card-header bg-white"><strong>Sensores/recursos descubiertos</strong></div>
+    <div class="card h-100">
+      <div class="card-header">Recursos descubiertos</div>
       <div class="card-body">
         {% if device.discovered %}
-        <pre class="bg-light border rounded p-3 mb-0 small"><code>{{ device.discovered|json_pretty }}</code></pre>
+        <div class="chip-wrap mb-3">
+          {% if device.discovered.get('sht31') %}
+            <span class="badge text-bg-light border">SHT31</span>
+          {% endif %}
+          {% if device.discovered.get('modem') %}
+            <span class="badge text-bg-light border">Modem</span>
+          {% endif %}
+          {% if device.discovered.get('pcf8574') %}
+            <span class="badge text-bg-light border">PCF8574</span>
+          {% endif %}
+          {% if device.discovered.get('ds18b20_count') %}
+            <span class="badge text-bg-light border">DS18B20 × {{ device.discovered.get('ds18b20_count') }}</span>
+          {% endif %}
+          {% for addr in device.discovered.get('ds18b20', []) %}
+            <span class="badge text-bg-light border"><code>{{ addr }}</code></span>
+          {% endfor %}
+        </div>
+        <details>
+          <summary class="small text-muted">JSON completo</summary>
+          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.discovered|json_pretty }}</code></pre>
+        </details>
         {% else %}
-        <p class="text-muted mb-0">El dispositivo todavia no reporto recursos descubiertos.</p>
+        <p class="text-muted mb-0">Todavia no reporto recursos.</p>
         {% endif %}
       </div>
     </div>
@@ -126,9 +179,9 @@
 </div>
 
 <div class="row g-4">
-  <div class="col-lg-7">
-    <div class="card shadow-sm">
-      <div class="card-header bg-white"><strong>Telemetria</strong></div>
+  <div class="col-xl-7">
+    <div class="card">
+      <div class="card-header">Telemetria</div>
       <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead class="table-light">
@@ -143,7 +196,7 @@
           <tbody>
             {% for row in recent_telemetry %}
             <tr>
-              <td>{{ row.received_at|datetime_local }}</td>
+              <td class="small text-muted">{{ row.received_at|datetime_local }}</td>
               <td>{{ row.temperature_1 if row.temperature_1 is not none else '-' }}</td>
               <td>{{ row.temperature_2 if row.temperature_2 is not none else '-' }}</td>
               <td>{{ row.humidity if row.humidity is not none else '-' }}</td>
@@ -158,112 +211,109 @@
     </div>
   </div>
 
-  <div class="col-lg-5">
-    <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white">
-        <strong>Eventos</strong>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>Fecha</th>
-              <th>Severidad</th>
-              <th>Tipo</th>
-              <th>Detalle</th>
-              <th class="text-end" style="width: 3rem;"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for event in recent_events %}
-            <tr>
-              <td class="text-nowrap">{{ event.started_at|datetime_local }}</td>
-              <td>{{ event.severity }}</td>
-              <td><code>{{ event.type }}</code></td>
-              <td>{{ event.message or '-' }}</td>
-              <td class="text-end">
-                <button
-                  class="btn btn-sm btn-link text-secondary p-0"
-                  type="button"
-                  data-bs-toggle="collapse"
-                  data-bs-target="#event-payload-{{ event.id }}"
-                  aria-expanded="false"
-                  aria-controls="event-payload-{{ event.id }}"
-                  title="Ver payload"
-                >
-                  <i class="bi bi-eye"></i>
-                </button>
-              </td>
-            </tr>
-            <tr class="collapse" id="event-payload-{{ event.id }}">
-              <td colspan="5" class="bg-light">
-                <pre class="border rounded p-2 mb-2 mt-1 small bg-white"><code>{{ event.payload|json_pretty }}</code></pre>
-              </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="5" class="text-muted">Sin eventos.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+  <div class="col-xl-5">
+    <div class="card mb-4">
+      <div class="card-header">Eventos</div>
+      {% if recent_events %}
+      <ul class="event-list">
+        {% for event in recent_events %}
+        <li class="event-item">
+          <div class="event-main">
+            <div class="event-body">
+              <div class="event-title">
+                {% if event.severity == 'warning' %}
+                  <span class="badge text-bg-warning text-dark">{{ event.severity }}</span>
+                {% elif event.severity == 'error' %}
+                  <span class="badge text-bg-danger">{{ event.severity }}</span>
+                {% else %}
+                  <span class="badge text-bg-light border">{{ event.severity }}</span>
+                {% endif %}
+                <code class="small">{{ event.type }}</code>
+              </div>
+              <div class="event-message">{{ event.message or 'Sin mensaje' }}</div>
+              <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
+            </div>
+            <button
+              class="icon-btn"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#event-payload-{{ event.id }}"
+              aria-expanded="false"
+              aria-controls="event-payload-{{ event.id }}"
+              title="Ver payload"
+            >
+              <i class="bi bi-eye"></i>
+            </button>
+          </div>
+          <div class="collapse" id="event-payload-{{ event.id }}">
+            <div class="payload-panel">
+              <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ event.payload|json_pretty }}</code></pre>
+            </div>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-3 text-muted">Sin eventos.</div>
+      {% endif %}
     </div>
 
-    <div class="card shadow-sm">
-      <div class="card-header bg-white"><strong>Ultimas configs</strong></div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>Version</th>
-              <th>Estado</th>
-              <th>Aplicada</th>
-              <th class="text-end" style="width: 3rem;"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for config in configs %}
-            <tr>
-              <td>{{ config.version }}</td>
-              <td>{{ config.status }}</td>
-              <td>{{ config.applied_at|datetime_local }}</td>
-              <td class="text-end">
-                <button
-                  class="btn btn-sm btn-link text-secondary p-0"
-                  type="button"
-                  data-bs-toggle="collapse"
-                  data-bs-target="#config-payload-{{ config.id }}"
-                  aria-expanded="{{ 'true' if config.status != 'applied' else 'false' }}"
-                  aria-controls="config-payload-{{ config.id }}"
-                  title="Ver desired / reported"
-                >
-                  <i class="bi bi-eye"></i>
-                </button>
-              </td>
-            </tr>
-            <tr class="collapse{% if config.status != 'applied' %} show{% endif %}" id="config-payload-{{ config.id }}">
-              <td colspan="4" class="bg-light">
-                <div class="row g-2 mt-1 mb-2">
-                  <div class="col-md-6">
-                    <div class="small text-muted mb-1">Enviado (desired)</div>
-                    <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.desired_payload|json_pretty }}</code></pre>
-                  </div>
-                  <div class="col-md-6">
-                    <div class="small text-muted mb-1">Recibido (reported)</div>
-                    {% if config.reported_payload %}
-                    <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.reported_payload|json_pretty }}</code></pre>
-                    {% else %}
-                    <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
-                    {% endif %}
-                  </div>
-                </div>
-              </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-muted">Sin configs.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+    <div class="card">
+      <div class="card-header">Ultimas configs</div>
+      {% if configs %}
+      <ul class="config-list">
+        {% for config in configs %}
+        <li class="config-item">
+          <div class="config-main">
+            <div class="config-body">
+              <div class="config-title">
+                <strong>v{{ config.version }}</strong>
+                {% if config.status == 'applied' %}
+                  <span class="badge text-bg-success">{{ config.status }}</span>
+                {% elif config.status == 'rejected' %}
+                  <span class="badge text-bg-danger">{{ config.status }}</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">{{ config.status }}</span>
+                {% endif %}
+              </div>
+              <div class="config-meta">
+                Aplicada: {{ config.applied_at|datetime_local }}
+              </div>
+            </div>
+            <button
+              class="icon-btn"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#config-payload-{{ config.id }}"
+              aria-expanded="{{ 'true' if config.status != 'applied' else 'false' }}"
+              aria-controls="config-payload-{{ config.id }}"
+              title="Ver desired / reported"
+            >
+              <i class="bi bi-eye"></i>
+            </button>
+          </div>
+          <div class="collapse{% if config.status != 'applied' %} show{% endif %}" id="config-payload-{{ config.id }}">
+            <div class="payload-panel">
+              <div class="mb-3">
+                <div class="meta-label">Enviado (desired)</div>
+                <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.desired_payload|json_pretty }}</code></pre>
+              </div>
+              <div>
+                <div class="meta-label">Recibido (reported)</div>
+                {% if config.reported_payload %}
+                <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+                {% else %}
+                <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-3 text-muted">Sin configs.</div>
+      {% endif %}
     </div>
   </div>
 </div>

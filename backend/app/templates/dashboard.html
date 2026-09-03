@@ -16,33 +16,33 @@
 
 <div class="row g-3 mb-4">
   <div class="col-md-4">
-    <div class="card shadow-sm">
+    <div class="card">
       <div class="card-body">
-        <div class="text-muted small">Clientes</div>
+        <div class="meta-label">Clientes</div>
         <div class="display-6">{{ tenants|length }}</div>
       </div>
     </div>
   </div>
   <div class="col-md-4">
-    <div class="card shadow-sm">
+    <div class="card">
       <div class="card-body">
-        <div class="text-muted small">Dispositivos</div>
+        <div class="meta-label">Dispositivos</div>
         <div class="display-6">{{ devices|length }}</div>
       </div>
     </div>
   </div>
   <div class="col-md-4">
-    <div class="card shadow-sm">
+    <div class="card">
       <div class="card-body">
-        <div class="text-muted small">Eventos recientes</div>
+        <div class="meta-label">Eventos recientes</div>
         <div class="display-6">{{ recent_events|length }}</div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="card shadow-sm mb-4">
-  <div class="card-header bg-white">
+<div class="card mb-4">
+  <div class="card-header">
     <strong>Dispositivos</strong>
   </div>
   <div class="table-responsive">
@@ -61,23 +61,23 @@
       <tbody>
         {% for device in devices %}
         <tr>
-          <td><a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">{{ device.device_uid }}</a></td>
+          <td><a class="text-decoration-none" href="{{ url_for('device_detail', device_uid=device.device_uid) }}"><code>{{ device.device_uid }}</code></a></td>
           <td>{{ device.name }}</td>
           <td>
             <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
           </td>
-          <td>{{ device.hardware_profile or '-' }}</td>
+          <td class="small">{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>
             {% if device.desired_config_version and device.desired_config_version == device.reported_config_version %}
-              <span class="badge text-bg-success">{{ device.reported_config_version }}</span>
+              <span class="badge text-bg-success">v{{ device.reported_config_version }}</span>
             {% elif device.desired_config_version %}
               <span class="badge text-bg-warning text-dark">{{ device.reported_config_version or '-' }} / {{ device.desired_config_version }}</span>
             {% else %}
               <span class="badge text-bg-secondary">sin config</span>
             {% endif %}
           </td>
-          <td>{{ device.last_seen_at|datetime_local }}</td>
+          <td class="small text-muted">{{ device.last_seen_at|datetime_local }}</td>
         </tr>
         {% else %}
         <tr><td colspan="7" class="text-muted">Sin dispositivos todavia.</td></tr>
@@ -89,8 +89,8 @@
 
 <div class="row g-4">
   <div class="col-lg-6">
-    <div class="card shadow-sm">
-      <div class="card-header bg-white"><strong>Telemetria reciente</strong></div>
+    <div class="card">
+      <div class="card-header"><strong>Telemetria reciente</strong></div>
       <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead class="table-light">
@@ -105,8 +105,8 @@
           <tbody>
             {% for row in recent_telemetry %}
             <tr>
-              <td>{{ row.received_at|datetime_local }}</td>
-              <td>{{ row.device.device_uid }}</td>
+              <td class="small text-muted">{{ row.received_at|datetime_local }}</td>
+              <td><code>{{ row.device.device_uid }}</code></td>
               <td>{{ row.temperature_1 if row.temperature_1 is not none else '-' }}</td>
               <td>{{ row.humidity if row.humidity is not none else '-' }}</td>
               <td>{{ row.mains_voltage if row.mains_voltage is not none else '-' }}</td>
@@ -120,32 +120,31 @@
     </div>
   </div>
   <div class="col-lg-6">
-    <div class="card shadow-sm">
-      <div class="card-header bg-white"><strong>Eventos recientes</strong></div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Fecha</th>
-              <th>Dispositivo</th>
-              <th>Severidad</th>
-              <th>Tipo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for event in recent_events %}
-            <tr>
-              <td>{{ event.started_at|datetime_local }}</td>
-              <td>{{ event.device.device_uid }}</td>
-              <td>{{ event.severity }}</td>
-              <td>{{ event.type }}</td>
-            </tr>
+    <div class="card">
+      <div class="card-header"><strong>Eventos recientes</strong></div>
+      {% if recent_events %}
+      <ul class="event-list">
+        {% for event in recent_events %}
+        <li class="event-item">
+          <div class="event-title">
+            {% if event.severity == 'warning' %}
+              <span class="badge text-bg-warning text-dark">{{ event.severity }}</span>
+            {% elif event.severity == 'error' %}
+              <span class="badge text-bg-danger">{{ event.severity }}</span>
             {% else %}
-            <tr><td colspan="4" class="text-muted">Sin eventos.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+              <span class="badge text-bg-light border">{{ event.severity }}</span>
+            {% endif %}
+            <code class="small">{{ event.type }}</code>
+            <span class="small text-muted">{{ event.device.device_uid }}</span>
+          </div>
+          <div class="event-message">{{ event.message or '-' }}</div>
+          <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-3 text-muted">Sin eventos.</div>
+      {% endif %}
     </div>
   </div>
 </div>
