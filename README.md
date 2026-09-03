@@ -138,6 +138,10 @@ Flujo multi-cliente inicial:
 4. Usar el mismo `Device ID` que usa el firmware en MQTT.
 5. Entrar al dispositivo y publicar config o forzar OTA.
 
+Los dispositivos reportan `hardware_profile`, capacidades y recursos
+descubiertos. En `/devices/<device_id>` se muestran esos datos para poder mapear
+sensores fisicos a sensores logicos.
+
 Los datos de prueba se pueden borrar desde la web:
 
 - `/devices`: eliminar dispositivos y su historial.

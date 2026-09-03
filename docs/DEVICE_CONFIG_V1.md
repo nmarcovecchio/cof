@@ -317,6 +317,57 @@ devices/cof-000001/telemetry
 }
 ```
 
+## Hardware profile and discovery
+
+Devices publish capabilities and discovered resources in `status` messages.
+
+Example:
+
+```json
+{
+  "device_id": "cof-test",
+  "status": "online",
+  "firmware": "0.2.4",
+  "hardware_profile": "cof-wt32-a7672-v1",
+  "capabilities": {
+    "ethernet": true,
+    "wifi": true,
+    "modem_a7672": true,
+    "phone_calls": true,
+    "audio_playback": true,
+    "modem_file_transfer": true,
+    "sht31": true,
+    "ds18b20_bus": true,
+    "max_ds18b20": 8,
+    "mains_voltage": true,
+    "pcf8574": true,
+    "external_inputs": 2,
+    "external_outputs": 2
+  },
+  "discovered": {
+    "sht31": true,
+    "pcf8574": true,
+    "modem": true,
+    "ds18b20_count": 2,
+    "ds18b20": [
+      "28FF641D4C1603A1",
+      "28FF882B2D1804B3"
+    ]
+  }
+}
+```
+
+The backend stores this on the device record and uses it to guide dynamic
+configuration. The UI should eventually let users map discovered physical
+resources to logical sensors, for example:
+
+```text
+28FF641D4C1603A1 -> Freezer 1
+28FF882B2D1804B3 -> Freezer 2
+input_1          -> Fuga de agua
+output_1         -> Sirena
+```
+
 ## Events
 
 The device publishes alarm/state changes to:

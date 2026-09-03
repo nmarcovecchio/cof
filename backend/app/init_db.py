@@ -1,6 +1,27 @@
 from .extensions import db
 from .main import create_app
 from .models import Device, Site, Tenant
+from sqlalchemy import inspect, text
+
+
+def ensure_schema_columns():
+    inspector = inspect(db.engine)
+    device_columns = {column["name"] for column in inspector.get_columns("devices")}
+
+    statements = []
+    if "hardware_profile" not in device_columns:
+        statements.append("ALTER TABLE devices ADD COLUMN hardware_profile VARCHAR(80)")
+    if "capabilities" not in device_columns:
+        statements.append("ALTER TABLE devices ADD COLUMN capabilities JSONB")
+    if "discovered" not in device_columns:
+        statements.append("ALTER TABLE devices ADD COLUMN discovered JSONB")
+
+    if not statements:
+        return
+
+    with db.engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def ensure_seed_data():
@@ -34,6 +55,7 @@ def main():
     app = create_app()
     with app.app_context():
         db.create_all()
+        ensure_schema_columns()
         ensure_seed_data()
         print("Database initialized")
 

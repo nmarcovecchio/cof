@@ -52,6 +52,7 @@
           <th>ID</th>
           <th>Nombre</th>
           <th>Estado</th>
+          <th>Hardware</th>
           <th>Firmware</th>
           <th>Config</th>
           <th>Ultima conexion</th>
@@ -65,6 +66,7 @@
           <td>
             <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
           </td>
+          <td>{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>
             {% if device.desired_config_version and device.desired_config_version == device.reported_config_version %}
@@ -78,7 +80,7 @@
           <td>{{ device.last_seen_at|datetime_local }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="text-muted">Sin dispositivos todavia.</td></tr>
+        <tr><td colspan="7" class="text-muted">Sin dispositivos todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>

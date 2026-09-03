@@ -31,6 +31,10 @@
         <strong>{{ device.firmware_version or '-' }}</strong>
       </div>
       <div class="col-md-3">
+        <div class="text-muted small">Hardware</div>
+        <strong>{{ device.hardware_profile or '-' }}</strong>
+      </div>
+      <div class="col-md-3">
         <div class="text-muted small">Ultima conexion</div>
         <strong>{{ device.last_seen_at|datetime_local }}</strong>
       </div>
@@ -62,6 +66,33 @@
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Eliminar dispositivo {{ device.device_uid }} y todo su historial?');">
         <button class="btn btn-outline-danger" type="submit">Eliminar dispositivo</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-white"><strong>Capacidades reportadas</strong></div>
+      <div class="card-body">
+        {% if device.capabilities %}
+        <pre class="bg-light border rounded p-3 mb-0 small"><code>{{ device.capabilities|json_pretty }}</code></pre>
+        {% else %}
+        <p class="text-muted mb-0">El dispositivo todavia no reporto capacidades.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-white"><strong>Sensores/recursos descubiertos</strong></div>
+      <div class="card-body">
+        {% if device.discovered %}
+        <pre class="bg-light border rounded p-3 mb-0 small"><code>{{ device.discovered|json_pretty }}</code></pre>
+        {% else %}
+        <p class="text-muted mb-0">El dispositivo todavia no reporto recursos descubiertos.</p>
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>

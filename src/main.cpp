@@ -321,7 +321,7 @@ void loadSavedMqttConfig() {
   if (state.mqttConfigured) {
     mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
     mqttClient.setCallback(onMqttMessage);
-    mqttClient.setBufferSize(1024);
+    mqttClient.setBufferSize(2048);
     Serial.printf("[mqtt] saved config host=%s port=%d device=%s\n",
                   state.mqttHost.c_str(),
                   state.mqttPort,
@@ -347,7 +347,7 @@ void saveMqttConfig(const String& host, int port, const String& deviceId, const 
 
   mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
   mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(1024);
+  mqttClient.setBufferSize(2048);
   setStatus("MQTT saved");
 }
 
@@ -383,13 +383,22 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = fa
     return false;
   }
 
-  char payload[768];
+  char payload[1536];
   const size_t length = serializeJson(doc, payload, sizeof(payload));
   const String topic = mqttTopic(suffix);
   const bool ok = mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
   Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
   (void)qos;
   return ok;
+}
+
+String ds18b20AddressToString(const DeviceAddress address) {
+  char buffer[17];
+  for (uint8_t i = 0; i < 8; i++) {
+    snprintf(&buffer[i * 2], 3, "%02X", address[i]);
+  }
+  buffer[16] = '\0';
+  return String(buffer);
 }
 
 void publishDeviceStatus(const char* status, bool retained = true) {
@@ -404,6 +413,36 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
   doc["reported_config_version"] = state.reportedConfigVersion;
+
+  doc["hardware_profile"] = "cof-wt32-a7672-v1";
+  JsonObject capabilities = doc["capabilities"].to<JsonObject>();
+  capabilities["ethernet"] = true;
+  capabilities["wifi"] = true;
+  capabilities["modem_a7672"] = true;
+  capabilities["phone_calls"] = true;
+  capabilities["audio_playback"] = state.modemAudioPlaybackSupported;
+  capabilities["modem_file_transfer"] = state.modemFileTransferSupported;
+  capabilities["sht31"] = true;
+  capabilities["ds18b20_bus"] = true;
+  capabilities["max_ds18b20"] = 8;
+  capabilities["mains_voltage"] = true;
+  capabilities["pcf8574"] = true;
+  capabilities["external_inputs"] = 2;
+  capabilities["external_outputs"] = 2;
+
+  JsonObject discovered = doc["discovered"].to<JsonObject>();
+  discovered["sht31"] = state.sht31Ready;
+  discovered["pcf8574"] = state.pcfReady;
+  discovered["modem"] = state.modemReady;
+  discovered["ds18b20_count"] = ds18b20.getDeviceCount();
+  JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
+  for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
+    DeviceAddress address;
+    if (ds18b20.getAddress(address, i)) {
+      ds18b20Addresses.add(ds18b20AddressToString(address));
+    }
+  }
+
   publishMqttJson("status", doc, retained, 1);
 }
 

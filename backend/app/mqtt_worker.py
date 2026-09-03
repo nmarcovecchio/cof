@@ -116,6 +116,11 @@ def persist_message(topic, payload):
                 )
             elif message_type == "status":
                 device.status = str(payload.get("status", "online"))
+                device.hardware_profile = payload.get("hardware_profile") or device.hardware_profile
+                if isinstance(payload.get("capabilities"), dict):
+                    device.capabilities = payload["capabilities"]
+                if isinstance(payload.get("discovered"), dict):
+                    device.discovered = payload["discovered"]
             elif message_type == "config/reported":
                 version = payload.get("config_version")
                 if isinstance(version, int):

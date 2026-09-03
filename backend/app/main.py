@@ -59,6 +59,10 @@ def create_app() -> Flask:
 
         return value.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
 
+    @app.template_filter("json_pretty")
+    def json_pretty(value):
+        return json.dumps(value or {}, indent=2, ensure_ascii=False, sort_keys=True)
+
     @app.get("/")
     def index():
         return redirect(url_for("dashboard"))
@@ -407,6 +411,9 @@ def serialize_device(device: Device) -> dict:
         "tenant": device.tenant.name if device.tenant else None,
         "site": device.site.name if device.site else None,
         "status": device.status,
+        "hardware_profile": device.hardware_profile,
+        "capabilities": device.capabilities,
+        "discovered": device.discovered,
         "firmware_version": device.firmware_version,
         "last_seen_at": device.last_seen_at.isoformat() if device.last_seen_at else None,
         "desired_config_version": device.desired_config_version,

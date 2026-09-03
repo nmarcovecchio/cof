@@ -21,6 +21,7 @@
           <th>Cliente</th>
           <th>Sitio</th>
           <th>Estado</th>
+          <th>Hardware</th>
           <th>Firmware</th>
           <th>Ultima conexion</th>
           <th></th>
@@ -34,6 +35,7 @@
           <td>{{ device.tenant.name }}</td>
           <td>{{ device.site.name if device.site else '-' }}</td>
           <td><span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span></td>
+          <td>{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>{{ device.last_seen_at|datetime_local }}</td>
           <td class="text-end">
@@ -43,7 +45,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="text-muted">Sin dispositivos todavia.</td></tr>
+        <tr><td colspan="9" class="text-muted">Sin dispositivos todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>
