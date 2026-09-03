@@ -1062,6 +1062,9 @@ void configureCellularApn() {
   sendAT("AT+CGATT=1", "OK", 15000);
   sendAT("AT+CGSMS=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
+  sendAT("AT+CAVIMS=1", "OK", 3000);
+  sendAT("AT+CRC=1", "OK", 2000);
+  sendAT("AT+CVHU=0", "OK", 2000);
 
   String smscResponse;
   if (sendAT("AT+CSCA?", "OK", 3000, &smscResponse)) {
@@ -1315,6 +1318,90 @@ void checkManifest(bool allowFirmwareUpdate) {
   setStatus("Manifest OK");
 }
 
+int parseClccStat(const String& response) {
+  const int tag = response.indexOf("+CLCC:");
+  if (tag < 0) {
+    return -1;
+  }
+  const int first = response.indexOf(',', tag);
+  const int second = first >= 0 ? response.indexOf(',', first + 1) : -1;
+  const int third = second >= 0 ? response.indexOf(',', second + 1) : -1;
+  if (second < 0 || third < 0) {
+    return -1;
+  }
+  return response.substring(second + 1, third).toInt();
+}
+
+String classifyCallUrc(const String& raw) {
+  String urc = raw;
+  urc.toUpperCase();
+  if (urc.indexOf("BUSY") >= 0) {
+    return "Call busy";
+  }
+  if (urc.indexOf("NO DIALTONE") >= 0) {
+    return "Call no dialtone";
+  }
+  if (urc.indexOf("NO ANSWER") >= 0) {
+    return "Call no answer";
+  }
+  if (urc.indexOf("NO CARRIER") >= 0) {
+    return "Call no carrier";
+  }
+  if (urc.indexOf("VOICE CALL: BEGIN") >= 0) {
+    return "Call connected";
+  }
+  return "";
+}
+
+String waitForOutgoingCall(uint32_t timeoutMs) {
+  bool sawDialing = false;
+  bool sawAlerting = false;
+  const uint32_t startedAt = millis();
+
+  while (millis() - startedAt < timeoutMs) {
+    feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
+
+    const String urc = readModemUntil(700, "");
+    const String urcResult = classifyCallUrc(urc);
+    if (urcResult.length() > 0) {
+      if (urcResult == "Call no carrier" && sawAlerting) {
+        return "Call no answer";
+      }
+      return urcResult;
+    }
+
+    String clcc;
+    if (sendAT("AT+CLCC", "OK", 1500, &clcc)) {
+      const String clccResult = classifyCallUrc(clcc);
+      if (clccResult.length() > 0) {
+        return clccResult;
+      }
+      const int stat = parseClccStat(clcc);
+      if (stat == 2) {
+        sawDialing = true;
+        setStatus("Dialing");
+      } else if (stat == 3) {
+        sawAlerting = true;
+        setStatus("Ringing");
+      } else if (stat == 0) {
+        return "Call connected";
+      }
+    }
+    delay(300);
+  }
+
+  if (sawAlerting) {
+    return "Call ringing timeout";
+  }
+  if (sawDialing) {
+    return "Call dial timeout";
+  }
+  return "Call not connected";
+}
+
 String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false) {
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
@@ -1356,7 +1443,15 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     return "Call failed";
   }
 
-  waitWithWatchdog(8000);
+  const String progress = waitForOutgoingCall(35000);
+  if (progress != "Call connected") {
+    sendAT("ATH", "OK", 3000);
+    state.callInProgress = false;
+    setStatus(progress);
+    return progress;
+  }
+
+  waitWithWatchdog(1500);
   setStatus("Playing audio");
   sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
   readModemUntil(45000, "+AUDIOSTATE: audio play stop");
