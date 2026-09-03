@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
 import redis
@@ -16,7 +17,23 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["APP_TIMEZONE"] = os.environ.get("APP_TIMEZONE", "America/Argentina/Buenos_Aires")
     db.init_app(app)
+
+    @app.template_filter("datetime_local")
+    def datetime_local(value):
+        if value is None:
+            return "-"
+
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+
+        try:
+            target_tz = ZoneInfo(app.config["APP_TIMEZONE"])
+        except ZoneInfoNotFoundError:
+            target_tz = ZoneInfo("UTC")
+
+        return value.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
 
     @app.get("/")
     def index():

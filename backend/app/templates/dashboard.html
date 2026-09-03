@@ -71,7 +71,7 @@
               <span class="badge text-bg-secondary">sin config</span>
             {% endif %}
           </td>
-          <td>{{ device.last_seen_at or '-' }}</td>
+          <td>{{ device.last_seen_at|datetime_local }}</td>
         </tr>
         {% else %}
         <tr><td colspan="6" class="text-muted">Sin dispositivos todavia.</td></tr>
@@ -99,7 +99,7 @@
           <tbody>
             {% for row in recent_telemetry %}
             <tr>
-              <td>{{ row.received_at }}</td>
+              <td>{{ row.received_at|datetime_local }}</td>
               <td>{{ row.device.device_uid }}</td>
               <td>{{ row.temperature_1 if row.temperature_1 is not none else '-' }}</td>
               <td>{{ row.humidity if row.humidity is not none else '-' }}</td>
@@ -129,7 +129,7 @@
           <tbody>
             {% for event in recent_events %}
             <tr>
-              <td>{{ event.started_at }}</td>
+              <td>{{ event.started_at|datetime_local }}</td>
               <td>{{ event.device.device_uid }}</td>
               <td>{{ event.severity }}</td>
               <td>{{ event.type }}</td>

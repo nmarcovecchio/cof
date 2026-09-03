@@ -185,6 +185,15 @@ APP_DOMAIN=app.callonfail.com.ar
 ACME_EMAIL=<admin-email>
 ```
 
+UI timezone:
+
+```text
+APP_TIMEZONE=America/Argentina/Buenos_Aires
+```
+
+Dates are stored in UTC and rendered in the configured timezone with second
+precision.
+
 Always change:
 
 ```text

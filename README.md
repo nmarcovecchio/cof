@@ -68,6 +68,15 @@ APP_DOMAIN=app.callonfail.com.ar
 ACME_EMAIL=tu-email
 ```
 
+Timezone de la UI:
+
+```text
+APP_TIMEZONE=America/Argentina/Buenos_Aires
+```
+
+Las fechas se guardan en UTC y se muestran en la UI con este timezone, hasta
+segundos.
+
 Levantar servicios:
 
 ```bash
