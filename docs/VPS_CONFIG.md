@@ -6,18 +6,26 @@ changes.
 
 ## Current goal
 
-Run the CallOnFail MVP backend on a single VPS using Docker Compose:
+Run CallOnFail on a single AWS Lightsail VPS (2 vCPU / 2 GB) using Docker
+Compose:
 
-- Flask + Gunicorn web/API service.
+- Flask + Gunicorn web/API service (`app.callonfail.com.ar`).
+- Public static marketing site (`www.callonfail.com.ar`, apex redirects to www).
 - PostgreSQL database.
 - Redis.
 - Mosquitto MQTT broker.
 - MQTT worker.
-- Caddy reverse proxy.
+- Caddy reverse proxy + Let's Encrypt TLS.
+
+Current Lightsail public IP (update if the instance changes):
+
+```text
+54.207.204.86
+```
 
 ## VPS baseline
 
-Recommended baseline:
+Recommended baseline (current Lightsail matches the minimum):
 
 - Ubuntu 24.04 LTS.
 - 2 vCPU.
@@ -25,11 +33,16 @@ Recommended baseline:
 - 60 GB SSD minimum.
 - Static public IP.
 
+The marketing site is static and cheap. The tight resource is RAM for
+Postgres + Gunicorn + MQTT worker. Keep Gunicorn at 2 workers on 2 GB. Add
+1–2 GB swap if the instance OOMs under load.
+
 ## DNS plan
 
 Cloudflare manages `callonfail.com.ar`.
 
-Recommended DNS records:
+Recommended DNS records (A only; do **not** publish AAAA unless the VPS has
+working IPv6 and Caddy listens on it):
 
 ```text
 callonfail.com.ar        A    <VPS_STATIC_IP>
@@ -40,19 +53,29 @@ mqtt.callonfail.com.ar   A    <VPS_STATIC_IP>
 ota.callonfail.com.ar    A    <VPS_STATIC_IP>
 ```
 
-Cloudflare proxy mode:
+Cloudflare proxy mode for Caddy + Let's Encrypt:
 
 ```text
-callonfail.com.ar        Proxied or DNS only
-www.callonfail.com.ar    Proxied or DNS only
-app.callonfail.com.ar    Proxied or DNS only
-api.callonfail.com.ar    Proxied or DNS only
+callonfail.com.ar        DNS only   (grey cloud)
+www.callonfail.com.ar    DNS only
+app.callonfail.com.ar    DNS only
+api.callonfail.com.ar    DNS only
 mqtt.callonfail.com.ar   DNS only
-ota.callonfail.com.ar    Proxied or DNS only
+ota.callonfail.com.ar    DNS only
 ```
 
-MQTT must be `DNS only` because the normal Cloudflare proxy does not proxy raw
-MQTT on port 8883.
+Use **DNS only** while Caddy obtains/renews certificates with HTTP-01. If a
+hostname is still Proxied (orange cloud), Cloudflare may publish AAAA to their
+edge; Let's Encrypt prefers IPv6 and the ACME challenge returns 404 → no cert
+→ browser errors (Cloudflare 525 if proxied, or TLS handshake errors if DNS
+only).
+
+MQTT must stay `DNS only` because the normal Cloudflare proxy does not proxy
+raw MQTT on port 8883.
+
+After certificates exist, orange-cloud + SSL mode Full (strict) is optional.
+While certificates are missing, Flexible can hide the problem temporarily but
+is not the target setup.
 
 ## Public marketing website
 
@@ -61,23 +84,66 @@ Static HTML lives in the repo under `website/` and is served by Caddy:
 ```text
 https://www.callonfail.com.ar/     -> files in /opt/callonfail/website
 https://callonfail.com.ar/         -> redirect to www
-https://app.callonfail.com.ar/     -> Flask app (unchanged)
+https://app.callonfail.com.ar/     -> Flask app
 ```
 
-Update the site from the VPS:
+Do **not** open the Flask app by raw IP (`https://<VPS_IP>/...`). After
+`APP_DOMAIN=app.callonfail.com.ar`, Caddy only routes the app on that hostname.
+Use:
+
+```text
+https://app.callonfail.com.ar/
+https://app.callonfail.com.ar/devices/cof-test
+```
+
+Update the marketing site from the VPS:
 
 ```bash
 cd /opt/callonfail
-git pull
-docker compose restart caddy
+git pull origin main
 ```
 
-`restart` is enough for content changes (the folder is bind-mounted). Recreate
+Content is bind-mounted; `git pull` is enough for HTML/CSS/assets. Recreate
 Caddy only if `deploy/caddy/Caddyfile` or compose volumes changed:
 
 ```bash
 docker compose up -d caddy
 ```
+
+## TLS / ACME notes
+
+Production `.env` must use the real app hostname (not `:80`):
+
+```text
+APP_DOMAIN=app.callonfail.com.ar
+ACME_EMAIL=admin@callonfail.com.ar
+```
+
+`:80` is only for a first lab boot before DNS exists. Leaving it set while
+`www` / apex are also in the Caddyfile makes HTTPS confusing and is not the
+production layout.
+
+Verify certificates from the VPS with correct SNI (do not curl bare `127.0.0.1`
+over HTTPS without `--resolve`):
+
+```bash
+curl -Ik --resolve www.callonfail.com.ar:443:127.0.0.1 https://www.callonfail.com.ar/
+curl -Ik --resolve app.callonfail.com.ar:443:127.0.0.1 https://app.callonfail.com.ar/health
+docker compose logs caddy --tail 80 | grep -iE 'certificate obtained|acme|error'
+```
+
+If ACME is stuck after fixing DNS, clear Caddy cert state and retry:
+
+```bash
+docker compose stop caddy
+docker volume ls | grep caddy
+docker run --rm -v callonfail_caddy_data:/data alpine \
+  sh -c 'rm -rf /data/caddy/certificates /data/caddy/acme /data/caddy/locks'
+docker compose up -d caddy
+docker compose logs -f caddy
+```
+
+Replace `callonfail_caddy_data` with the volume name from `docker volume ls`.
 
 ## VPS firewall
 
@@ -295,25 +361,28 @@ docker compose down
 
 ## Health checks
 
-From the VPS:
+From the VPS (use Host / `--resolve` once `APP_DOMAIN` is a real hostname):
 
 ```bash
-curl http://localhost/health
-curl http://localhost/api/status
+curl -sS --resolve app.callonfail.com.ar:80:127.0.0.1 \
+  http://app.callonfail.com.ar/health
+curl -sk --resolve app.callonfail.com.ar:443:127.0.0.1 \
+  https://app.callonfail.com.ar/health
+curl -sk --resolve app.callonfail.com.ar:443:127.0.0.1 \
+  https://app.callonfail.com.ar/api/status
 ```
 
-From a browser during first HTTP test:
+From a browser after DNS/TLS:
 
 ```text
-http://<VPS_STATIC_IP>/
-```
-
-After DNS/TLS:
-
-```text
+https://www.callonfail.com.ar/
 https://app.callonfail.com.ar/
+https://app.callonfail.com.ar/dashboard
+https://app.callonfail.com.ar/devices/cof-test
 ```
 
+Raw IP URLs are only useful for the first `:80` lab boot. In production they
+will not serve the Flask app correctly.
 ## MQTT local test
 
 Publish a test message inside the Mosquitto container:
@@ -375,14 +444,14 @@ docker compose logs -f mqtt-worker
 Refresh:
 
 ```text
-http://<VPS_STATIC_IP>/dashboard
+https://app.callonfail.com.ar/dashboard
 ```
 
 ## Current security posture
 
 Current MVP state:
 
-- Web/API can run behind Caddy.
+- Marketing site and Web/API run behind Caddy with Let's Encrypt.
 - PostgreSQL is internal to Docker.
 - Redis is internal to Docker.
 - Mosquitto is internal/localhost only.
@@ -398,15 +467,9 @@ Before connecting deployed devices over the internet, add:
 
 ## Next backend milestones
 
-1. Merge backend scaffold to `main`.
-2. Configure DNS for `app.callonfail.com.ar`.
-3. Enable HTTPS via Caddy.
-4. Add database migrations.
-5. Add users/tenants/devices tables.
-6. Add device provisioning.
-7. Add MQTT auth/ACLs.
-8. Add telemetry persistence.
-9. Add dashboard for device status.
-10. Add desired/reported config over MQTT.
-11. Add OTA release management.
-12. Add backups.
+1. Keep DNS grey-cloud for Caddy ACME (or move to CF origin certs if proxying).
+2. Set `SESSION_COOKIE_SECURE=true` once HTTPS is confirmed.
+3. Add database migrations.
+4. Harden MQTT auth/ACLs and expose `8883` only.
+5. Add OTA release management under `ota.callonfail.com.ar`.
+6. Add backups and basic server monitoring.

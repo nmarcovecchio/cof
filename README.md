@@ -66,12 +66,22 @@ Para una primera prueba sin dominio/TLS, dejar:
 APP_DOMAIN=:80
 ```
 
-Cuando `app.callonfail.com.ar` apunte al VPS, cambiar:
+Cuando `app.callonfail.com.ar` (y `www`) apunten al VPS con DNS only en
+Cloudflare, cambiar:
 
 ```text
 APP_DOMAIN=app.callonfail.com.ar
 ACME_EMAIL=tu-email
 ```
+
+En produccion usá siempre el dominio, no la IP:
+
+```text
+https://www.callonfail.com.ar/
+https://app.callonfail.com.ar/
+```
+
+Detalle de DNS/TLS/ACME: `docs/VPS_CONFIG.md`.
 
 Timezone de la UI:
 
