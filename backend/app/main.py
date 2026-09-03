@@ -208,7 +208,9 @@ def create_app() -> Flask:
     def devices():
         include_archived = request.args.get("include_archived") == "1"
         query = Device.query
-        if not include_archived:
+        if include_archived:
+            query = query.filter(Device.archived_at.isnot(None))
+        else:
             query = query.filter(Device.archived_at.is_(None))
         rows = query.order_by(Device.created_at.desc()).all()
         if wants_json():
@@ -289,6 +291,18 @@ def create_app() -> Flask:
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         device.archived_at = datetime.now(timezone.utc)
         device.status = "archived"
+        try:
+            publish_mqtt_raw(f"devices/{device.device_uid}/config/desired", payload="", qos=1, retain=True)
+        except Exception as exc:
+            db.session.add(
+                Event(
+                    device_id=device.id,
+                    type="mqtt_retained_clear_failed",
+                    severity="warning",
+                    message="Failed to clear retained config/desired",
+                    payload={"error": str(exc)},
+                )
+            )
         db.session.commit()
         return redirect(url_for("devices"))
 
@@ -463,6 +477,10 @@ def publish_config_desired(device: Device, payload: dict):
 
 
 def publish_mqtt(topic: str, payload: dict, qos: int = 1, retain: bool = False):
+    publish_mqtt_raw(topic, json.dumps(payload, separators=(",", ":")), qos=qos, retain=retain)
+
+
+def publish_mqtt_raw(topic: str, payload: str, qos: int = 1, retain: bool = False):
     mqtt_host = os.environ.get("MQTT_HOST", "mosquitto")
     mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
     auth = None
@@ -472,7 +490,7 @@ def publish_mqtt(topic: str, payload: dict, qos: int = 1, retain: bool = False):
 
     mqtt_publish.single(
         topic,
-        payload=json.dumps(payload, separators=(",", ":")),
+        payload=payload,
         qos=qos,
         retain=retain,
         hostname=mqtt_host,

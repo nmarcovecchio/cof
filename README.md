@@ -283,10 +283,26 @@ El ESP32 responde en:
 devices/cof-test/ack
 ```
 
+El firmware consulta el manifest automaticamente para datos auxiliares, pero la
+actualizacion de firmware se ejecuta solo por comando explicito:
+
+- boton web `Forzar chequeo OTA`,
+- comando Serial `o`,
+- pulsacion larga del boton fisico.
+
 Si se borra un dispositivo mientras el ESP32 sigue conectado, puede recrearse
 primero por telemetria y aparecer sin hardware profile hasta que llegue un
 `status`. El firmware publica status al conectar MQTT y tambien se puede pedir
 desde `/devices/<device_id>` con `Solicitar estado`.
+
+Por defecto el worker no auto-crea dispositivos desconocidos:
+
+```text
+MQTT_AUTO_PROVISION=false
+```
+
+Crear/provisionar dispositivos desde la web evita asignaciones accidentales a
+clientes equivocados.
 
 Cuando termine la prueba, cerrar `1883`:
 

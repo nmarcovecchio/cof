@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from datetime import timedelta
 
 import paho.mqtt.client as mqtt
 
@@ -18,6 +19,7 @@ MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_WORKER_CLIENT_ID", "callonfail-backend-worker")
+MQTT_AUTO_PROVISION = os.environ.get("MQTT_AUTO_PROVISION", "false").lower() == "true"
 
 TOPICS = [
     ("devices/+/telemetry", 0),
@@ -86,18 +88,28 @@ def persist_message(topic, payload):
     with flask_app.app_context():
         try:
             device = get_or_create_device(device_uid)
+            if device is None:
+                logger.warning("Ignoring unknown device because auto-provision is disabled device=%s topic=%s", device_uid, topic)
+                return
+
             device.last_seen_at = utcnow()
 
             if device.archived_at is not None:
-                db.session.add(
-                    Event(
-                        device_id=device.id,
-                        type="archived_device_message",
-                        severity="warning",
-                        message=f"Archived device still publishing {message_type}",
-                        payload={"topic": topic, "payload": payload},
-                    )
+                recent_warning = (
+                    Event.query.filter_by(device_id=device.id, type="archived_device_message")
+                    .filter(Event.started_at >= utcnow() - timedelta(hours=1))
+                    .first()
                 )
+                if recent_warning is None:
+                    db.session.add(
+                        Event(
+                            device_id=device.id,
+                            type="archived_device_message",
+                            severity="warning",
+                            message=f"Archived device still publishing {message_type}",
+                            payload={"topic": topic, "payload": payload},
+                        )
+                    )
                 db.session.commit()
                 logger.warning("Archived device still publishing device=%s topic=%s", device_uid, topic)
                 return
@@ -137,14 +149,16 @@ def persist_message(topic, payload):
                 if isinstance(payload.get("discovered"), dict):
                     device.discovered = payload["discovered"]
             elif message_type == "config/reported":
-                version = payload.get("config_version")
-                if isinstance(version, int):
-                    device.reported_config_version = version
+                version = to_int(payload.get("config_version"))
+                if version is not None:
+                    applied = bool(payload.get("applied"))
+                    if applied:
+                        device.reported_config_version = version
                     config = DeviceConfig.query.filter_by(device_id=device.id, version=version).first()
                     if config is not None:
                         config.reported_payload = payload
-                        config.status = "applied" if payload.get("applied") else "reported"
-                        config.applied_at = utcnow() if payload.get("applied") else None
+                        config.status = "applied" if applied else "rejected"
+                        config.applied_at = utcnow() if applied else None
             elif message_type == "ack":
                 command = payload.get("command", "command")
                 status = payload.get("status", "unknown")
@@ -162,12 +176,17 @@ def persist_message(topic, payload):
         except Exception:
             db.session.rollback()
             logger.exception("Failed to persist MQTT message topic=%s", topic)
+        finally:
+            db.session.remove()
 
 
 def get_or_create_device(device_uid):
     device = Device.query.filter_by(device_uid=device_uid).first()
     if device is not None:
         return device
+
+    if not MQTT_AUTO_PROVISION:
+        return None
 
     tenant = Tenant.query.filter_by(slug="demo").first()
     if tenant is None:
@@ -198,6 +217,15 @@ def to_float(value):
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def to_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 

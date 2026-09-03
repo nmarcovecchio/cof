@@ -270,11 +270,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       } else if (pendingConfigVersion <= 0) {
         pendingConfigError = "missing config_version";
       } else {
-        state.reportedConfigVersion = pendingConfigVersion;
-        state.reportedConfigHash = pendingConfigHash;
-        preferences.putInt("reportedCfgVersion", state.reportedConfigVersion);
-        preferences.putString("reportedCfgHash", state.reportedConfigHash);
-        pendingConfigApplied = true;
+        pendingConfigError = "config storage/application not implemented";
       }
     }
 
@@ -326,7 +322,7 @@ void loadSavedMqttConfig() {
   if (state.mqttConfigured) {
     mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
     mqttClient.setCallback(onMqttMessage);
-    mqttClient.setBufferSize(2048);
+    mqttClient.setBufferSize(4096);
     Serial.printf("[mqtt] saved config host=%s port=%d device=%s\n",
                   state.mqttHost.c_str(),
                   state.mqttPort,
@@ -352,7 +348,7 @@ void saveMqttConfig(const String& host, int port, const String& deviceId, const 
 
   mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
   mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(2048);
+  mqttClient.setBufferSize(4096);
   setStatus("MQTT saved");
 }
 
@@ -388,7 +384,7 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = fa
     return false;
   }
 
-  char payload[1536];
+  char payload[3072];
   const String topic = mqttTopic(suffix);
   const size_t requiredLength = measureJson(doc);
   if (requiredLength >= sizeof(payload)) {
@@ -1435,10 +1431,10 @@ void loop() {
     if (!didInitialManifestCheck && now > kManifestInitialDelayMs) {
       didInitialManifestCheck = true;
       lastManifestMs = now;
-      checkManifest(true);
+      checkManifest(false);
     } else if (didInitialManifestCheck && now - lastManifestMs >= kManifestIntervalMs) {
       lastManifestMs = now;
-      checkManifest(true);
+      checkManifest(false);
     }
   }
 

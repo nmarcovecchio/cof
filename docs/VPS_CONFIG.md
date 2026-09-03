@@ -77,6 +77,15 @@ For a short lab test from an ESP32 outside the VPS, set this in `.env`:
 MQTT_BIND_ADDRESS=0.0.0.0
 ```
 
+Unknown MQTT devices are ignored by default:
+
+```text
+MQTT_AUTO_PROVISION=false
+```
+
+For lab-only auto creation of unknown devices, set it to `true`. Production
+should keep it disabled and create/provision devices from the web.
+
 Then recreate services:
 
 ```bash

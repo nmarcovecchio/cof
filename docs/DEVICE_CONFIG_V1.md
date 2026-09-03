@@ -430,6 +430,11 @@ devices/cof-000001/command
 
 ### Force OTA check
 
+Firmware updates should be explicit commands, not automatic background updates.
+The device can still poll the manifest for auxiliary metadata, but firmware
+upgrade should happen through this command, Serial `o`, or a physical
+maintenance action.
+
 ```json
 {
   "command_id": "uuid",
