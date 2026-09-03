@@ -1,17 +1,29 @@
 import hashlib
+import hmac
 import json
 import os
 import uuid
 from datetime import datetime, timezone
+from functools import wraps
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import text
 
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Telemetry, Tenant
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped_view(**kwargs):
+        if not session.get("authenticated"):
+            return redirect(url_for("login", next=request.path))
+        return view(**kwargs)
+
+    return wrapped_view
 
 
 def create_app() -> Flask:
@@ -19,6 +31,7 @@ def create_app() -> Flask:
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["APP_TIMEZONE"] = os.environ.get("APP_TIMEZONE", "America/Argentina/Buenos_Aires")
+    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-this-secret-key")
     db.init_app(app)
 
     @app.template_filter("datetime_local")
@@ -40,7 +53,31 @@ def create_app() -> Flask:
     def index():
         return redirect(url_for("dashboard"))
 
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        if request.method == "POST":
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
+            expected_username = os.environ.get("ADMIN_USERNAME", "admin")
+            expected_password = os.environ.get("ADMIN_PASSWORD", "change-me")
+
+            if hmac.compare_digest(username, expected_username) and hmac.compare_digest(password, expected_password):
+                session["authenticated"] = True
+                session["username"] = username
+                return redirect(request.args.get("next") or url_for("dashboard"))
+
+            error = "Usuario o password invalidos"
+
+        return render_template("login.html", error=error)
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
     @app.get("/dashboard")
+    @login_required
     def dashboard():
         tenants = Tenant.query.order_by(Tenant.name).all()
         devices = Device.query.order_by(Device.created_at.desc()).all()
@@ -55,11 +92,13 @@ def create_app() -> Flask:
         )
 
     @app.get("/devices")
+    @login_required
     def devices():
         rows = Device.query.order_by(Device.created_at.desc()).all()
         return jsonify([serialize_device(device) for device in rows])
 
     @app.get("/devices/<device_uid>")
+    @login_required
     def device_detail(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         recent_telemetry = (
@@ -76,6 +115,7 @@ def create_app() -> Flask:
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
+    @login_required
     def device_config(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         latest_config = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).first()
@@ -117,6 +157,7 @@ def create_app() -> Flask:
         return render_config_form(device, json.dumps(payload, indent=2, ensure_ascii=False))
 
     @app.post("/devices/<device_uid>/commands/ota-check")
+    @login_required
     def device_command_ota_check(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         command_id = str(uuid.uuid4())

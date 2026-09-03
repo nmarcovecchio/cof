@@ -194,6 +194,17 @@ APP_TIMEZONE=America/Argentina/Buenos_Aires
 Dates are stored in UTC and rendered in the configured timezone with second
 precision.
 
+Admin login:
+
+```text
+SECRET_KEY=<long-random-secret>
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<strong-password>
+```
+
+`/health` remains public for monitoring. Dashboard, device pages, config pages,
+and command actions require login.
+
 Always change:
 
 ```text

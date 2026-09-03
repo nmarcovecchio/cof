@@ -77,6 +77,17 @@ APP_TIMEZONE=America/Argentina/Buenos_Aires
 Las fechas se guardan en UTC y se muestran en la UI con este timezone, hasta
 segundos.
 
+Credenciales admin iniciales:
+
+```text
+SECRET_KEY=generar-un-secreto-largo
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=poner-un-password-fuerte
+```
+
+`/health` queda publico para monitoreo. Dashboard, dispositivos, config y
+comandos requieren login.
+
 Levantar servicios:
 
 ```bash
