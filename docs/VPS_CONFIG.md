@@ -461,16 +461,69 @@ Refresh:
 https://app.callonfail.com.ar/dashboard
 ```
 
+## Resume at home — 2026-09-03
+
+Start from latest `main`. Do **not** retry MQTT TLS/auth until `cof-test`
+is online again on `1883`.
+
+### What is running now
+
+- VPS Mosquitto: anonymous, public `1883` only. No TLS certs, no passwd.
+- `docker-compose.yml` publishes `1883:1883` and `8883:8883`.
+- Web config form is visual (sensors / rules / call+sms+email+telegram).
+  Rules are **not evaluated yet**. Notification sends are **not implemented**.
+- Latest published firmware: `0.2.12` (port default `1883`).
+- Physical ESP32: stuck on `0.2.11` (defaults/migrates to `8883` + TLS).
+  MQTT is down, so the web **OTA** button cannot reach it.
+
+### Why OTA did not happen by itself
+
+Hourly manifest check calls `checkManifest(false)` — it does **not** flash.
+Firmware OTA only runs on MQTT command `ota_check` (web button) or Serial `o`.
+
+`0.2.11` also writes NVS `mqttPort=8883`. Even after flashing `0.2.12`, if
+that NVS key remains, the device keeps trying TLS `8883` and stays offline.
+
+### First: recover the ESP32 over Serial
+
+```text
+mqtt mqtt.callonfail.com.ar 1883 cof-test
+mqtt-status
+o
+```
+
+`mqtt` overwrites NVS to `1883`. `o` forces firmware OTA to `0.2.12`.
+Confirm the device is online on
+https://app.callonfail.com.ar/devices/cof-test
+and firmware shows `0.2.12`.
+
+Optional firmware follow-up after it is online: remove or invert the
+`1883 → 8883` NVS migration in `loadSavedMqttConfig()` so a future OTA
+cannot lock the device out again while TLS is still pending.
+
+### Then, in this order
+
+1. Test a real phone call from the device (user plan for tonight).
+2. Implement alarm-rule evaluation in `mqtt_worker` (telemetry → match rules).
+3. Notification stubs/impl:
+   - Call + SMS: GSM modem on the ESP32
+   - Email: Flask SMTP
+   - Telegram: Bot API (replaces WhatsApp)
+4. Only with the ESP32 at hand: MQTT TLS + auth + per-device credentials.
+   Follow the section below. Do not cut over remotely.
+
 ## Current security posture
 
-Current MVP state:
+Current MVP state (after 2026-09-03 revert):
 
 - Marketing site and Web/API run behind Caddy with Let's Encrypt.
 - PostgreSQL is internal to Docker.
 - Redis is internal to Docker.
-- Mosquitto:
-  - `1883` internal only (Docker network) for web + mqtt-worker
-  - `8883` public with TLS + password auth + ACLs for devices
+- Mosquitto is **lab mode again**:
+  - `1883` public, `allow_anonymous true`
+  - `8883` published in Compose but unused (no certs / no TLS listener)
+- MQTT TLS + password + ACL cutover is **not** active. Do not re-enable it
+  without Serial access to the ESP32.
 
 ## MQTT TLS + auth setup
 
@@ -548,9 +601,9 @@ docker compose logs -f mqtt-worker
 
 ### 7) Point the ESP32 to TLS MQTT
 
-After OTA to firmware `>= 0.2.11`, devices previously using
-`mqtt.callonfail.com.ar:1883` migrate automatically to `:8883` with the
-default username/password compiled into firmware.
+Do **not** OTA a firmware that defaults/migrates to `:8883` until the
+broker actually listens on TLS `8883`. `0.2.11` did that and left
+`cof-test` offline. Recover over Serial first (see "Resume at home").
 
 Manual Serial override:
 
