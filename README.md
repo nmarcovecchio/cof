@@ -23,6 +23,7 @@ El repo incluye una base deployable para VPS:
 - Mosquitto MQTT interno.
 - Worker MQTT Python.
 - Caddy como reverse proxy.
+- Sitio público estático en `website/` (`www.callonfail.com.ar`).
 
 La bitacora/configuracion persistente del VPS queda en:
 

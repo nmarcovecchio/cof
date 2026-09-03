@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Call On Fail — Si es crítico, te llamamos</title>
+    <meta
+      name="description"
+      content="Monitoreo de salas técnicas y racks. Si se va la luz o hay agua, te suena el teléfono. LTE y batería si se cae la red. CABA · todo el país."
+    />
+    <meta property="og:title" content="Call On Fail — Si es crítico, te llamamos" />
+    <meta
+      property="og:description"
+      content="Te llama al celular cuando la sala falla. Si no contestás, llama al siguiente. Puede reiniciar el modem si se cayó Internet."
+    />
+    <meta property="og:image" content="assets/logo.png" />
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="#inicio" aria-label="Call On Fail inicio">
+        <img src="assets/logo.png" alt="Call On Fail" width="160" height="160" />
+      </a>
+      <nav class="nav">
+        <a href="#monitorea">Sensores</a>
+        <a href="#actua">Relés</a>
+        <a href="#avisos">Alertas</a>
+        <a href="#diferencia">Si se cae la red</a>
+        <a href="#respaldo">Respaldo</a>
+        <a
+          href="https://www.linkedin.com/company/callonfail"
+          target="_blank"
+          rel="noopener"
+          >LinkedIn</a
+        >
+        <a class="nav-cta" href="#piloto">Pedir piloto</a>
+      </nav>
+    </header>
+
+    <main id="inicio">
+      <section class="hero">
+        <div class="hero-media" aria-hidden="true">
+          <img src="assets/hero-sala.jpg" alt="" />
+        </div>
+        <div class="hero-veil"></div>
+        <div class="hero-copy">
+          <p class="brand-mark">Call On Fail</p>
+          <h1>Si es crítico,<br />te llamamos.</h1>
+          <p class="lead">
+            Un equipo para tu sala técnica o rack. Si se va la luz, hay una fuga
+            o se corta Internet, <strong>te llama al celular</strong> — aunque
+            el switch del sitio esté muerto.
+          </p>
+          <div class="cta-row">
+            <a
+              class="btn btn-primary btn-icon"
+              href="https://wa.me/541168619589?text=Hola%2C%20quiero%20pedir%20un%20piloto%20de%20Call%20On%20Fail"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"
+                />
+              </svg>
+              <span>Pedir piloto</span>
+            </a>
+            <a class="btn btn-ghost" href="#avisos">Ver ejemplos</a>
+          </div>
+        </div>
+        <div class="hero-scroll" aria-hidden="true"><span></span></div>
+      </section>
+
+      <section id="monitorea" class="section section-split">
+        <div class="section-text reveal">
+          <h2>Qué mira</h2>
+          <p>
+            Temperatura, humedad, agua, luz, red. Lo de siempre en una sala
+            chica… pero con un equipo que no se calla si se cae el switch.
+          </p>
+          <ul class="feature-list">
+            <li>Temperatura en el rack, cerca del AA y en el ambiente</li>
+            <li>Humedad</li>
+            <li>Fuga de agua en el piso</li>
+            <li>Corte de luz y problemas de tensión</li>
+            <li>Si se cayó Ethernet o Internet</li>
+            <li>Contactos secos: puerta, alarma del edificio, lo que cablees</li>
+            <li>Pantalla y LEDs en el frente</li>
+          </ul>
+        </div>
+        <figure class="section-visual reveal">
+          <img
+            src="assets/producto-nodo.png"
+            alt="Concepto del nodo Call On Fail montado en rack con antena LTE"
+            width="1600"
+            height="900"
+          />
+        </figure>
+      </section>
+
+      <section id="actua" class="section section-dark">
+        <div class="narrow reveal">
+          <h2>Y si hace falta, mueve algo</h2>
+          <p>
+            Hay dos relés. Sirven para más que prender una lucecita.
+          </p>
+          <ul class="backup-list">
+            <li>
+              <strong>Internet abajo</strong>
+              <span
+                >Le corta la luz al modem unos segundos, lo reinicia y te avisa.
+                A veces con eso alcanza.</span
+              >
+            </li>
+            <li>
+              <strong>Algo grave</strong>
+              <span>Puede disparar una sirena en la sala mientras te está llamando.</span>
+            </li>
+            <li>
+              <strong>Como lo armes</strong>
+              <span
+                >Vos elegís qué relé usa cada alarma y cuánto dura el pulso. Sin
+                reiniciar el modem cada dos minutos.</span
+              >
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="avisos" class="section">
+        <div class="section-block">
+          <div class="narrow reveal">
+            <h2>Primero te llama a vos</h2>
+            <p>
+              Suena el celular y escuchás qué pasó: luz, agua, temperatura. Si
+              ya lo viste, respondés <strong>OK</strong> o <strong>1</strong> por
+              SMS y listo. Si no contestás, llama al siguiente de la lista.
+              WhatsApp y mail pueden ir al mismo tiempo; la llamada es lo que no
+              se pierde en la bandeja.
+            </p>
+            <p class="channels">
+              Llamada <span aria-hidden="true">·</span> SMS
+              <span aria-hidden="true">·</span> WhatsApp
+              <span aria-hidden="true">·</span> Email
+            </p>
+            <figure class="flow-visual reveal">
+              <picture>
+                <source
+                  media="(max-width: 719px)"
+                  srcset="assets/flujos-alertas-mobile.png"
+                />
+                <img
+                  src="assets/flujos-alertas.png"
+                  alt="Ejemplos reales: corte de luz, temperatura, humedad, fuga de agua, tensión, caída de internet con reinicio del modem"
+                />
+              </picture>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section id="diferencia" class="section">
+        <div class="narrow reveal">
+          <h2>Si se cae la red</h2>
+          <p>
+            Casi todos los monitores de sala te avisan por la misma red que se
+            acaba de caer. Ahí no sirven. Este equipo trae chip LTE y batería: si
+            se va el switch o la luz, igual te puede llamar.
+          </p>
+          <ul class="feature-list">
+            <li>La llamada sale del modem en la sala, no de un mail perdido</li>
+            <li>Batería propia: sigue andando con corte de luz (horas, no minutos)</li>
+            <li>Si vos no atendés, llama al segundo número</li>
+            <li>Si se cayó Internet, puede reiniciar el modem del cliente</li>
+            <li>
+              SNMP: lo sumás a Zabbix, PRTG o lo que ya tengas
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="respaldo" class="section section-dark">
+        <div class="narrow reveal">
+          <h2>Día a día y plan B</h2>
+          <p>
+            Con red normal usa el cable. El celular y la batería están por si las
+            cosas se ponen feas.
+          </p>
+          <ul class="backup-list">
+            <li>
+              <strong>Ethernet</strong>
+              <span>Para el día a día: estable y sin drama</span>
+            </li>
+            <li>
+              <strong>Se cae la red del rack</strong>
+              <span>Sigue por LTE y te llama igual</span>
+            </li>
+            <li>
+              <strong>Se corta la luz</strong>
+              <span>Entra la batería; el equipo no se apaga de una</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="piloto" class="section section-cta">
+        <div class="cta-panel reveal">
+          <h2>¿Tenés una sala para probarlo?</h2>
+          <p>
+            Lo instalamos en tu sala o rack y lo dejamos andando. Estamos en
+            CABA y llegamos a donde haga falta.
+          </p>
+          <div class="cta-row">
+            <a
+              class="btn btn-primary btn-icon"
+              href="https://wa.me/541168619589?text=Hola%2C%20quiero%20pedir%20un%20piloto%20de%20Call%20On%20Fail"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"
+                />
+              </svg>
+              <span>WhatsApp</span>
+            </a>
+            <a class="btn btn-ghost btn-icon" href="mailto:marcovecchio.n.a@gmail.com">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5L4 8V6l8 5 8-5v2Z"
+                />
+              </svg>
+              <span>Email</span>
+            </a>
+            <a
+              class="btn btn-ghost btn-icon"
+              href="https://www.linkedin.com/company/callonfail"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28ZM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12ZM7.12 20.45H3.56V9h3.56v11.45ZM22.23 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.23 0Z"
+                />
+              </svg>
+              <span>LinkedIn</span>
+            </a>
+          </div>
+          <p class="fine">CABA · Cobertura en todo el país</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <img src="assets/logo.png" alt="" width="48" height="48" />
+        <div>
+          <p><strong>Call On Fail</strong> · Si es crítico, te llamamos.</p>
+          <p>CABA · Todo el país</p>
+          <div class="footer-links">
+            <a
+              class="footer-link"
+              href="https://wa.me/541168619589"
+              target="_blank"
+              rel="noopener"
+              aria-label="WhatsApp"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"
+                />
+              </svg>
+              <span>+54 11 6861-9589</span>
+            </a>
+            <a class="footer-link" href="mailto:marcovecchio.n.a@gmail.com">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5L4 8V6l8 5 8-5v2Z"
+                />
+              </svg>
+              <span>marcovecchio.n.a@gmail.com</span>
+            </a>
+            <a
+              class="footer-link"
+              href="https://www.linkedin.com/company/callonfail"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28ZM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12ZM7.12 20.45H3.56V9h3.56v11.45ZM22.23 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.23 0Z"
+                />
+              </svg>
+              <span>LinkedIn</span>
+            </a>
+          </div>
+          <p class="legal">
+            Facturación con monotributo disponible. Datos fiscales al cerrar
+            piloto o contrato.
+          </p>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      const io = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((e) => {
+            if (e.isIntersecting) e.target.classList.add("is-visible");
+          });
+        },
+        { threshold: 0.15 }
+      );
+      document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+    </script>
+  </body>
+</html>

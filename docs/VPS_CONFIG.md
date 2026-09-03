@@ -32,6 +32,8 @@ Cloudflare manages `callonfail.com.ar`.
 Recommended DNS records:
 
 ```text
+callonfail.com.ar        A    <VPS_STATIC_IP>
+www.callonfail.com.ar    A    <VPS_STATIC_IP>
 app.callonfail.com.ar    A    <VPS_STATIC_IP>
 api.callonfail.com.ar    A    <VPS_STATIC_IP>
 mqtt.callonfail.com.ar   A    <VPS_STATIC_IP>
@@ -41,6 +43,8 @@ ota.callonfail.com.ar    A    <VPS_STATIC_IP>
 Cloudflare proxy mode:
 
 ```text
+callonfail.com.ar        Proxied or DNS only
+www.callonfail.com.ar    Proxied or DNS only
 app.callonfail.com.ar    Proxied or DNS only
 api.callonfail.com.ar    Proxied or DNS only
 mqtt.callonfail.com.ar   DNS only
@@ -49,6 +53,31 @@ ota.callonfail.com.ar    Proxied or DNS only
 
 MQTT must be `DNS only` because the normal Cloudflare proxy does not proxy raw
 MQTT on port 8883.
+
+## Public marketing website
+
+Static HTML lives in the repo under `website/` and is served by Caddy:
+
+```text
+https://www.callonfail.com.ar/     -> files in /opt/callonfail/website
+https://callonfail.com.ar/         -> redirect to www
+https://app.callonfail.com.ar/     -> Flask app (unchanged)
+```
+
+Update the site from the VPS:
+
+```bash
+cd /opt/callonfail
+git pull
+docker compose restart caddy
+```
+
+`restart` is enough for content changes (the folder is bind-mounted). Recreate
+Caddy only if `deploy/caddy/Caddyfile` or compose volumes changed:
+
+```bash
+docker compose up -d caddy
+```
 
 ## VPS firewall
 
