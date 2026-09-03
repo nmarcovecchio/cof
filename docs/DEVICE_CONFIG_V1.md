@@ -458,6 +458,27 @@ maintenance action.
 The device responds with an ACK and publishes a fresh retained `status` message
 including `hardware_profile`, `capabilities`, and `discovered`.
 
+### Test call with audio
+
+An explicit operator action from the device page. The device dials `phone`,
+waits for answer, and plays the current test WAV from the modem filesystem.
+
+This command may place a call even if `calling.enabled` is false. Automatic
+alarm calls still require `calling.enabled=true`.
+
+```json
+{
+  "command_id": "uuid",
+  "command": "test_call",
+  "device_id": "cof-000001",
+  "phone": "+5491112345678",
+  "created_at": "2026-09-03T00:00:00Z"
+}
+```
+
+The device ACKs immediately, syncs test audio if the manifest version changed,
+then publishes an `event` of type `test_call` with the result.
+
 The device responds to:
 
 ```text

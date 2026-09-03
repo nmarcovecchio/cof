@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -331,6 +332,7 @@ def create_app() -> Flask:
             recent_telemetry=recent_telemetry,
             recent_events=recent_events,
             configs=configs,
+            test_phone=first_contact_phone(configs),
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
@@ -396,7 +398,26 @@ def create_app() -> Flask:
     def device_command_status_report(device_uid):
         return send_device_command(device_uid, "status_report", "Status report command sent")
 
-    def send_device_command(device_uid, command, message):
+    @app.post("/devices/<device_uid>/commands/test-call")
+    @login_required
+    def device_command_test_call(device_uid):
+        phone = normalize_phone(request.form.get("phone", ""))
+        if not is_e164_phone(phone):
+            return send_device_command(
+                device_uid,
+                "test_call",
+                "Test call rejected: invalid phone",
+                extra={"phone": phone},
+                publish=False,
+            )
+        return send_device_command(
+            device_uid,
+            "test_call",
+            f"Test call command sent to {phone}",
+            extra={"phone": phone},
+        )
+
+    def send_device_command(device_uid, command, message, extra=None, publish=True):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         if device.archived_at is not None:
             return redirect(url_for("device_detail", device_uid=device.device_uid))
@@ -407,12 +428,18 @@ def create_app() -> Flask:
             "device_id": device.device_uid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        try:
-            publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
-            event_type = "command_sent"
-            severity = "info"
-        except Exception as exc:
-            payload["publish_error"] = str(exc)
+        if extra:
+            payload.update(extra)
+        event_type = "command_sent"
+        severity = "info"
+        if publish:
+            try:
+                publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
+            except Exception as exc:
+                payload["publish_error"] = str(exc)
+                event_type = "command_failed"
+                severity = "warning"
+        else:
             event_type = "command_failed"
             severity = "warning"
         db.session.add(
@@ -544,6 +571,28 @@ def default_device_config(device: Device) -> dict:
         "rules": [],
         "flows": [],
     }
+
+
+def normalize_phone(phone: str) -> str:
+    return "".join(ch for ch in (phone or "").strip() if ch.isdigit() or ch == "+")
+
+
+def is_e164_phone(phone: str) -> bool:
+    return bool(re.fullmatch(r"\+[1-9]\d{7,14}", phone or ""))
+
+
+def first_contact_phone(configs) -> str:
+    if not configs:
+        return ""
+    payload = configs[0].desired_payload or {}
+    contacts = payload.get("contacts") or []
+    if contacts and isinstance(contacts[0], dict):
+        phone = normalize_phone(str(contacts[0].get("phone") or ""))
+        if is_e164_phone(phone):
+            return phone
+    calling = payload.get("calling") or {}
+    phone = normalize_phone(str(calling.get("phone") or ""))
+    return phone if is_e164_phone(phone) else ""
 
 
 def serialize_device(device: Device) -> dict:

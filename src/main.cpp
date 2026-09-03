@@ -108,6 +108,8 @@ String pendingConfigHash = "";
 String pendingConfigError = "";
 bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
+bool pendingTestCallCommand = false;
+String pendingTestCallPhone = "";
 bool pendingCommandAck = false;
 String pendingCommandId = "";
 String pendingCommandName = "";
@@ -373,6 +375,12 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingStatusReportCommand = true;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Status report scheduled";
+      } else if (pendingCommandName == "test_call") {
+        pendingTestCallCommand = true;
+        pendingTestCallPhone = doc["phone"] | "";
+        pendingTestCallPhone.trim();
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "Test call scheduled";
       } else {
         pendingCommandMessage = "unsupported command";
       }
@@ -392,7 +400,7 @@ void loadSavedMqttConfig() {
   state.reportedConfigHash = preferences.getString("cfgHash", preferences.getString("reportedCfgHash", ""));
   const int telemetrySeconds = preferences.getInt("telemetrySec", 60);
   state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
-  state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", false));
+  state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", COF_ENABLE_CALLS != 0));
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -574,6 +582,28 @@ void publishCommandAck() {
   doc["message"] = pendingCommandMessage;
   doc["firmware"] = COF_FIRMWARE_VERSION;
   publishMqttJson("ack", doc, false, 1);
+}
+
+void publishDeviceEvent(const char* type, const char* severity, const String& message) {
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["type"] = type;
+  doc["severity"] = severity;
+  doc["message"] = message;
+  publishMqttJson("event", doc, false, 1);
+}
+
+void waitWithWatchdog(uint32_t ms) {
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < ms) {
+    feedWatchdog();
+    delay(50);
+  }
+}
+
+bool phoneLooksValid(const String& phone) {
+  return phone.length() >= 8 && phone.indexOf("X") < 0;
 }
 
 void publishTelemetryNow() {
@@ -1142,28 +1172,37 @@ void checkManifest(bool allowFirmwareUpdate) {
   setStatus("Manifest OK");
 }
 
-void placeCallAndPlayAudio() {
-  if (!COF_ENABLE_CALLS) {
+String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false) {
+  if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
-    return;
+    return "Calls disabled";
   }
-  if (!state.callingEnabled) {
+  if (!adminTest && !state.callingEnabled) {
     setStatus("Calls off cfg");
     Serial.println("[call] calling.enabled=false in device config");
-    return;
+    return "Calls off cfg";
   }
 
   if (!state.modemReady || !state.simReady) {
     setStatus("No modem/SIM");
-    return;
+    return "No modem/SIM";
   }
 
-  String phone = state.manifestPhoneNumber;
+  String phone = phoneOverride;
   phone.trim();
-  if (phone.length() < 8 || phone.indexOf("X") >= 0) {
+  if (!phoneLooksValid(phone)) {
+    phone = state.manifestPhoneNumber;
+    phone.trim();
+  }
+  if (!phoneLooksValid(phone)) {
     setStatus("No phone cfg");
-    return;
+    return "No phone cfg";
+  }
+
+  if (adminTest) {
+    setStatus("Sync test audio");
+    checkManifest(false);
   }
 
   state.callInProgress = true;
@@ -1171,10 +1210,10 @@ void placeCallAndPlayAudio() {
   if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
     state.callInProgress = false;
     setStatus("Call failed");
-    return;
+    return "Call failed";
   }
 
-  delay(8000);
+  waitWithWatchdog(8000);
   setStatus("Playing audio");
   sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
   readModemUntil(45000, "+AUDIOSTATE: audio play stop");
@@ -1182,6 +1221,7 @@ void placeCallAndPlayAudio() {
 
   state.callInProgress = false;
   setStatus("Call done");
+  return "Call done";
 }
 
 void handleButton() {
@@ -1510,6 +1550,15 @@ void loop() {
   if (state.mqttConnected && pendingStatusReportCommand) {
     pendingStatusReportCommand = false;
     publishDeviceStatus("online", true);
+  }
+
+  if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+    pendingTestCallCommand = false;
+    const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
+    pendingTestCallPhone = "";
+    connectMqttIfNeeded();
+    const bool ok = result == "Call done";
+    publishDeviceEvent("test_call", ok ? "info" : "warning", result);
   }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {

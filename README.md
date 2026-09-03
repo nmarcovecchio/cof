@@ -276,6 +276,10 @@ Para forzar chequeo OTA desde la web:
 http://IP_DEL_VPS/devices/cof-test
 ```
 
+Click en `Probar llamada` (firmware 0.2.13+) para marcar un numero y reproducir
+el WAV de prueba. El backend publica `test_call` en `devices/<id>/command`.
+Si el ACK dice `unsupported`, primero `OTA`.
+
 Click en `Forzar chequeo OTA`. El backend publica:
 
 ```text

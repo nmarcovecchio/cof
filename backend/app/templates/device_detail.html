@@ -108,6 +108,13 @@
           <i class="bi bi-activity"></i> Estado
         </button>
       </form>
+      <form class="d-flex flex-wrap gap-2 align-items-center" method="post" action="{{ url_for('device_command_test_call', device_uid=device.device_uid) }}" onsubmit="return confirm('Llamar a ' + document.getElementById('test-call-phone').value + ' y reproducir el audio de prueba?');">
+        {{ csrf_field() }}
+        <input class="form-control" id="test-call-phone" name="phone" type="tel" required placeholder="+54911..." value="{{ test_phone|default('') }}" style="max-width: 16rem;">
+        <button class="btn btn-outline-success" type="submit">
+          <i class="bi bi-telephone"></i> Probar llamada
+        </button>
+      </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
@@ -116,6 +123,12 @@
       </form>
       {% endif %}
     </div>
+    {% if not device.archived_at %}
+    <p class="small text-muted mb-0 mt-3">
+      Probar llamada marca el número, espera y reproduce el WAV de prueba en el modem.
+      Requiere firmware 0.2.13+. Si el ACK dice unsupported, primero pulsá OTA.
+    </p>
+    {% endif %}
   </div>
 </div>
 
