@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Dispositivos - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="mb-1">Dispositivos</h1>
+    <p class="text-muted mb-0">Equipos registrados en la plataforma.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('device_new') }}">Nuevo dispositivo</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>ID</th>
+          <th>Nombre</th>
+          <th>Cliente</th>
+          <th>Sitio</th>
+          <th>Estado</th>
+          <th>Firmware</th>
+          <th>Ultima conexion</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for device in devices %}
+        <tr>
+          <td><a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">{{ device.device_uid }}</a></td>
+          <td>{{ device.name }}</td>
+          <td>{{ device.tenant.name }}</td>
+          <td>{{ device.site.name if device.site else '-' }}</td>
+          <td><span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span></td>
+          <td>{{ device.firmware_version or '-' }}</td>
+          <td>{{ device.last_seen_at|datetime_local }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-muted">Sin dispositivos todavia.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

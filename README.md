@@ -119,9 +119,20 @@ Dashboard Bootstrap:
 
 ```text
 http://IP_DEL_VPS/dashboard
+http://IP_DEL_VPS/tenants
+http://IP_DEL_VPS/devices
+http://IP_DEL_VPS/devices/new
 http://IP_DEL_VPS/devices/cof-test
 http://IP_DEL_VPS/devices/cof-test/config
 ```
+
+Flujo multi-cliente inicial:
+
+1. Crear cliente en `/tenants/new`.
+2. Crear sitio en `/sites/new`.
+3. Crear dispositivo en `/devices/new`.
+4. Usar el mismo `Device ID` que usa el firmware en MQTT.
+5. Entrar al dispositivo y publicar config o forzar OTA.
 
 o, si ya configuraste DNS:
 

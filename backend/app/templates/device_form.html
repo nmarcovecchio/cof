@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Nuevo dispositivo - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('devices') }}">&larr; Volver a dispositivos</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h1 class="h3">Nuevo dispositivo</h1>
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label" for="device_uid">Device ID</label>
+        <input class="form-control" id="device_uid" name="device_uid" placeholder="cof-000001" required>
+        <div class="form-text">Debe coincidir con el ID usado por MQTT: devices/&lt;device_id&gt;/...</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="name">Nombre</label>
+        <input class="form-control" id="name" name="name" placeholder="Equipo freezer local centro" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="tenant_id">Cliente</label>
+        <select class="form-select" id="tenant_id" name="tenant_id" required>
+          <option value="">Seleccionar</option>
+          {% for tenant in tenants %}
+          <option value="{{ tenant.id }}">{{ tenant.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="site_id">Sitio</label>
+        <select class="form-select" id="site_id" name="site_id">
+          <option value="">Sin sitio</option>
+          {% for site in sites %}
+          <option value="{{ site.id }}">{{ site.tenant.name }} - {{ site.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary" type="submit">Crear dispositivo</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

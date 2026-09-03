@@ -11,9 +11,10 @@ import paho.mqtt.publish as mqtt_publish
 import redis
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from .extensions import db
-from .models import Device, DeviceConfig, Event, Telemetry, Tenant
+from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
 
 
 def login_required(view):
@@ -24,6 +25,15 @@ def login_required(view):
         return view(**kwargs)
 
     return wrapped_view
+
+
+def wants_json() -> bool:
+    return request.args.get("format") == "json" or request.accept_mimetypes.best == "application/json"
+
+
+def slugify(value: str) -> str:
+    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in value.strip())
+    return "-".join(part for part in slug.split("-") if part)
 
 
 def create_app() -> Flask:
@@ -91,11 +101,85 @@ def create_app() -> Flask:
             recent_telemetry=recent_telemetry,
         )
 
+    @app.route("/tenants")
+    @login_required
+    def tenants():
+        rows = Tenant.query.order_by(Tenant.name).all()
+        return render_template("tenants.html", tenants=rows)
+
+    @app.route("/tenants/new", methods=["GET", "POST"])
+    @login_required
+    def tenant_new():
+        error = None
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            slug = request.form.get("slug", "").strip() or slugify(name)
+            if not name or not slug:
+                error = "Nombre y slug son requeridos"
+            else:
+                db.session.add(Tenant(name=name, slug=slug))
+                try:
+                    db.session.commit()
+                    return redirect(url_for("tenants"))
+                except IntegrityError:
+                    db.session.rollback()
+                    error = "Ya existe un cliente con ese slug"
+        return render_template("tenant_form.html", error=error)
+
+    @app.route("/sites/new", methods=["GET", "POST"])
+    @login_required
+    def site_new():
+        tenants_rows = Tenant.query.order_by(Tenant.name).all()
+        error = None
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            tenant_id = request.form.get("tenant_id", type=int)
+            if not name or not tenant_id:
+                error = "Cliente y nombre de sitio son requeridos"
+            else:
+                db.session.add(Site(name=name, tenant_id=tenant_id))
+                try:
+                    db.session.commit()
+                    return redirect(url_for("tenants"))
+                except IntegrityError:
+                    db.session.rollback()
+                    error = "Ya existe un sitio con ese nombre para el cliente"
+        return render_template("site_form.html", tenants=tenants_rows, error=error)
+
     @app.get("/devices")
     @login_required
     def devices():
         rows = Device.query.order_by(Device.created_at.desc()).all()
-        return jsonify([serialize_device(device) for device in rows])
+        if wants_json():
+            return jsonify([serialize_device(device) for device in rows])
+        return render_template("devices.html", devices=rows)
+
+    @app.route("/devices/new", methods=["GET", "POST"])
+    @login_required
+    def device_new():
+        tenants_rows = Tenant.query.order_by(Tenant.name).all()
+        sites = Site.query.order_by(Site.name).all()
+        error = None
+
+        if request.method == "POST":
+            device_uid = request.form.get("device_uid", "").strip()
+            name = request.form.get("name", "").strip()
+            tenant_id = request.form.get("tenant_id", type=int)
+            site_id = request.form.get("site_id", type=int)
+            site_id = site_id or None
+
+            if not device_uid or not name or not tenant_id:
+                error = "Device ID, nombre y cliente son requeridos"
+            else:
+                db.session.add(Device(device_uid=device_uid, name=name, tenant_id=tenant_id, site_id=site_id, status="new"))
+                try:
+                    db.session.commit()
+                    return redirect(url_for("device_detail", device_uid=device_uid))
+                except IntegrityError:
+                    db.session.rollback()
+                    error = "Ya existe un dispositivo con ese Device ID"
+
+        return render_template("device_form.html", tenants=tenants_rows, sites=sites, error=error)
 
     @app.get("/devices/<device_uid>")
     @login_required

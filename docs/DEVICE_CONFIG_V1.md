@@ -19,6 +19,13 @@ devices/cof-000001/command
 devices/cof-000001/ack
 ```
 
+The `device_id` must match the backend device record created in `/devices/new`.
+For lab testing, the seeded/default device is:
+
+```text
+cof-test
+```
+
 Recommended QoS:
 
 ```text

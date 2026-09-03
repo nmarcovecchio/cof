@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Nuevo sitio - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('tenants') }}">&larr; Volver a clientes</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h1 class="h3">Nuevo sitio</h1>
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label" for="tenant_id">Cliente</label>
+        <select class="form-select" id="tenant_id" name="tenant_id" required>
+          <option value="">Seleccionar</option>
+          {% for tenant in tenants %}
+          <option value="{{ tenant.id }}">{{ tenant.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="name">Nombre del sitio</label>
+        <input class="form-control" id="name" name="name" required>
+      </div>
+      <button class="btn btn-primary" type="submit">Crear sitio</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

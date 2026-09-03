@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Clientes - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="mb-1">Clientes</h1>
+    <p class="text-muted mb-0">Empresas/clientes, sitios y dispositivos asociados.</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-primary" href="{{ url_for('site_new') }}">Nuevo sitio</a>
+    <a class="btn btn-primary" href="{{ url_for('tenant_new') }}">Nuevo cliente</a>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Cliente</th>
+          <th>Slug</th>
+          <th>Sitios</th>
+          <th>Dispositivos</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tenant in tenants %}
+        <tr>
+          <td>{{ tenant.name }}</td>
+          <td><code>{{ tenant.slug }}</code></td>
+          <td>
+            {% for site in tenant.sites %}
+              <span class="badge text-bg-light border">{{ site.name }}</span>
+            {% else %}
+              <span class="text-muted">Sin sitios</span>
+            {% endfor %}
+          </td>
+          <td>{{ tenant.devices|length }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-muted">Sin clientes todavia.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
