@@ -349,17 +349,25 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingConfigError = "device_id mismatch";
       } else if (pendingConfigVersion <= 0) {
         pendingConfigError = "missing config_version";
+      } else if (pendingConfigVersion == state.reportedConfigVersion &&
+                 pendingConfigHash.length() > 0 &&
+                 pendingConfigHash == state.reportedConfigHash) {
+        Serial.printf("[config] skip already applied v%d\n", pendingConfigVersion);
       } else if (!applyDesiredConfig(doc)) {
         if (pendingConfigError.length() == 0) {
           pendingConfigError = "config apply failed";
         }
+        pendingConfigReport = true;
       } else {
         pendingConfigApplied = true;
+        pendingConfigReport = true;
         setStatus("Config v" + String(pendingConfigVersion));
       }
     }
 
-    pendingConfigReport = true;
+    if (pendingConfigError.length() > 0) {
+      pendingConfigReport = true;
+    }
   } else if (topicString == mqttTopic("command")) {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, body);
@@ -626,6 +634,9 @@ void waitWithWatchdog(uint32_t ms) {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < ms) {
     feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
     delay(50);
   }
 }
@@ -793,6 +804,9 @@ String readModemUntil(uint32_t timeoutMs, const String& token = "") {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
     while (ModemSerial.available()) {
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
@@ -1046,8 +1060,17 @@ void configureCellularApn() {
   sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 3000);
   sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"", "OK", 3000);
   sendAT("AT+CGATT=1", "OK", 15000);
+  sendAT("AT+CGSMS=1", "OK", 3000);
+  sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
 
-  sendAT(String("AT+CSCA=\"") + COF_MODEM_SMSC + "\"", "OK", 3000);
+  String smscResponse;
+  if (sendAT("AT+CSCA?", "OK", 3000, &smscResponse)) {
+    state.smsc = extractQuoted(smscResponse);
+  }
+  if (state.smsc.length() < 8) {
+    sendAT(String("AT+CSCA=\"") + COF_MODEM_SMSC + "\"", "OK", 3000);
+    state.smsc = COF_MODEM_SMSC;
+  }
 
   setStatus("Wait network");
   for (int attempt = 0; attempt < 8; attempt++) {
