@@ -17,6 +17,7 @@ Primer firmware base para CallOnFail usando:
 El repo incluye una base deployable para VPS:
 
 - Flask + Gunicorn.
+- Jinja templates + Bootstrap.
 - PostgreSQL.
 - Redis.
 - Mosquitto MQTT interno.
@@ -92,6 +93,14 @@ Probar desde navegador:
 
 ```text
 http://IP_DEL_VPS/
+```
+
+Dashboard Bootstrap:
+
+```text
+http://IP_DEL_VPS/dashboard
+http://IP_DEL_VPS/devices/cof-test
+http://IP_DEL_VPS/devices/cof-test/config
 ```
 
 o, si ya configuraste DNS:

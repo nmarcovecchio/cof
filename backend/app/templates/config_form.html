@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Config {{ device.device_uid }} - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">&larr; Volver al dispositivo</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h1 class="h3">Configuracion de {{ device.device_uid }}</h1>
+    <p class="text-muted">
+      Al guardar, el backend publica este JSON en
+      <code>devices/{{ device.device_uid }}/config/desired</code> con retained message.
+    </p>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label" for="payload">JSON config</label>
+        <textarea class="form-control font-monospace" id="payload" name="payload" rows="28">{{ payload }}</textarea>
+      </div>
+      <button class="btn btn-primary" type="submit">Guardar y publicar config</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
