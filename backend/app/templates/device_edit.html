@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Editar {{ device.device_uid }} - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">&larr; Volver al dispositivo</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h1 class="h3">Editar/reasignar dispositivo</h1>
+    <p class="text-muted">
+      Device ID: <code>{{ device.device_uid }}</code>
+      {% if device.archived_at %}
+      <span class="badge text-bg-dark ms-2">archivado</span>
+      {% endif %}
+    </p>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label" for="name">Nombre</label>
+        <input class="form-control" id="name" name="name" value="{{ device.name }}" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="tenant_id">Cliente</label>
+        <select class="form-select" id="tenant_id" name="tenant_id" required>
+          {% for tenant in tenants %}
+          <option value="{{ tenant.id }}" {% if tenant.id == device.tenant_id %}selected{% endif %}>{{ tenant.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="site_id">Sitio</label>
+        <select class="form-select" id="site_id" name="site_id">
+          <option value="">Sin sitio</option>
+          {% for site in sites %}
+          <option value="{{ site.id }}" {% if device.site_id == site.id %}selected{% endif %}>
+            {{ site.tenant.name }} - {{ site.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <div class="form-text">El sitio debe pertenecer al cliente seleccionado.</div>
+      </div>
+
+      {% if device.archived_at %}
+      <input type="hidden" name="restore" value="1">
+      <div class="alert alert-info">
+        Al guardar, el dispositivo sera restaurado y quedara asignado al cliente/sitio seleccionado.
+      </div>
+      {% endif %}
+
+      <button class="btn btn-primary" type="submit">
+        {% if device.archived_at %}Guardar y restaurar{% else %}Guardar cambios{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -206,6 +206,41 @@ def create_app() -> Flask:
 
         return render_template("device_form.html", tenants=tenants_rows, sites=sites, error=error)
 
+    @app.route("/devices/<device_uid>/edit", methods=["GET", "POST"])
+    @login_required
+    def device_edit(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        tenants_rows = Tenant.query.order_by(Tenant.name).all()
+        sites = Site.query.order_by(Site.name).all()
+        error = None
+
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            tenant_id = request.form.get("tenant_id", type=int)
+            site_id = request.form.get("site_id", type=int) or None
+            restore = request.form.get("restore") == "1"
+
+            if not name or not tenant_id:
+                error = "Nombre y cliente son requeridos"
+            else:
+                if site_id is not None:
+                    site = Site.query.get(site_id)
+                    if site is None or site.tenant_id != tenant_id:
+                        error = "El sitio seleccionado no pertenece al cliente"
+
+            if error is None:
+                device.name = name
+                device.tenant_id = tenant_id
+                device.site_id = site_id
+                if restore:
+                    device.archived_at = None
+                    if device.status == "archived":
+                        device.status = "new"
+                db.session.commit()
+                return redirect(url_for("device_detail", device_uid=device.device_uid))
+
+        return render_template("device_edit.html", device=device, tenants=tenants_rows, sites=sites, error=error)
+
     @app.post("/devices/<device_uid>/delete")
     @login_required
     def device_delete(device_uid):

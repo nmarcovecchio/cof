@@ -151,6 +151,13 @@ Archivar un dispositivo conserva su historial. Si el hardware sigue publicando
 MQTT, el backend registra eventos `archived_device_message` y no guarda
 telemetria normal ni lo reactiva automaticamente.
 
+Para reutilizar un equipo con otro cliente:
+
+1. Ir a `/devices?include_archived=1`.
+2. Entrar a `Editar/reasignar`.
+3. Elegir nuevo cliente/sitio.
+4. Guardar y restaurar.
+
 o, si ya configuraste DNS:
 
 ```text

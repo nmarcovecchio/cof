@@ -52,6 +52,8 @@
           <td>{{ device.firmware_version or '-' }}</td>
           <td>{{ device.last_seen_at|datetime_local }}</td>
           <td class="text-end">
+            <div class="d-flex justify-content-end gap-2">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar</a>
             {% if device.archived_at %}
             <form method="post" action="{{ url_for('device_restore', device_uid=device.device_uid) }}">
               <button class="btn btn-sm btn-outline-success" type="submit">Restaurar</button>
@@ -61,6 +63,7 @@
               <button class="btn btn-sm btn-outline-danger" type="submit">Archivar</button>
             </form>
             {% endif %}
+            </div>
           </td>
         </tr>
         {% else %}

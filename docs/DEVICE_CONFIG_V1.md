@@ -388,6 +388,18 @@ If an archived device continues publishing MQTT:
 This prevents a retired/deleted device from being recreated as active just
 because it is still powered on and publishing.
 
+To reuse an archived physical device for another customer, restore/reassign it:
+
+```text
+/devices?include_archived=1
+-> Editar/reasignar
+-> select new tenant/site
+-> Guardar y restaurar
+```
+
+The same `device_id` is preserved, so the firmware does not need to change if it
+continues using that MQTT identity.
+
 ## Events
 
 The device publishes alarm/state changes to:
