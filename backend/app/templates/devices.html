@@ -56,10 +56,12 @@
             <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar</a>
             {% if device.archived_at %}
             <form method="post" action="{{ url_for('device_restore', device_uid=device.device_uid) }}">
+              {{ csrf_field() }}
               <button class="btn btn-sm btn-outline-success" type="submit">Restaurar</button>
             </form>
             {% else %}
             <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
+              {{ csrf_field() }}
               <button class="btn btn-sm btn-outline-danger" type="submit">Archivar</button>
             </form>
             {% endif %}

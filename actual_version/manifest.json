@@ -1,8 +1,8 @@
 {
   "firmware": {
-    "version": "0.2.6",
+    "version": "0.2.7",
     "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/firmware.bin",
-    "sha256": "4310432b31b658b66c9b4231955fb89685f91f2b6486a0017b867735f446b7e4"
+    "sha256": "96eba83a5ae9276f85bc058f0922cfcf957ee78f32f3b9d3848b20d04ad1ba04"
   },
   "audio": {
     "version": "0.1.0",

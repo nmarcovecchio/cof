@@ -20,6 +20,7 @@
     {% endif %}
 
     <form method="post">
+      {{ csrf_field() }}
       <div class="mb-3">
         <label class="form-label" for="payload">JSON config</label>
         <textarea class="form-control font-monospace" id="payload" name="payload" rows="28">{{ payload }}</textarea>

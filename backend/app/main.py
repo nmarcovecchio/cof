@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 from functools import wraps
@@ -9,7 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from markupsafe import Markup
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -36,12 +38,29 @@ def slugify(value: str) -> str:
     return "-".join(part for part in slug.split("-") if part)
 
 
+def safe_next_url(value: str | None) -> str | None:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return None
+    return value
+
+
+def get_csrf_token() -> str:
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["APP_TIMEZONE"] = os.environ.get("APP_TIMEZONE", "America/Argentina/Buenos_Aires")
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-this-secret-key")
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
     db.init_app(app)
 
     @app.template_filter("datetime_local")
@@ -63,6 +82,23 @@ def create_app() -> Flask:
     def json_pretty(value):
         return json.dumps(value or {}, indent=2, ensure_ascii=False, sort_keys=True)
 
+    @app.before_request
+    def csrf_protect():
+        if request.method != "POST":
+            return
+
+        expected = session.get("_csrf_token")
+        submitted = request.form.get("_csrf_token", "")
+        if not expected or not hmac.compare_digest(expected, submitted):
+            abort(400)
+
+    @app.context_processor
+    def inject_csrf():
+        def csrf_field():
+            return Markup(f'<input type="hidden" name="_csrf_token" value="{get_csrf_token()}">')
+
+        return {"csrf_field": csrf_field}
+
     @app.get("/")
     def index():
         return redirect(url_for("dashboard"))
@@ -79,7 +115,7 @@ def create_app() -> Flask:
             if hmac.compare_digest(username, expected_username) and hmac.compare_digest(password, expected_password):
                 session["authenticated"] = True
                 session["username"] = username
-                return redirect(request.args.get("next") or url_for("dashboard"))
+                return redirect(safe_next_url(request.args.get("next")) or url_for("dashboard"))
 
             error = "Usuario o password invalidos"
 
@@ -196,6 +232,12 @@ def create_app() -> Flask:
             if not device_uid or not name or not tenant_id:
                 error = "Device ID, nombre y cliente son requeridos"
             else:
+                if site_id is not None:
+                    site = Site.query.get(site_id)
+                    if site is None or site.tenant_id != tenant_id:
+                        error = "El sitio seleccionado no pertenece al cliente"
+
+            if error is None:
                 db.session.add(Device(device_uid=device_uid, name=name, tenant_id=tenant_id, site_id=site_id, status="new"))
                 try:
                     db.session.commit()
@@ -295,7 +337,10 @@ def create_app() -> Flask:
             next_version = (latest_config.version + 1) if latest_config else 1
             payload["schema_version"] = payload.get("schema_version", 1)
             payload["device_id"] = device.device_uid
-            requested_version = int(payload.get("config_version") or next_version)
+            try:
+                requested_version = int(payload.get("config_version") or next_version)
+            except (TypeError, ValueError):
+                return render_config_form(device, raw_payload, error="config_version debe ser numerico")
             if latest_config and requested_version <= latest_config.version:
                 requested_version = next_version
             payload["config_version"] = requested_version
@@ -315,7 +360,13 @@ def create_app() -> Flask:
             device.desired_config_version = payload["config_version"]
             db.session.commit()
 
-            publish_config_desired(device, payload)
+            try:
+                publish_config_desired(device, payload)
+            except Exception as exc:
+                config.status = "publish_failed"
+                db.session.commit()
+                return render_config_form(device, raw_payload, error=f"Config guardada pero no publicada por MQTT: {exc}")
+
             return redirect(url_for("device_detail", device_uid=device.device_uid))
 
         payload = latest_config.desired_payload if latest_config else default_device_config(device)
@@ -342,12 +393,19 @@ def create_app() -> Flask:
             "device_id": device.device_uid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
+        try:
+            publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
+            event_type = "command_sent"
+            severity = "info"
+        except Exception as exc:
+            payload["publish_error"] = str(exc)
+            event_type = "command_failed"
+            severity = "warning"
         db.session.add(
             Event(
                 device_id=device.id,
-                type="command_sent",
-                severity="info",
+                type=event_type,
+                severity=severity,
                 message=message,
                 payload=payload,
             )

@@ -389,8 +389,17 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = fa
   }
 
   char payload[1536];
-  const size_t length = serializeJson(doc, payload, sizeof(payload));
   const String topic = mqttTopic(suffix);
+  const size_t requiredLength = measureJson(doc);
+  if (requiredLength >= sizeof(payload)) {
+    Serial.printf("[mqtt] payload too large topic=%s required=%u max=%u\n",
+                  topic.c_str(),
+                  static_cast<unsigned>(requiredLength),
+                  static_cast<unsigned>(sizeof(payload) - 1));
+    return false;
+  }
+
+  const size_t length = serializeJson(doc, payload, sizeof(payload));
   const bool ok = mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
   Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
   (void)qos;

@@ -34,6 +34,7 @@
           <td>
             {% for site in tenant.sites %}
               <form class="d-inline" method="post" action="{{ url_for('site_delete', site_id=site.id) }}" onsubmit="return confirm('Eliminar sitio {{ site.name }}? Los dispositivos quedaran sin sitio.');">
+                {{ csrf_field() }}
                 <span class="badge text-bg-light border">
                   {{ site.name }}
                   <button class="btn btn-sm btn-link text-danger p-0 ms-1 align-baseline" type="submit">x</button>
@@ -46,6 +47,7 @@
           <td>{{ tenant.devices|length }}</td>
           <td class="text-end">
             <form method="post" action="{{ url_for('tenant_delete', tenant_id=tenant.id) }}" onsubmit="return confirm('Eliminar cliente {{ tenant.name }} con sus sitios, dispositivos e historial?');">
+              {{ csrf_field() }}
               <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
             </form>
           </td>

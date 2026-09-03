@@ -72,18 +72,22 @@
       {% if device.archived_at %}
       <a class="btn btn-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar/reasignar</a>
       <form method="post" action="{{ url_for('device_restore', device_uid=device.device_uid) }}">
+        {{ csrf_field() }}
         <button class="btn btn-outline-success" type="submit">Restaurar dispositivo</button>
       </form>
       {% else %}
       <a class="btn btn-outline-primary" href="{{ url_for('device_edit', device_uid=device.device_uid) }}">Editar/reasignar</a>
       <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar/publicar configuracion</a>
       <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}">
+        {{ csrf_field() }}
         <button class="btn btn-outline-secondary" type="submit">Forzar chequeo OTA</button>
       </form>
       <form method="post" action="{{ url_for('device_command_status_report', device_uid=device.device_uid) }}">
+        {{ csrf_field() }}
         <button class="btn btn-outline-secondary" type="submit">Solicitar estado</button>
       </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
+        {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">Archivar dispositivo</button>
       </form>
       {% endif %}

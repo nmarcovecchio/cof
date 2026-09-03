@@ -30,6 +30,7 @@
           </ul>
           {% if session.get("authenticated") %}
           <form class="d-flex ms-auto align-items-center gap-2" method="post" action="{{ url_for('logout') }}">
+            {{ csrf_field() }}
             <span class="navbar-text small">Admin: {{ session.get("username") }}</span>
             <button class="btn btn-sm btn-outline-light" type="submit">Salir</button>
           </form>

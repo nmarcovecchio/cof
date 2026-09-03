@@ -87,10 +87,14 @@ Credenciales admin iniciales:
 SECRET_KEY=generar-un-secreto-largo
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=poner-un-password-fuerte
+SESSION_COOKIE_SECURE=false
 ```
 
 `/health` queda publico para monitoreo. Dashboard, dispositivos, config y
 comandos requieren login.
+
+Los formularios usan token CSRF básico. Cuando el sitio esté con HTTPS, cambiar
+`SESSION_COOKIE_SECURE=true`.
 
 Levantar servicios:
 

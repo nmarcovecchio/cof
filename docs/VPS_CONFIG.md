@@ -200,10 +200,17 @@ Admin login:
 SECRET_KEY=<long-random-secret>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<strong-password>
+SESSION_COOKIE_SECURE=false
 ```
 
 `/health` remains public for monitoring. Dashboard, device pages, config pages,
 and command actions require login.
+
+After HTTPS is confirmed, set:
+
+```text
+SESSION_COOKIE_SECURE=true
+```
 
 Always change:
 
