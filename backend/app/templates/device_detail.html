@@ -160,18 +160,18 @@
 
   <div class="col-lg-5">
     <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+      <div class="card-header bg-white">
         <strong>Eventos</strong>
-        <span class="text-muted small">Click en un evento para ver payload enviado/recibido</span>
       </div>
       <div class="table-responsive">
-        <table class="table table-sm mb-0">
+        <table class="table table-sm mb-0 align-middle">
           <thead class="table-light">
             <tr>
               <th>Fecha</th>
               <th>Severidad</th>
               <th>Tipo</th>
               <th>Detalle</th>
+              <th class="text-end" style="width: 3rem;"></th>
             </tr>
           </thead>
           <tbody>
@@ -181,17 +181,27 @@
               <td>{{ event.severity }}</td>
               <td><code>{{ event.type }}</code></td>
               <td>{{ event.message or '-' }}</td>
+              <td class="text-end">
+                <button
+                  class="btn btn-sm btn-link text-secondary p-0"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#event-payload-{{ event.id }}"
+                  aria-expanded="false"
+                  aria-controls="event-payload-{{ event.id }}"
+                  title="Ver payload"
+                >
+                  <i class="bi bi-eye"></i>
+                </button>
+              </td>
             </tr>
-            <tr>
-              <td colspan="4" class="bg-light">
-                <details>
-                  <summary class="small text-muted">Ver payload bajo nivel</summary>
-                  <pre class="border rounded p-2 mb-2 mt-2 small bg-white"><code>{{ event.payload|json_pretty }}</code></pre>
-                </details>
+            <tr class="collapse" id="event-payload-{{ event.id }}">
+              <td colspan="5" class="bg-light">
+                <pre class="border rounded p-2 mb-2 mt-1 small bg-white"><code>{{ event.payload|json_pretty }}</code></pre>
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="text-muted">Sin eventos.</td></tr>
+            <tr><td colspan="5" class="text-muted">Sin eventos.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -201,12 +211,13 @@
     <div class="card shadow-sm">
       <div class="card-header bg-white"><strong>Ultimas configs</strong></div>
       <div class="table-responsive">
-        <table class="table table-sm mb-0">
+        <table class="table table-sm mb-0 align-middle">
           <thead class="table-light">
             <tr>
               <th>Version</th>
               <th>Estado</th>
               <th>Aplicada</th>
+              <th class="text-end" style="width: 3rem;"></th>
             </tr>
           </thead>
           <tbody>
@@ -215,30 +226,40 @@
               <td>{{ config.version }}</td>
               <td>{{ config.status }}</td>
               <td>{{ config.applied_at|datetime_local }}</td>
+              <td class="text-end">
+                <button
+                  class="btn btn-sm btn-link text-secondary p-0"
+                  type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#config-payload-{{ config.id }}"
+                  aria-expanded="{{ 'true' if config.status != 'applied' else 'false' }}"
+                  aria-controls="config-payload-{{ config.id }}"
+                  title="Ver desired / reported"
+                >
+                  <i class="bi bi-eye"></i>
+                </button>
+              </td>
             </tr>
-            <tr>
-              <td colspan="3" class="bg-light">
-                <details {% if config.status != 'applied' %}open{% endif %}>
-                  <summary class="small text-muted">Ver desired / reported</summary>
-                  <div class="row g-2 mt-1 mb-2">
-                    <div class="col-md-6">
-                      <div class="small text-muted mb-1">Enviado (desired)</div>
-                      <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.desired_payload|json_pretty }}</code></pre>
-                    </div>
-                    <div class="col-md-6">
-                      <div class="small text-muted mb-1">Recibido (reported)</div>
-                      {% if config.reported_payload %}
-                      <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.reported_payload|json_pretty }}</code></pre>
-                      {% else %}
-                      <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
-                      {% endif %}
-                    </div>
+            <tr class="collapse{% if config.status != 'applied' %} show{% endif %}" id="config-payload-{{ config.id }}">
+              <td colspan="4" class="bg-light">
+                <div class="row g-2 mt-1 mb-2">
+                  <div class="col-md-6">
+                    <div class="small text-muted mb-1">Enviado (desired)</div>
+                    <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.desired_payload|json_pretty }}</code></pre>
                   </div>
-                </details>
+                  <div class="col-md-6">
+                    <div class="small text-muted mb-1">Recibido (reported)</div>
+                    {% if config.reported_payload %}
+                    <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+                    {% else %}
+                    <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
+                    {% endif %}
+                  </div>
+                </div>
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="text-muted">Sin configs.</td></tr>
+            <tr><td colspan="4" class="text-muted">Sin configs.</td></tr>
             {% endfor %}
           </tbody>
         </table>
