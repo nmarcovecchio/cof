@@ -103,6 +103,12 @@ bool pendingConfigApplied = false;
 int pendingConfigVersion = 0;
 String pendingConfigHash = "";
 String pendingConfigError = "";
+bool pendingOtaCommand = false;
+bool pendingCommandAck = false;
+String pendingCommandId = "";
+String pendingCommandName = "";
+String pendingCommandStatus = "";
+String pendingCommandMessage = "";
 
 void setStatus(const String& line) {
   state.statusLine = line;
@@ -272,6 +278,33 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     }
 
     pendingConfigReport = true;
+  } else if (topicString == mqttTopic("command")) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, body);
+    pendingCommandId = "";
+    pendingCommandName = "";
+    pendingCommandStatus = "rejected";
+    pendingCommandMessage = "";
+
+    if (error) {
+      pendingCommandMessage = "invalid JSON";
+    } else {
+      pendingCommandId = doc["command_id"] | "";
+      pendingCommandName = doc["command"] | "";
+      const String targetDevice = doc["device_id"] | "";
+
+      if (targetDevice.length() > 0 && targetDevice != state.mqttDeviceId) {
+        pendingCommandMessage = "device_id mismatch";
+      } else if (pendingCommandName == "ota_check") {
+        pendingOtaCommand = true;
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "OTA check scheduled";
+      } else {
+        pendingCommandMessage = "unsupported command";
+      }
+    }
+
+    pendingCommandAck = true;
   }
 }
 
@@ -388,6 +421,17 @@ void publishConfigReported() {
     doc["error"] = pendingConfigError;
   }
   publishMqttJson("config/reported", doc, false, 1);
+}
+
+void publishCommandAck() {
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["command_id"] = pendingCommandId;
+  doc["command"] = pendingCommandName;
+  doc["status"] = pendingCommandStatus;
+  doc["message"] = pendingCommandMessage;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  publishMqttJson("ack", doc, false, 1);
 }
 
 void publishTelemetryNow() {
@@ -1302,6 +1346,17 @@ void loop() {
   if (state.mqttConnected && pendingConfigReport) {
     publishConfigReported();
     pendingConfigReport = false;
+  }
+
+  if (state.mqttConnected && pendingCommandAck) {
+    publishCommandAck();
+    pendingCommandAck = false;
+  }
+
+  if (pendingOtaCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+    pendingOtaCommand = false;
+    setStatus("OTA command");
+    checkManifest(true);
   }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= kTelemetryPublishIntervalMs) {

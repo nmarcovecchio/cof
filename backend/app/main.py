@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -115,6 +116,29 @@ def create_app() -> Flask:
         payload = latest_config.desired_payload if latest_config else default_device_config(device)
         return render_config_form(device, json.dumps(payload, indent=2, ensure_ascii=False))
 
+    @app.post("/devices/<device_uid>/commands/ota-check")
+    def device_command_ota_check(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        command_id = str(uuid.uuid4())
+        payload = {
+            "command_id": command_id,
+            "command": "ota_check",
+            "device_id": device.device_uid,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
+        db.session.add(
+            Event(
+                device_id=device.id,
+                type="command_sent",
+                severity="info",
+                message="OTA check command sent",
+                payload=payload,
+            )
+        )
+        db.session.commit()
+        return redirect(url_for("device_detail", device_uid=device.device_uid))
+
     @app.get("/health")
     def health():
         return jsonify(
@@ -161,7 +185,10 @@ def check_redis() -> dict:
 
 
 def publish_config_desired(device: Device, payload: dict):
-    topic = f"devices/{device.device_uid}/config/desired"
+    publish_mqtt(f"devices/{device.device_uid}/config/desired", payload, qos=1, retain=True)
+
+
+def publish_mqtt(topic: str, payload: dict, qos: int = 1, retain: bool = False):
     mqtt_host = os.environ.get("MQTT_HOST", "mosquitto")
     mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
     auth = None
@@ -172,8 +199,8 @@ def publish_config_desired(device: Device, payload: dict):
     mqtt_publish.single(
         topic,
         payload=json.dumps(payload, separators=(",", ":")),
-        qos=1,
-        retain=True,
+        qos=qos,
+        retain=retain,
         hostname=mqtt_host,
         port=mqtt_port,
         auth=auth,

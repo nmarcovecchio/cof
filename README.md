@@ -209,6 +209,30 @@ http://IP_DEL_VPS/devices/cof-test
 Entrar a `Editar/publicar configuracion`, guardar el JSON y esperar que el
 dispositivo reporte la misma version en `Config deseada/reportada`.
 
+Para forzar chequeo OTA desde la web:
+
+```text
+http://IP_DEL_VPS/devices/cof-test
+```
+
+Click en `Forzar chequeo OTA`. El backend publica:
+
+```text
+devices/cof-test/command
+```
+
+con:
+
+```json
+{"command":"ota_check"}
+```
+
+El ESP32 responde en:
+
+```text
+devices/cof-test/ack
+```
+
 Cuando termine la prueba, cerrar `1883`:
 
 ```bash

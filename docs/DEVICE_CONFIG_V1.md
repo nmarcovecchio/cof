@@ -241,6 +241,42 @@ devices/cof-000001/event
 }
 ```
 
+## Commands
+
+The backend can publish commands to:
+
+```text
+devices/cof-000001/command
+```
+
+### Force OTA check
+
+```json
+{
+  "command_id": "uuid",
+  "command": "ota_check",
+  "device_id": "cof-000001",
+  "created_at": "2026-09-03T00:00:00Z"
+}
+```
+
+The device responds to:
+
+```text
+devices/cof-000001/ack
+```
+
+```json
+{
+  "device_id": "cof-000001",
+  "command_id": "uuid",
+  "command": "ota_check",
+  "status": "accepted",
+  "message": "OTA check scheduled",
+  "firmware": "0.2.3"
+}
+```
+
 ## Local vs cloud behavior
 
 The cloud is the source of truth for desired configuration, but devices must

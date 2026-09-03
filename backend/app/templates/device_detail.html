@@ -54,7 +54,12 @@
         <span class="badge text-bg-secondary mt-2">Sin configuracion</span>
       {% endif %}
     </div>
-    <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar/publicar configuracion</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar/publicar configuracion</a>
+      <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}">
+        <button class="btn btn-outline-secondary" type="submit">Forzar chequeo OTA</button>
+      </form>
+    </div>
   </div>
 </div>
 
