@@ -1,7 +1,7 @@
 #pragma once
 
 // Firmware version shown on OLED and used by OTA comparison.
-#define COF_FIRMWARE_VERSION "0.2.14"
+#define COF_FIRMWARE_VERSION "0.2.15"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/manifest.json"
@@ -24,6 +24,12 @@
 
 // Modem filesystem target for the audio played during the call.
 #define COF_MODEM_AUDIO_PATH "C:/cof_test.wav"
+
+// Claro Argentina packet data. Voice/SMS still need CS/LTE attach.
+#define COF_MODEM_APN "internet.claro.com.ar"
+#define COF_MODEM_APN_USER "clarogprs"
+#define COF_MODEM_APN_PASS "clarogprs777"
+#define COF_MODEM_SMSC "+5491115030500"
 
 // Default MQTT endpoint (TLS). Override from Serial with:
 // mqtt HOST PORT DEVICE_ID [USER PASSWORD]

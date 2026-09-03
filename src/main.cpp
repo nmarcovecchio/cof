@@ -55,8 +55,15 @@ struct RuntimeState {
   bool ds18b20Ready = false;
   bool modemReady = false;
   bool simReady = false;
+  bool networkRegistered = false;
   bool modemAudioPlaybackSupported = false;
   bool modemFileTransferSupported = false;
+  int cregStat = -1;
+  int ceregStat = -1;
+  int cgregStat = -1;
+  String operatorName = "";
+  String smsc = "";
+  String apn = COF_MODEM_APN;
   bool callInProgress = false;
   bool otaInProgress = false;
   bool audioSyncInProgress = false;
@@ -557,6 +564,15 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   discovered["sht31"] = state.sht31Ready;
   discovered["pcf8574"] = state.pcfReady;
   discovered["modem"] = state.modemReady;
+  JsonObject cellular = discovered["cellular"].to<JsonObject>();
+  cellular["registered"] = state.networkRegistered;
+  cellular["creg"] = state.cregStat;
+  cellular["cereg"] = state.ceregStat;
+  cellular["cgreg"] = state.cgregStat;
+  cellular["csq"] = state.signalQuality;
+  cellular["operator"] = state.operatorName;
+  cellular["apn"] = state.apn;
+  cellular["smsc"] = state.smsc;
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
   for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
@@ -952,6 +968,100 @@ void drawDisplay() {
   display.sendBuffer();
 }
 
+int parseCommaStat(const String& response, const char* tag) {
+  const int tagAt = response.indexOf(tag);
+  if (tagAt < 0) {
+    return -1;
+  }
+  const int comma = response.indexOf(',', tagAt);
+  if (comma < 0) {
+    return -1;
+  }
+  return response.substring(comma + 1).toInt();
+}
+
+String extractQuoted(const String& response) {
+  const int start = response.indexOf('"');
+  if (start < 0) {
+    return "";
+  }
+  const int end = response.indexOf('"', start + 1);
+  if (end < 0) {
+    return "";
+  }
+  return response.substring(start + 1, end);
+}
+
+bool networkStatRegistered(int stat) {
+  return stat == 1 || stat == 5;
+}
+
+void refreshCellularStatus() {
+  String response;
+  if (sendAT("AT+CREG?", "OK", 2000, &response)) {
+    state.cregStat = parseCommaStat(response, "+CREG:");
+  }
+  if (sendAT("AT+CEREG?", "OK", 2000, &response)) {
+    state.ceregStat = parseCommaStat(response, "+CEREG:");
+  }
+  if (sendAT("AT+CGREG?", "OK", 2000, &response)) {
+    state.cgregStat = parseCommaStat(response, "+CGREG:");
+  }
+  if (sendAT("AT+COPS?", "OK", 3000, &response)) {
+    const String name = extractQuoted(response);
+    if (name.length() > 0) {
+      state.operatorName = name;
+    }
+  }
+  if (sendAT("AT+CSCA?", "OK", 3000, &response)) {
+    const String smsc = extractQuoted(response);
+    if (smsc.length() > 0) {
+      state.smsc = smsc;
+    }
+  }
+  if (sendAT("AT+CSQ", "OK", 2000, &response)) {
+    const int marker = response.indexOf("+CSQ:");
+    if (marker >= 0) {
+      state.signalQuality = response.substring(marker + 5).toInt();
+    }
+  }
+
+  state.networkRegistered = networkStatRegistered(state.cregStat) ||
+                            networkStatRegistered(state.ceregStat) ||
+                            networkStatRegistered(state.cgregStat);
+
+  Serial.printf("[modem] net registered=%s creg=%d cereg=%d cgreg=%d csq=%d op=%s smsc=%s\n",
+                state.networkRegistered ? "yes" : "no",
+                state.cregStat,
+                state.ceregStat,
+                state.cgregStat,
+                state.signalQuality,
+                state.operatorName.c_str(),
+                state.smsc.c_str());
+}
+
+void configureCellularApn() {
+  state.apn = COF_MODEM_APN;
+  sendAT("AT+COPS=0", "OK", 5000);
+  sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 3000);
+  sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"", "OK", 3000);
+  sendAT("AT+CGATT=1", "OK", 15000);
+
+  sendAT(String("AT+CSCA=\"") + COF_MODEM_SMSC + "\"", "OK", 3000);
+
+  setStatus("Wait network");
+  for (int attempt = 0; attempt < 8; attempt++) {
+    feedWatchdog();
+    refreshCellularStatus();
+    if (state.networkRegistered) {
+      setStatus("Network OK");
+      return;
+    }
+    delay(2000);
+  }
+  setStatus("Network wait");
+}
+
 bool initModem() {
   ModemSerial.begin(115200, SERIAL_8N1, COF_PIN_MODEM_RX, COF_PIN_MODEM_TX);
   delay(300);
@@ -981,17 +1091,14 @@ bool initModem() {
     state.simReady = response.indexOf("READY") >= 0;
   }
 
-  if (sendAT("AT+CSQ", "OK", 2000, &response)) {
-    const int marker = response.indexOf("+CSQ:");
-    if (marker >= 0) {
-      state.signalQuality = response.substring(marker + 5).toInt();
-    }
-  }
-
   state.modemAudioPlaybackSupported = sendAT("AT+CCMXPLAY=?", "OK", 3000);
   state.modemFileTransferSupported = sendAT("AT+CFTRANRX=?", "OK", 3000);
 
-  setStatus(state.simReady ? "Modem/SIM OK" : "Modem OK no SIM");
+  if (state.simReady) {
+    configureCellularApn();
+  } else {
+    setStatus("Modem OK no SIM");
+  }
   return true;
 }
 
@@ -1001,11 +1108,12 @@ void pollModem() {
     return;
   }
 
-  String response;
-  if (sendAT("AT+CSQ", "OK", 2000, &response)) {
-    const int marker = response.indexOf("+CSQ:");
-    if (marker >= 0) {
-      state.signalQuality = response.substring(marker + 5).toInt();
+  const bool wasRegistered = state.networkRegistered;
+  refreshCellularStatus();
+  if (state.networkRegistered && !wasRegistered) {
+    setStatus("Network OK");
+    if (state.mqttConnected) {
+      publishDeviceStatus("online", true);
     }
   }
 }
@@ -1287,8 +1395,15 @@ String sendTestSms(const String& phoneOverride, const String& text) {
   const String response = readModemUntil(60000, "OK");
   Serial.println("[modem] << " + response);
   if (response.indexOf("+CMGS") < 0 && response.indexOf("OK") < 0) {
+    String err = response;
+    err.replace("\r", " ");
+    err.replace("\n", " ");
+    err.trim();
+    if (err.length() > 80) {
+      err = err.substring(0, 80);
+    }
     setStatus("SMS failed");
-    return "SMS failed";
+    return err.length() > 0 ? ("SMS failed: " + err) : "SMS failed: timeout";
   }
 
   setStatus("SMS sent");
@@ -1379,6 +1494,13 @@ void printRuntimeStatus() {
                 state.signalQuality,
                 state.modemAudioPlaybackSupported ? "OK" : "NO",
                 state.modemFileTransferSupported ? "OK" : "NO");
+  Serial.printf("Cellular: registered=%s creg=%d cereg=%d op=%s apn=%s smsc=%s\n",
+                state.networkRegistered ? "yes" : "no",
+                state.cregStat,
+                state.ceregStat,
+                state.operatorName.c_str(),
+                state.apn.c_str(),
+                state.smsc.c_str());
   Serial.printf("Manifest firmware: %s\n", state.manifestFirmwareVersion.c_str());
   Serial.printf("Manifest audio: %s\n", state.manifestAudioVersion.c_str());
   Serial.printf("Status: %s\n", state.statusLine.c_str());

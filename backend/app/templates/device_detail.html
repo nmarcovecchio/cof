@@ -131,7 +131,7 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.14+. Si el ACK dice unsupported, primero pulsá OTA.
+        Requiere firmware 0.2.15+. Si el ACK dice unsupported, primero pulsá OTA.
       </p>
     </form>
     {% endif %}
@@ -174,6 +174,30 @@
           {% endif %}
           {% if device.discovered.get('modem') %}
             <span class="badge text-bg-light border">Modem</span>
+          {% endif %}
+          {% set cell = device.discovered.get('cellular') %}
+          {% if cell %}
+            <span class="badge text-bg-{{ 'success' if cell.get('registered') else 'warning' }} border">
+              Red {{ 'OK' if cell.get('registered') else 'NO' }}
+            </span>
+            {% if cell.get('operator') %}
+              <span class="badge text-bg-light border">{{ cell.get('operator') }}</span>
+            {% endif %}
+            {% if cell.get('csq') is not none %}
+              <span class="badge text-bg-light border">CSQ {{ cell.get('csq') }}</span>
+            {% endif %}
+            {% if cell.get('creg') is not none %}
+              <span class="badge text-bg-light border">CREG {{ cell.get('creg') }}</span>
+            {% endif %}
+            {% if cell.get('cereg') is not none %}
+              <span class="badge text-bg-light border">CEREG {{ cell.get('cereg') }}</span>
+            {% endif %}
+            {% if cell.get('apn') %}
+              <span class="badge text-bg-light border">{{ cell.get('apn') }}</span>
+            {% endif %}
+            {% if cell.get('smsc') %}
+              <span class="badge text-bg-light border">SMSC {{ cell.get('smsc') }}</span>
+            {% endif %}
           {% endif %}
           {% if device.discovered.get('pcf8574') %}
             <span class="badge text-bg-light border">PCF8574</span>
