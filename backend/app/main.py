@@ -94,7 +94,7 @@ def create_app() -> Flask:
     @login_required
     def dashboard():
         tenants = Tenant.query.order_by(Tenant.name).all()
-        devices = Device.query.order_by(Device.created_at.desc()).all()
+        devices = Device.query.filter(Device.archived_at.is_(None)).order_by(Device.created_at.desc()).all()
         recent_events = Event.query.order_by(Event.started_at.desc()).limit(10).all()
         recent_telemetry = Telemetry.query.order_by(Telemetry.received_at.desc()).limit(10).all()
         return render_template(
@@ -170,10 +170,14 @@ def create_app() -> Flask:
     @app.get("/devices")
     @login_required
     def devices():
-        rows = Device.query.order_by(Device.created_at.desc()).all()
+        include_archived = request.args.get("include_archived") == "1"
+        query = Device.query
+        if not include_archived:
+            query = query.filter(Device.archived_at.is_(None))
+        rows = query.order_by(Device.created_at.desc()).all()
         if wants_json():
             return jsonify([serialize_device(device) for device in rows])
-        return render_template("devices.html", devices=rows)
+        return render_template("devices.html", devices=rows, include_archived=include_archived)
 
     @app.route("/devices/new", methods=["GET", "POST"])
     @login_required
@@ -206,9 +210,20 @@ def create_app() -> Flask:
     @login_required
     def device_delete(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
-        db.session.delete(device)
+        device.archived_at = datetime.now(timezone.utc)
+        device.status = "archived"
         db.session.commit()
         return redirect(url_for("devices"))
+
+    @app.post("/devices/<device_uid>/restore")
+    @login_required
+    def device_restore(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        device.archived_at = None
+        if device.status == "archived":
+            device.status = "new"
+        db.session.commit()
+        return redirect(url_for("device_detail", device_uid=device.device_uid))
 
     @app.get("/devices/<device_uid>")
     @login_required
@@ -231,6 +246,8 @@ def create_app() -> Flask:
     @login_required
     def device_config(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        if device.archived_at is not None:
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
         latest_config = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).first()
 
         if request.method == "POST":
@@ -281,6 +298,8 @@ def create_app() -> Flask:
 
     def send_device_command(device_uid, command, message):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        if device.archived_at is not None:
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
         command_id = str(uuid.uuid4())
         payload = {
             "command_id": command_id,
@@ -419,6 +438,7 @@ def serialize_device(device: Device) -> dict:
         "tenant": device.tenant.name if device.tenant else None,
         "site": device.site.name if device.site else None,
         "status": device.status,
+        "archived_at": device.archived_at.isoformat() if device.archived_at else None,
         "hardware_profile": device.hardware_profile,
         "capabilities": device.capabilities,
         "discovered": device.discovered,

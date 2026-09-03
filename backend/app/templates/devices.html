@@ -8,7 +8,14 @@
     <h1 class="mb-1">Dispositivos</h1>
     <p class="text-muted mb-0">Equipos registrados en la plataforma.</p>
   </div>
-  <a class="btn btn-primary" href="{{ url_for('device_new') }}">Nuevo dispositivo</a>
+  <div class="d-flex gap-2">
+    {% if include_archived %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('devices') }}">Ver activos</a>
+    {% else %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('devices', include_archived=1) }}">Ver archivados</a>
+    {% endif %}
+    <a class="btn btn-primary" href="{{ url_for('device_new') }}">Nuevo dispositivo</a>
+  </div>
 </div>
 
 <div class="card shadow-sm">
@@ -34,14 +41,26 @@
           <td>{{ device.name }}</td>
           <td>{{ device.tenant.name }}</td>
           <td>{{ device.site.name if device.site else '-' }}</td>
-          <td><span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span></td>
+          <td>
+            {% if device.archived_at %}
+              <span class="badge text-bg-dark">archivado</span>
+            {% else %}
+              <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
+            {% endif %}
+          </td>
           <td>{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>{{ device.last_seen_at|datetime_local }}</td>
           <td class="text-end">
-            <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Eliminar dispositivo {{ device.device_uid }} y todo su historial?');">
-              <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
+            {% if device.archived_at %}
+            <form method="post" action="{{ url_for('device_restore', device_uid=device.device_uid) }}">
+              <button class="btn btn-sm btn-outline-success" type="submit">Restaurar</button>
             </form>
+            {% else %}
+            <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
+              <button class="btn btn-sm btn-outline-danger" type="submit">Archivar</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% else %}

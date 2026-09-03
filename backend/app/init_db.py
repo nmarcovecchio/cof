@@ -15,6 +15,8 @@ def ensure_schema_columns():
         statements.append("ALTER TABLE devices ADD COLUMN capabilities JSONB")
     if "discovered" not in device_columns:
         statements.append("ALTER TABLE devices ADD COLUMN discovered JSONB")
+    if "archived_at" not in device_columns:
+        statements.append("ALTER TABLE devices ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE")
 
     if not statements:
         return

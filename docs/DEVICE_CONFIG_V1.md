@@ -374,6 +374,20 @@ input_1          -> Fuga de agua
 output_1         -> Sirena
 ```
 
+## Archived devices
+
+Devices should be archived instead of hard-deleted.
+
+If an archived device continues publishing MQTT:
+
+- the backend keeps the device archived,
+- normal telemetry is not stored,
+- an `archived_device_message` warning event is recorded,
+- config and command actions are disabled until the device is restored.
+
+This prevents a retired/deleted device from being recreated as active just
+because it is still powered on and publishing.
+
 ## Events
 
 The device publishes alarm/state changes to:

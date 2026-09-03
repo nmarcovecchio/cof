@@ -87,6 +87,21 @@ def persist_message(topic, payload):
         try:
             device = get_or_create_device(device_uid)
             device.last_seen_at = utcnow()
+
+            if device.archived_at is not None:
+                db.session.add(
+                    Event(
+                        device_id=device.id,
+                        type="archived_device_message",
+                        severity="warning",
+                        message=f"Archived device still publishing {message_type}",
+                        payload={"topic": topic, "payload": payload},
+                    )
+                )
+                db.session.commit()
+                logger.warning("Archived device still publishing device=%s topic=%s", device_uid, topic)
+                return
+
             device.status = "online"
             device.firmware_version = payload.get("firmware") or payload.get("firmware_version") or device.firmware_version
             device.ip_address = payload.get("ip") or payload.get("ip_address") or device.ip_address

@@ -54,6 +54,7 @@ class Device(db.Model):
     reported_config_version = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    archived_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     tenant = db.relationship("Tenant", back_populates="devices")
     site = db.relationship("Site", back_populates="devices")

@@ -144,8 +144,12 @@ sensores fisicos a sensores logicos.
 
 Los datos de prueba se pueden borrar desde la web:
 
-- `/devices`: eliminar dispositivos y su historial.
+- `/devices`: archivar/restaurar dispositivos.
 - `/tenants`: eliminar clientes completos o sitios individuales.
+
+Archivar un dispositivo conserva su historial. Si el hardware sigue publicando
+MQTT, el backend registra eventos `archived_device_message` y no guarda
+telemetria normal ni lo reactiva automaticamente.
 
 o, si ya configuraste DNS:
 
