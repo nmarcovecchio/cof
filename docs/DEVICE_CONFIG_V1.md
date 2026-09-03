@@ -485,10 +485,10 @@ alarm calls still require `calling.enabled=true`.
 ```
 
 The device ACKs immediately, syncs test audio if the manifest version changed,
-then publishes an `event` of type `test_call` with the result. Firmware 0.2.18+
-reports radio/IMS in the event (`[LTE IMS=0 gsm fallback A7672SA...]`). If IMS
-is not registered on LTE, the device forces GSM (`AT+CNMP=13`) before dialing
-and restores automatic mode afterwards.
+then publishes an `event` of type `test_call` with the result. Firmware 0.2.19+
+reports radio/IMS and `AT+CEER` in the event. If IMS is not registered, it tries
+GSM first; if GSM does not attach it restores LTE and attempts CSFB instead of
+dialing in `NO SERVICE`.
 
 ### Test SMS
 

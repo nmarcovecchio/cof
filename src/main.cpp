@@ -1153,7 +1153,7 @@ void configureCellularApn() {
   sendAT("AT+CEVDP=3", "OK", 3000);
   sendAT("AT+CAVIMS=1", "OK", 3000);
   sendAT("AT+CIREG=2", "OK", 2000);
-  sendAT("AT+CGDCONT=2,\"IP\",\"ims\"", "OK", 3000);
+  sendAT("AT+CGDCONT=2,\"IPV4V6\",\"ims\"", "OK", 3000);
   sendAT("AT+CRC=1", "OK", 2000);
   sendAT("AT+CVHU=0", "OK", 2000);
 
@@ -1451,11 +1451,18 @@ bool radioIsGsm() {
   return state.radioMode.indexOf("GSM") >= 0;
 }
 
+bool radioHasService() {
+  return state.radioMode.length() > 0 &&
+         state.radioMode.indexOf("NO SERVICE") < 0 &&
+         state.radioMode.indexOf("No Service") < 0 &&
+         state.networkRegistered;
+}
+
 bool imsVoiceReady() {
   return state.imsReg == 1;
 }
 
-bool waitForGsmAttach(uint32_t timeoutMs) {
+bool waitForRadioService(uint32_t timeoutMs, bool gsmOnly) {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
@@ -1463,12 +1470,31 @@ bool waitForGsmAttach(uint32_t timeoutMs) {
       mqttClient.loop();
     }
     refreshCellularStatus();
-    if (radioIsGsm() && networkStatRegistered(state.cregStat)) {
+    if (radioHasService() && (!gsmOnly || radioIsGsm())) {
       return true;
     }
     waitWithWatchdog(2000);
   }
-  return radioIsGsm() && networkStatRegistered(state.cregStat);
+  return radioHasService() && (!gsmOnly || radioIsGsm());
+}
+
+String queryCallFailCause() {
+  String response;
+  if (!sendAT("AT+CEER", "OK", 3000, &response)) {
+    return "";
+  }
+  String value = extractAtTagValue(response, "+CEER:");
+  if (value.length() == 0) {
+    value = firstNonEmptyAtLine(response);
+  }
+  value.replace("\"", "");
+  value.replace("\r", " ");
+  value.replace("\n", " ");
+  value.trim();
+  if (value.length() > 48) {
+    value = value.substring(0, 48);
+  }
+  return value;
 }
 
 String prepareVoiceBearer() {
@@ -1481,15 +1507,27 @@ String prepareVoiceBearer() {
   }
 
   setStatus("Voice via GSM");
-  Serial.println("[call] LTE without IMS, forcing GSM for voice");
+  Serial.println("[call] LTE without IMS, trying GSM for voice");
   if (!sendAT("AT+CNMP=13", "OK", 10000)) {
     return "gsm force fail";
   }
   state.forcedGsmForCall = true;
-  if (waitForGsmAttach(25000)) {
+  if (waitForRadioService(45000, true)) {
     return "gsm fallback";
   }
-  return "gsm attach fail";
+
+  setStatus("Restore LTE");
+  Serial.println("[call] no GSM, restoring LTE for CSFB");
+  sendAT("AT+CNMP=2", "OK", 10000);
+  state.forcedGsmForCall = false;
+  if (!waitForRadioService(25000, false)) {
+    return "no radio";
+  }
+  refreshCellularStatus();
+  if (imsVoiceReady()) {
+    return "ims after restore";
+  }
+  return "csfb";
 }
 
 void restoreAutoRadio() {
@@ -1498,10 +1536,10 @@ void restoreAutoRadio() {
   }
   state.forcedGsmForCall = false;
   sendAT("AT+CNMP=2", "OK", 10000);
-  waitWithWatchdog(1500);
+  waitForRadioService(20000, false);
 }
 
-String voiceContextSuffix(const String& bearer) {
+String voiceContextSuffix(const String& bearer, const String& ceer = "") {
   String suffix = " [";
   suffix += state.radioMode.length() > 0 ? state.radioMode : "?";
   suffix += " IMS=";
@@ -1511,6 +1549,10 @@ String voiceContextSuffix(const String& bearer) {
   if (state.modemModel.length() > 0) {
     suffix += " ";
     suffix += state.modemModel;
+  }
+  if (ceer.length() > 0) {
+    suffix += " CEER=";
+    suffix += ceer;
   }
   suffix += "]";
   return suffix;
@@ -1599,23 +1641,32 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   }
 
   const String bearer = prepareVoiceBearer();
+  if (bearer == "no radio" || bearer == "gsm force fail" || !radioHasService()) {
+    restoreAutoRadio();
+    state.callInProgress = false;
+    setStatus("No voice radio");
+    return "No voice radio" + voiceContextSuffix(bearer);
+  }
+
   state.callInProgress = true;
   setStatus("Calling");
   if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
+    const String ceer = queryCallFailCause();
     sendAT("ATH", "OK", 3000);
     restoreAutoRadio();
     state.callInProgress = false;
     setStatus("Call failed");
-    return "Call failed" + voiceContextSuffix(bearer);
+    return "Call failed" + voiceContextSuffix(bearer, ceer);
   }
 
   const String progress = waitForOutgoingCall(35000);
   if (progress != "Call connected") {
+    const String ceer = queryCallFailCause();
     sendAT("ATH", "OK", 3000);
     restoreAutoRadio();
     state.callInProgress = false;
     setStatus(progress);
-    return progress + voiceContextSuffix(bearer);
+    return progress + voiceContextSuffix(bearer, ceer);
   }
 
   waitWithWatchdog(1500);
