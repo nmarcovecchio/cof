@@ -323,7 +323,7 @@ def create_app() -> Flask:
         recent_telemetry = (
             Telemetry.query.filter_by(device_id=device.id).order_by(Telemetry.received_at.desc()).limit(20).all()
         )
-        recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(20).all()
+        recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(40).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
         return render_template(
             "device_detail.html",

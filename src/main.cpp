@@ -135,11 +135,11 @@ bool applyDesiredConfig(JsonDocument& doc) {
     return false;
   }
 
-  if (!preferences.putInt("reportedCfgVersion", pendingConfigVersion)) {
+  if (!preferences.putInt("cfgVer", pendingConfigVersion)) {
     pendingConfigError = "failed to store config_version";
     return false;
   }
-  if (!preferences.putString("reportedCfgHash", pendingConfigHash)) {
+  if (!preferences.putString("cfgHash", pendingConfigHash)) {
     pendingConfigError = "failed to store config_hash";
     return false;
   }
@@ -147,7 +147,7 @@ bool applyDesiredConfig(JsonDocument& doc) {
     pendingConfigError = "failed to store telemetry interval";
     return false;
   }
-  if (!preferences.putBool("callingEnabled", callingEnabled)) {
+  if (!preferences.putBool("callEn", callingEnabled)) {
     pendingConfigError = "failed to store calling flag";
     return false;
   }
@@ -369,11 +369,11 @@ void loadSavedMqttConfig() {
   state.mqttDeviceId = preferences.getString("mqttDeviceId", COF_DEFAULT_MQTT_DEVICE_ID);
   state.mqttUsername = preferences.getString("mqttUser", COF_DEFAULT_MQTT_USERNAME);
   state.mqttPassword = preferences.getString("mqttPass", COF_DEFAULT_MQTT_PASSWORD);
-  state.reportedConfigVersion = preferences.getInt("reportedCfgVersion", 0);
-  state.reportedConfigHash = preferences.getString("reportedCfgHash", "");
+  state.reportedConfigVersion = preferences.getInt("cfgVer", preferences.getInt("reportedCfgVersion", 0));
+  state.reportedConfigHash = preferences.getString("cfgHash", preferences.getString("reportedCfgHash", ""));
   const int telemetrySeconds = preferences.getInt("telemetrySec", 60);
   state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
-  state.callingEnabled = preferences.getBool("callingEnabled", false);
+  state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", false));
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {

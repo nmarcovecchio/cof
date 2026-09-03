@@ -160,7 +160,10 @@
 
   <div class="col-lg-5">
     <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white"><strong>Eventos</strong></div>
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong>Eventos</strong>
+        <span class="text-muted small">Click en un evento para ver payload enviado/recibido</span>
+      </div>
       <div class="table-responsive">
         <table class="table table-sm mb-0">
           <thead class="table-light">
@@ -168,17 +171,27 @@
               <th>Fecha</th>
               <th>Severidad</th>
               <th>Tipo</th>
+              <th>Detalle</th>
             </tr>
           </thead>
           <tbody>
             {% for event in recent_events %}
             <tr>
-              <td>{{ event.started_at|datetime_local }}</td>
+              <td class="text-nowrap">{{ event.started_at|datetime_local }}</td>
               <td>{{ event.severity }}</td>
-              <td>{{ event.type }}</td>
+              <td><code>{{ event.type }}</code></td>
+              <td>{{ event.message or '-' }}</td>
+            </tr>
+            <tr>
+              <td colspan="4" class="bg-light">
+                <details>
+                  <summary class="small text-muted">Ver payload bajo nivel</summary>
+                  <pre class="border rounded p-2 mb-2 mt-2 small bg-white"><code>{{ event.payload|json_pretty }}</code></pre>
+                </details>
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="text-muted">Sin eventos.</td></tr>
+            <tr><td colspan="4" class="text-muted">Sin eventos.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -203,13 +216,27 @@
               <td>{{ config.status }}</td>
               <td>{{ config.applied_at|datetime_local }}</td>
             </tr>
-            {% if config.reported_payload %}
             <tr>
-              <td colspan="3">
-                <pre class="bg-light border rounded p-2 mb-0 small"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+              <td colspan="3" class="bg-light">
+                <details {% if config.status != 'applied' %}open{% endif %}>
+                  <summary class="small text-muted">Ver desired / reported</summary>
+                  <div class="row g-2 mt-1 mb-2">
+                    <div class="col-md-6">
+                      <div class="small text-muted mb-1">Enviado (desired)</div>
+                      <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.desired_payload|json_pretty }}</code></pre>
+                    </div>
+                    <div class="col-md-6">
+                      <div class="small text-muted mb-1">Recibido (reported)</div>
+                      {% if config.reported_payload %}
+                      <pre class="border rounded p-2 mb-0 small bg-white"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+                      {% else %}
+                      <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
+                      {% endif %}
+                    </div>
+                  </div>
+                </details>
               </td>
             </tr>
-            {% endif %}
             {% else %}
             <tr><td colspan="3" class="text-muted">Sin configs.</td></tr>
             {% endfor %}
