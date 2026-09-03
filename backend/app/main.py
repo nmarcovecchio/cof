@@ -537,6 +537,10 @@ def default_device_config(device: Device) -> dict:
                 "format": "wav_pcm_8000_mono_16bit",
             }
         ],
+        "notifications": {
+            "email": "",
+            "telegram_chat_id": "",
+        },
         "rules": [],
         "flows": [],
     }
@@ -561,7 +565,11 @@ def serialize_device(device: Device) -> dict:
 
 
 def render_config_form(device, payload: str, error: str | None = None) -> str:
-    return render_template("config_form.html", device=device, payload=payload, error=error)
+    try:
+        cfg = json.loads(payload) if isinstance(payload, str) else payload
+    except Exception:
+        cfg = {}
+    return render_template("config_form.html", device=device, payload=payload, cfg=cfg, error=error)
 
 
 app = create_app()

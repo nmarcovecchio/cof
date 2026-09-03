@@ -7,26 +7,292 @@
   <a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">&larr; Volver al dispositivo</a>
 </div>
 
-<div class="card shadow-sm">
-  <div class="card-body">
-    <h1 class="h3">Configuracion de {{ device.device_uid }}</h1>
-    <p class="text-muted">
-      Al guardar, el backend publica este JSON en
-      <code>devices/{{ device.device_uid }}/config/desired</code> con retained message.
-    </p>
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
 
-    {% if error %}
-    <div class="alert alert-danger">{{ error }}</div>
-    {% endif %}
+<form method="post" id="config-form">
+  {{ csrf_field() }}
+  {# Hidden field that gets populated by JS before submit #}
+  <input type="hidden" name="payload" id="payload-hidden">
 
-    <form method="post">
-      {{ csrf_field() }}
-      <div class="mb-3">
-        <label class="form-label" for="payload">JSON config</label>
-        <textarea class="form-control font-monospace" id="payload" name="payload" rows="28">{{ payload }}</textarea>
+  {# ── General ───────────────────────────────────────────────────── #}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header fw-semibold">General</div>
+    <div class="card-body row g-3">
+      <div class="col-md-4">
+        <label class="form-label">Intervalo de telemetría (segundos)</label>
+        <input type="number" class="form-control" id="telemetry_interval" min="10" max="3600" value="{{ cfg.telemetry_interval_seconds | default(60) }}">
       </div>
-      <button class="btn btn-primary" type="submit">Guardar y publicar config</button>
-    </form>
+    </div>
   </div>
-</div>
+
+  {# ── Llamadas ──────────────────────────────────────────────────── #}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header fw-semibold">Llamadas telefónicas</div>
+    <div class="card-body row g-3">
+      <div class="col-auto d-flex align-items-center gap-2">
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" id="calling_enabled" {% if cfg.calling and cfg.calling.enabled %}checked{% endif %}>
+          <label class="form-check-label" for="calling_enabled">Habilitado</label>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Máx. intentos por alarma</label>
+        <input type="number" class="form-control" id="calling_max_attempts" min="0" max="10" value="{{ cfg.calling.max_attempts_per_alarm | default(3) if cfg.calling else 3 }}">
+      </div>
+    </div>
+  </div>
+
+  {# ── Sensores ──────────────────────────────────────────────────── #}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header fw-semibold">Sensores</div>
+    <div class="card-body p-0">
+      <table class="table table-sm mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Tipo</th>
+            <th>Habilitado</th>
+          </tr>
+        </thead>
+        <tbody id="sensors-tbody">
+          {% for s in cfg.sensors | default([]) %}
+          <tr data-sensor-id="{{ s.id }}" data-sensor-source="{{ s.source }}" data-sensor-type="{{ s.type }}">
+            <td><code>{{ s.id }}</code></td>
+            <td>
+              <input type="text" class="form-control form-control-sm sensor-name" value="{{ s.name }}">
+            </td>
+            <td><span class="badge bg-secondary">{{ s.type }}</span></td>
+            <td>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input sensor-enabled" type="checkbox" {% if s.enabled %}checked{% endif %}>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ── Notificaciones ────────────────────────────────────────────── #}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header fw-semibold">Notificaciones</div>
+    <div class="card-body row g-3">
+      <div class="col-md-5">
+        <label class="form-label">Email de alerta</label>
+        <input type="email" class="form-control" id="notify_email" placeholder="ejemplo@dominio.com" value="{{ cfg.notifications.email | default('') if cfg.notifications else '' }}">
+        <div class="form-text">Dejar vacío para no enviar email.</div>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">Telegram Chat ID</label>
+        <input type="text" class="form-control" id="notify_telegram" placeholder="Ej: -1001234567890" value="{{ cfg.notifications.telegram_chat_id | default('') if cfg.notifications else '' }}">
+        <div class="form-text">Obtené tu chat ID hablando con <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a>.</div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Reglas de alarma ──────────────────────────────────────────── #}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+      <span>Reglas de alarma</span>
+      <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRule()">+ Agregar regla</button>
+    </div>
+    <div class="card-body" id="rules-container">
+      {% if cfg.rules %}
+        {% for rule in cfg.rules %}
+        <div class="rule-row border rounded p-3 mb-2 bg-light" data-rule='{{ rule | tojson }}'>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="text-muted mb-0" id="no-rules-msg">No hay reglas configuradas. Agregá una.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-4">
+    <button type="submit" class="btn btn-primary">Guardar y publicar config</button>
+    <a href="{{ url_for('device_detail', device_uid=device.device_uid) }}" class="btn btn-outline-secondary">Cancelar</a>
+  </div>
+</form>
+
+{# Template invisible para una fila de regla #}
+<template id="rule-template">
+  <div class="rule-row border rounded p-3 mb-2 bg-light">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label small mb-1">Sensor</label>
+        <select class="form-select form-select-sm rule-sensor">
+          <option value="">— elegir —</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small mb-1">Condición</label>
+        <select class="form-select form-select-sm rule-operator">
+          <option value="gt">&gt; mayor que</option>
+          <option value="lt">&lt; menor que</option>
+          <option value="gte">&ge; mayor o igual</option>
+          <option value="lte">&le; menor o igual</option>
+          <option value="eq">= igual a</option>
+          <option value="ne">&ne; distinto de</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small mb-1">Valor umbral</label>
+        <input type="number" class="form-control form-control-sm rule-threshold" step="any" placeholder="Ej: 40">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small mb-1">Durante (seg)</label>
+        <input type="number" class="form-control form-control-sm rule-duration" min="0" value="0" placeholder="0 = inmediato">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Acciones</label>
+        <div class="d-flex flex-wrap gap-2">
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="call" id="">
+            <label class="form-check-label small">📞 Llamada</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="sms">
+            <label class="form-check-label small">📱 SMS</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="email">
+            <label class="form-check-label small">📧 Email</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="telegram">
+            <label class="form-check-label small">💬 Telegram</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="log_only">
+            <label class="form-check-label small">📝 Solo log</label>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-1 text-end">
+        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRule(this)">🗑</button>
+      </div>
+    </div>
+    <div class="row g-2 mt-1">
+      <div class="col-12">
+        <label class="form-label small mb-1">Descripción (opcional)</label>
+        <input type="text" class="form-control form-control-sm rule-description" placeholder="Ej: Temperatura alta en sala de servidores">
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+// Sensors list from server (for rule sensor selects)
+const SENSORS = [
+  {% for s in cfg.sensors | default([]) %}
+  { id: "{{ s.id }}", name: "{{ s.name }}", type: "{{ s.type }}", enabled: {{ 'true' if s.enabled else 'false' }} },
+  {% endfor %}
+];
+
+// Existing rules from server
+const EXISTING_RULES = {{ cfg.rules | default([]) | tojson }};
+
+function getSensorOptions(selectedId) {
+  return SENSORS.map(s =>
+    `<option value="${s.id}" ${s.id === selectedId ? 'selected' : ''}>${s.name} (${s.type})</option>`
+  ).join('');
+}
+
+function addRule(rule) {
+  const tmpl = document.getElementById('rule-template');
+  const clone = tmpl.content.cloneNode(true);
+  const row = clone.querySelector('.rule-row');
+
+  // Populate sensor select
+  const sensorSelect = row.querySelector('.rule-sensor');
+  sensorSelect.innerHTML = '<option value="">— elegir —</option>' + getSensorOptions(rule?.sensor_id || '');
+
+  // Fill values if editing existing
+  if (rule) {
+    row.querySelector('.rule-operator').value = rule.operator || 'gt';
+    row.querySelector('.rule-threshold').value = rule.threshold ?? '';
+    row.querySelector('.rule-duration').value = rule.duration_seconds ?? 0;
+    row.querySelector('.rule-description').value = rule.description || '';
+    const actions = rule.actions || [];
+    row.querySelectorAll('.rule-action').forEach(cb => {
+      cb.checked = actions.includes(cb.value);
+    });
+  }
+
+  document.getElementById('rules-container').appendChild(clone);
+
+  const noMsg = document.getElementById('no-rules-msg');
+  if (noMsg) noMsg.remove();
+}
+
+function removeRule(btn) {
+  btn.closest('.rule-row').remove();
+  if (!document.querySelectorAll('.rule-row').length) {
+    const container = document.getElementById('rules-container');
+    container.innerHTML = '<p class="text-muted mb-0" id="no-rules-msg">No hay reglas configuradas. Agregá una.</p>';
+  }
+}
+
+// Load existing rules
+EXISTING_RULES.forEach(r => addRule(r));
+
+// Remove placeholder rule-row divs from Jinja (replaced by addRule)
+document.querySelectorAll('.rule-row[data-rule]').forEach(el => el.remove());
+
+// Build JSON and submit
+document.getElementById('config-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+
+  // Sensors
+  const sensors = [];
+  document.querySelectorAll('#sensors-tbody tr').forEach(tr => {
+    sensors.push({
+      id: tr.dataset.sensorId,
+      name: tr.querySelector('.sensor-name').value,
+      type: tr.dataset.sensorType,
+      enabled: tr.querySelector('.sensor-enabled').checked,
+      source: tr.dataset.sensorSource,
+    });
+  });
+
+  // Rules
+  const rules = [];
+  document.querySelectorAll('.rule-row').forEach(row => {
+    const sensorId = row.querySelector('.rule-sensor').value;
+    if (!sensorId) return; // skip incomplete
+    const actions = [...row.querySelectorAll('.rule-action:checked')].map(cb => cb.value);
+    rules.push({
+      sensor_id: sensorId,
+      operator: row.querySelector('.rule-operator').value,
+      threshold: parseFloat(row.querySelector('.rule-threshold').value),
+      duration_seconds: parseInt(row.querySelector('.rule-duration').value) || 0,
+      actions: actions,
+      description: row.querySelector('.rule-description').value,
+    });
+  });
+
+  // Notifications
+  const notifications = {
+    email: document.getElementById('notify_email').value.trim(),
+    telegram_chat_id: document.getElementById('notify_telegram').value.trim(),
+  };
+
+  const payload = {{ cfg | tojson }};
+  payload.telemetry_interval_seconds = parseInt(document.getElementById('telemetry_interval').value);
+  payload.calling = {
+    enabled: document.getElementById('calling_enabled').checked,
+    max_attempts_per_alarm: parseInt(document.getElementById('calling_max_attempts').value),
+  };
+  payload.sensors = sensors;
+  payload.rules = rules;
+  payload.notifications = notifications;
+
+  document.getElementById('payload-hidden').value = JSON.stringify(payload);
+  this.submit();
+});
+</script>
 {% endblock %}
