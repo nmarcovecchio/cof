@@ -131,7 +131,7 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.15+. Si el ACK dice unsupported, primero pulsá OTA.
+        Requiere firmware 0.2.18+ para IMS/radio y fallback GSM. Si el ACK dice unsupported, primero pulsá OTA.
       </p>
     </form>
     {% endif %}
@@ -197,6 +197,17 @@
             {% endif %}
             {% if cell.get('smsc') %}
               <span class="badge text-bg-light border">SMSC {{ cell.get('smsc') }}</span>
+            {% endif %}
+            {% if cell.get('model') %}
+              <span class="badge text-bg-light border">{{ cell.get('model') }}</span>
+            {% endif %}
+            {% if cell.get('radio') %}
+              <span class="badge text-bg-light border">{{ cell.get('radio') }}</span>
+            {% endif %}
+            {% if cell.get('ims') is not none %}
+              <span class="badge text-bg-{{ 'success' if cell.get('ims') else 'warning' }} border">
+                IMS {{ 'OK' if cell.get('ims') else 'NO' }}
+              </span>
             {% endif %}
           {% endif %}
           {% if device.discovered.get('pcf8574') %}

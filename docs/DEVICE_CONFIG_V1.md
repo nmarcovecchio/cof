@@ -354,6 +354,14 @@ Example:
     "sht31": true,
     "pcf8574": true,
     "modem": true,
+    "cellular": {
+      "registered": true,
+      "radio": "LTE",
+      "model": "A7672SA-FASE",
+      "ims": false,
+      "csq": 31,
+      "operator": "722310"
+    },
     "ds18b20_count": 2,
     "ds18b20": [
       "28FF641D4C1603A1",
@@ -477,7 +485,10 @@ alarm calls still require `calling.enabled=true`.
 ```
 
 The device ACKs immediately, syncs test audio if the manifest version changed,
-then publishes an `event` of type `test_call` with the result.
+then publishes an `event` of type `test_call` with the result. Firmware 0.2.18+
+reports radio/IMS in the event (`[LTE IMS=0 gsm fallback A7672SA...]`). If IMS
+is not registered on LTE, the device forces GSM (`AT+CNMP=13`) before dialing
+and restores automatic mode afterwards.
 
 ### Test SMS
 

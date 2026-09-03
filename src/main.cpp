@@ -64,6 +64,13 @@ struct RuntimeState {
   String operatorName = "";
   String smsc = "";
   String apn = COF_MODEM_APN;
+  String modemModel = "";
+  String radioInfo = "";
+  String radioMode = "";
+  int cnmp = -1;
+  int imsVoice = -1;
+  int imsReg = -1;
+  bool forcedGsmForCall = false;
   bool callInProgress = false;
   bool otaInProgress = false;
   bool audioSyncInProgress = false;
@@ -581,6 +588,13 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   cellular["operator"] = state.operatorName;
   cellular["apn"] = state.apn;
   cellular["smsc"] = state.smsc;
+  cellular["model"] = state.modemModel;
+  cellular["radio"] = state.radioMode;
+  cellular["cpsi"] = state.radioInfo;
+  cellular["cnmp"] = state.cnmp;
+  cellular["ims"] = state.imsReg == 1;
+  cellular["ims_reg"] = state.imsReg;
+  cellular["ims_voice"] = state.imsVoice;
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
   for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
@@ -1006,6 +1020,45 @@ String extractQuoted(const String& response) {
   return response.substring(start + 1, end);
 }
 
+String firstNonEmptyAtLine(const String& response) {
+  int start = 0;
+  while (start < static_cast<int>(response.length())) {
+    int end = response.indexOf('\n', start);
+    if (end < 0) {
+      end = response.length();
+    }
+    String line = response.substring(start, end);
+    line.replace("\r", "");
+    line.trim();
+    start = end + 1;
+    if (line.length() == 0 || line == "OK" || line == "ERROR" || line.startsWith("AT")) {
+      continue;
+    }
+    return line;
+  }
+  return "";
+}
+
+String extractAtTagValue(const String& response, const char* tag) {
+  const int idx = response.indexOf(tag);
+  if (idx < 0) {
+    return "";
+  }
+  int start = idx + static_cast<int>(strlen(tag));
+  while (start < static_cast<int>(response.length()) &&
+         (response[start] == ' ' || response[start] == ':')) {
+    start++;
+  }
+  int end = start;
+  while (end < static_cast<int>(response.length()) &&
+         response[end] != '\r' && response[end] != '\n') {
+    end++;
+  }
+  String value = response.substring(start, end);
+  value.trim();
+  return value;
+}
+
 bool networkStatRegistered(int stat) {
   return stat == 1 || stat == 5;
 }
@@ -1039,19 +1092,53 @@ void refreshCellularStatus() {
       state.signalQuality = response.substring(marker + 5).toInt();
     }
   }
+  if (state.modemModel.length() == 0 && sendAT("AT+CGMM", "OK", 2000, &response)) {
+    const String model = firstNonEmptyAtLine(response);
+    if (model.length() > 0) {
+      state.modemModel = model;
+    }
+  }
+  if (sendAT("AT+CPSI?", "OK", 3000, &response)) {
+    String cpsi = extractAtTagValue(response, "+CPSI:");
+    if (cpsi.length() > 96) {
+      cpsi = cpsi.substring(0, 96);
+    }
+    if (cpsi.length() > 0) {
+      state.radioInfo = cpsi;
+      const int comma = cpsi.indexOf(',');
+      state.radioMode = comma >= 0 ? cpsi.substring(0, comma) : cpsi;
+      state.radioMode.trim();
+    }
+  }
+  if (sendAT("AT+CNMP?", "OK", 2000, &response)) {
+    state.cnmp = extractAtTagValue(response, "+CNMP:").toInt();
+  }
+  if (sendAT("AT+CAVIMS?", "OK", 2000, &response)) {
+    state.imsVoice = extractAtTagValue(response, "+CAVIMS:").toInt();
+  }
+  if (sendAT("AT+CIREG?", "OK", 2000, &response)) {
+    const String value = extractAtTagValue(response, "+CIREG:");
+    const int comma = value.lastIndexOf(',');
+    if (comma >= 0) {
+      state.imsReg = value.substring(comma + 1).toInt();
+    } else if (value.length() > 0) {
+      state.imsReg = value.toInt();
+    }
+  }
 
   state.networkRegistered = networkStatRegistered(state.cregStat) ||
                             networkStatRegistered(state.ceregStat) ||
                             networkStatRegistered(state.cgregStat);
 
-  Serial.printf("[modem] net registered=%s creg=%d cereg=%d cgreg=%d csq=%d op=%s smsc=%s\n",
+  Serial.printf("[modem] net registered=%s radio=%s ims=%d creg=%d cereg=%d csq=%d op=%s model=%s\n",
                 state.networkRegistered ? "yes" : "no",
+                state.radioMode.c_str(),
+                state.imsReg,
                 state.cregStat,
                 state.ceregStat,
-                state.cgregStat,
                 state.signalQuality,
                 state.operatorName.c_str(),
-                state.smsc.c_str());
+                state.modemModel.c_str());
 }
 
 void configureCellularApn() {
@@ -1062,7 +1149,11 @@ void configureCellularApn() {
   sendAT("AT+CGATT=1", "OK", 15000);
   sendAT("AT+CGSMS=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
+  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEVDP=3", "OK", 3000);
   sendAT("AT+CAVIMS=1", "OK", 3000);
+  sendAT("AT+CIREG=2", "OK", 2000);
+  sendAT("AT+CGDCONT=2,\"IP\",\"ims\"", "OK", 3000);
   sendAT("AT+CRC=1", "OK", 2000);
   sendAT("AT+CVHU=0", "OK", 2000);
 
@@ -1113,6 +1204,9 @@ bool initModem() {
   sendAT("ATI", "OK", 2000);
 
   String response;
+  if (sendAT("AT+CGMM", "OK", 2000, &response)) {
+    state.modemModel = firstNonEmptyAtLine(response);
+  }
   if (sendAT("AT+CPIN?", "OK", 2000, &response)) {
     state.simReady = response.indexOf("READY") >= 0;
   }
@@ -1353,6 +1447,75 @@ String classifyCallUrc(const String& raw) {
   return "";
 }
 
+bool radioIsGsm() {
+  return state.radioMode.indexOf("GSM") >= 0;
+}
+
+bool imsVoiceReady() {
+  return state.imsReg == 1;
+}
+
+bool waitForGsmAttach(uint32_t timeoutMs) {
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < timeoutMs) {
+    feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
+    refreshCellularStatus();
+    if (radioIsGsm() && networkStatRegistered(state.cregStat)) {
+      return true;
+    }
+    waitWithWatchdog(2000);
+  }
+  return radioIsGsm() && networkStatRegistered(state.cregStat);
+}
+
+String prepareVoiceBearer() {
+  refreshCellularStatus();
+  if (imsVoiceReady()) {
+    return "ims";
+  }
+  if (radioIsGsm()) {
+    return "gsm";
+  }
+
+  setStatus("Voice via GSM");
+  Serial.println("[call] LTE without IMS, forcing GSM for voice");
+  if (!sendAT("AT+CNMP=13", "OK", 10000)) {
+    return "gsm force fail";
+  }
+  state.forcedGsmForCall = true;
+  if (waitForGsmAttach(25000)) {
+    return "gsm fallback";
+  }
+  return "gsm attach fail";
+}
+
+void restoreAutoRadio() {
+  if (!state.forcedGsmForCall) {
+    return;
+  }
+  state.forcedGsmForCall = false;
+  sendAT("AT+CNMP=2", "OK", 10000);
+  waitWithWatchdog(1500);
+}
+
+String voiceContextSuffix(const String& bearer) {
+  String suffix = " [";
+  suffix += state.radioMode.length() > 0 ? state.radioMode : "?";
+  suffix += " IMS=";
+  suffix += String(state.imsReg);
+  suffix += " ";
+  suffix += bearer;
+  if (state.modemModel.length() > 0) {
+    suffix += " ";
+    suffix += state.modemModel;
+  }
+  suffix += "]";
+  return suffix;
+}
+
 String waitForOutgoingCall(uint32_t timeoutMs) {
   bool sawDialing = false;
   bool sawAlerting = false;
@@ -1435,20 +1598,24 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     checkManifest(false);
   }
 
+  const String bearer = prepareVoiceBearer();
   state.callInProgress = true;
   setStatus("Calling");
   if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
+    sendAT("ATH", "OK", 3000);
+    restoreAutoRadio();
     state.callInProgress = false;
     setStatus("Call failed");
-    return "Call failed";
+    return "Call failed" + voiceContextSuffix(bearer);
   }
 
   const String progress = waitForOutgoingCall(35000);
   if (progress != "Call connected") {
     sendAT("ATH", "OK", 3000);
+    restoreAutoRadio();
     state.callInProgress = false;
     setStatus(progress);
-    return progress;
+    return progress + voiceContextSuffix(bearer);
   }
 
   waitWithWatchdog(1500);
@@ -1457,9 +1624,10 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   readModemUntil(45000, "+AUDIOSTATE: audio play stop");
   sendAT("ATH", "OK", 5000);
 
+  restoreAutoRadio();
   state.callInProgress = false;
   setStatus("Call done");
-  return "Call done";
+  return "Call done" + voiceContextSuffix(bearer);
 }
 
 String resolveTestPhone(const String& phoneOverride) {

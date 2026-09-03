@@ -276,9 +276,11 @@ Para forzar chequeo OTA desde la web:
 http://IP_DEL_VPS/devices/cof-test
 ```
 
-Click en `Probar SMS` o `Probar llamada` (firmware 0.2.14+) para mandar un SMS
+Click en `Probar SMS` o `Probar llamada` (firmware 0.2.18+) para mandar un SMS
 o marcar un numero y reproducir el WAV de prueba. El backend publica `test_sms`
 o `test_call` en `devices/<id>/command`. Si el ACK dice `unsupported`, primero `OTA`.
+El estado celular incluye radio, modelo e IMS; si no hay VoLTE, la llamada de
+prueba fuerza 2G.
 
 Click en `Forzar chequeo OTA`. El backend publica:
 
