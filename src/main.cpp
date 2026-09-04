@@ -1648,12 +1648,26 @@ String prepareVoiceBearer() {
 void bounceRadioForCsfb() {
   setStatus("Voice retry");
   Serial.println("[call] bouncing radio for CSFB retry");
-  sendAT("AT+CNMP=13", "OK", 8000);
-  waitWithWatchdog(4000);
+  sendAT("ATH", "OK", 3000);
+  sendAT("AT+CHUP", "OK", 3000);
+  sendAT("AT+CNMP=13", "OK", 10000);
+  waitWithWatchdog(15000);
   sendAT("AT+CNMP=2", "OK", 10000);
   state.forcedGsmForCall = false;
   persistSkipGsm(true);
+  waitForRadioService(30000, false);
+}
+
+void restorePacketServices() {
+  setStatus("Restore data");
+  sendAT("ATH", "OK", 2000);
+  sendAT("AT+CHUP", "OK", 2000);
+  sendAT("AT+CNMP=2", "OK", 10000);
   waitForRadioService(25000, false);
+  sendAT("AT+CGATT=1", "OK", 15000);
+  sendAT("AT+CGSMS=1", "OK", 3000);
+  sendAT("AT+CMGF=1", "OK", 3000);
+  sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
 }
 
 bool shouldRetryVoice(const String& result) {
@@ -1839,6 +1853,7 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   }
 
   restoreAutoRadio();
+  restorePacketServices();
   state.callInProgress = false;
   return result;
 }
@@ -1853,27 +1868,7 @@ String resolveTestPhone(const String& phoneOverride) {
   return phone;
 }
 
-String sendTestSms(const String& phoneOverride, const String& text) {
-  if (!state.modemReady || !state.simReady) {
-    setStatus("No modem/SIM");
-    return "No modem/SIM";
-  }
-
-  const String phone = resolveTestPhone(phoneOverride);
-  if (!phoneLooksValid(phone)) {
-    setStatus("No phone cfg");
-    return "No phone cfg";
-  }
-
-  String body = text;
-  body.trim();
-  if (body.length() == 0) {
-    body = "CallOnFail prueba SMS";
-  }
-  if (body.length() > 160) {
-    body = body.substring(0, 160);
-  }
-
+String transmitSms(const String& phone, const String& body) {
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
     setStatus("SMS mode fail");
     return "SMS mode fail";
@@ -1907,6 +1902,39 @@ String sendTestSms(const String& phoneOverride, const String& text) {
 
   setStatus("SMS sent");
   return "SMS sent";
+}
+
+String sendTestSms(const String& phoneOverride, const String& text) {
+  if (!state.modemReady || !state.simReady) {
+    setStatus("No modem/SIM");
+    return "No modem/SIM";
+  }
+
+  const String phone = resolveTestPhone(phoneOverride);
+  if (!phoneLooksValid(phone)) {
+    setStatus("No phone cfg");
+    return "No phone cfg";
+  }
+
+  String body = text;
+  body.trim();
+  if (body.length() == 0) {
+    body = "CallOnFail prueba SMS";
+  }
+  if (body.length() > 160) {
+    body = body.substring(0, 160);
+  }
+
+  if (!radioHasService()) {
+    restorePacketServices();
+  }
+
+  String result = transmitSms(phone, body);
+  if (!result.startsWith("SMS sent")) {
+    restorePacketServices();
+    result = transmitSms(phone, body);
+  }
+  return result;
 }
 
 void handleButton() {
