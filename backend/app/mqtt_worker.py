@@ -121,14 +121,6 @@ def persist_message(topic, payload):
             device.ip_address = payload.get("ip") or payload.get("ip_address") or device.ip_address
 
             if message_type == "telemetry":
-                if isinstance(payload.get("cellular"), dict):
-                    discovered = dict(device.discovered or {})
-                    current = dict(discovered.get("cellular") or {})
-                    current.update(payload["cellular"])
-                    current["received_at"] = utcnow().isoformat()
-                    discovered["cellular"] = current
-                    device.discovered = discovered
-                    flag_modified(device, "discovered")
                 db.session.add(
                     Telemetry(
                         device_id=device.id,
