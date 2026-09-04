@@ -125,6 +125,7 @@ def persist_message(topic, payload):
                     discovered = dict(device.discovered or {})
                     current = dict(discovered.get("cellular") or {})
                     current.update(payload["cellular"])
+                    current["received_at"] = utcnow().isoformat()
                     discovered["cellular"] = current
                     device.discovered = discovered
                     flag_modified(device, "discovered")
@@ -162,7 +163,13 @@ def persist_message(topic, payload):
                 if isinstance(payload.get("capabilities"), dict):
                     device.capabilities = payload["capabilities"]
                 if isinstance(payload.get("discovered"), dict):
-                    device.discovered = payload["discovered"]
+                    discovered = dict(payload["discovered"])
+                    cell = dict(discovered.get("cellular") or {})
+                    if cell:
+                        cell["received_at"] = utcnow().isoformat()
+                        discovered["cellular"] = cell
+                    device.discovered = discovered
+                    flag_modified(device, "discovered")
             elif message_type == "config/reported":
                 version = to_int(payload.get("config_version"))
                 if version is not None:

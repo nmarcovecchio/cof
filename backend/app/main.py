@@ -99,8 +99,14 @@ def create_app() -> Flask:
 
     @app.template_filter("datetime_local")
     def datetime_local(value):
-        if value is None:
+        if value is None or value == "":
             return "-"
+
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return value
 
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
@@ -373,7 +379,7 @@ def create_app() -> Flask:
         recent_telemetry = (
             Telemetry.query.filter_by(device_id=device.id).order_by(Telemetry.received_at.desc()).limit(20).all()
         )
-        recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(40).all()
+        recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
         return render_template(
             "device_detail.html",

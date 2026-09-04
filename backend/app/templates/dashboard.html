@@ -143,7 +143,7 @@
             <code class="small">{{ event.type }}</code>
             <span class="small text-muted">{{ event.device.device_uid }}</span>
           </div>
-          <div class="event-message">{{ event.message or '-' }}</div>
+          <div class="event-message" title="{{ event.message or '-' }}">{{ event.message or '-' }}</div>
           <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
         </li>
         {% endfor %}

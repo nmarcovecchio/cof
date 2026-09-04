@@ -66,6 +66,9 @@
             <div class="meta-value">{{ cell.get('operator') or '-' }}</div>
           </div>
         </div>
+        <div class="small text-muted mt-3">
+          Actualizado {{ cell.get('received_at')|datetime_local }}
+        </div>
       {% endif %}
     </div>
   </div>

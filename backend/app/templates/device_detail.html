@@ -303,7 +303,7 @@
                 {% endif %}
                 <code class="small">{{ event.type }}</code>
               </div>
-              <div class="event-message">{{ event.message or 'Sin mensaje' }}</div>
+              <div class="event-message" title="{{ event.message or 'Sin mensaje' }}">{{ event.message or 'Sin mensaje' }}</div>
               <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
             </div>
             <button
@@ -358,14 +358,14 @@
               type="button"
               data-bs-toggle="collapse"
               data-bs-target="#config-payload-{{ config.id }}"
-              aria-expanded="{{ 'true' if config.status != 'applied' else 'false' }}"
+              aria-expanded="false"
               aria-controls="config-payload-{{ config.id }}"
               title="Ver desired / reported"
             >
               <i class="bi bi-eye"></i>
             </button>
           </div>
-          <div class="collapse{% if config.status != 'applied' %} show{% endif %}" id="config-payload-{{ config.id }}">
+          <div class="collapse" id="config-payload-{{ config.id }}">
             <div class="payload-panel">
               <div class="mb-3">
                 <div class="meta-label">Enviado (desired)</div>

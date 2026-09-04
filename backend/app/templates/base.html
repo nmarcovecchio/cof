@@ -89,7 +89,8 @@
       pre.json-box,
       pre code {
         max-width: 100%;
-        overflow-x: auto;
+        max-height: 14rem;
+        overflow: auto;
         white-space: pre-wrap;
         word-break: break-word;
       }
@@ -99,6 +100,11 @@
         list-style: none;
         margin: 0;
         padding: 0;
+      }
+
+      .event-list {
+        max-height: 26rem;
+        overflow: auto;
       }
 
       .event-item,
@@ -140,6 +146,13 @@
         color: var(--cof-muted);
         font-size: 0.875rem;
         overflow-wrap: anywhere;
+      }
+
+      .event-message {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
       }
 
       .event-time,
