@@ -66,9 +66,9 @@
           <td><a class="text-decoration-none" href="{{ url_for('device_detail', device_uid=device.device_uid) }}"><code>{{ device.device_uid }}</code></a></td>
           <td>{{ device.name }}</td>
           <td>
-            <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
+            <span class="badge text-bg-{{ 'success' if device|device_live else 'secondary' }}">{{ 'online' if device|device_live else 'offline' }}</span>
           </td>
-          <td>{{ cellular_summary(device.discovered.get('cellular') if device.discovered else none) }}</td>
+          <td>{{ cellular_summary(device.discovered.get('cellular') if device.discovered else none, device) }}</td>
           <td class="small">{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>

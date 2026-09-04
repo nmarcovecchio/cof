@@ -29,7 +29,7 @@
       {% if device.archived_at %}
       <span class="badge text-bg-dark">archivado</span>
       {% else %}
-      <span class="badge text-bg-{{ 'success' if device.status == 'online' else 'secondary' }}">{{ device.status }}</span>
+      <span class="badge text-bg-{{ 'success' if device|device_live else 'secondary' }}">{{ 'online' if device|device_live else 'offline' }}</span>
       {% endif %}
     </div>
 
@@ -58,7 +58,7 @@
   </div>
 </div>
 
-{{ cellular_card(device.discovered.get('cellular') if device.discovered else none) }}
+{{ cellular_card(device.discovered.get('cellular') if device.discovered else none, device) }}
 
 <div class="card mb-4">
   <div class="card-body">

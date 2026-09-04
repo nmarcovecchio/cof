@@ -52,6 +52,47 @@ def cellular_signal(csq):
     return {"tone": "danger", "label": "Debil", "bars": 1, "csq": value}
 
 
+def parse_utc(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def is_fresh(value, max_age_seconds: int = 180) -> bool:
+    dt = parse_utc(value)
+    if dt is None:
+        return False
+    return (datetime.now(timezone.utc) - dt).total_seconds() < max_age_seconds
+
+
+def device_is_live(device) -> bool:
+    if device is None or getattr(device, "archived_at", None) is not None:
+        return False
+    return is_fresh(getattr(device, "last_seen_at", None), 180)
+
+
+def cellular_is_current(cell, device=None) -> bool:
+    if not device_is_live(device):
+        return False
+    if not isinstance(cell, dict) or not cell:
+        return False
+    received = cell.get("received_at")
+    if received:
+        return is_fresh(received, 12 * 60)
+    return True
+
+
 def cellular_lte_ok(cell):
     if not isinstance(cell, dict):
         return False
@@ -140,6 +181,10 @@ def create_app() -> Flask:
     @app.template_filter("cellular_lte_ok")
     def cellular_lte_ok_filter(cell):
         return cellular_lte_ok(cell)
+
+    @app.template_filter("device_live")
+    def device_live_filter(device):
+        return device_is_live(device)
 
     @app.before_request
     def csrf_protect():
