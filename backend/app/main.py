@@ -7,6 +7,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from functools import wraps
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
@@ -495,6 +496,17 @@ def create_app() -> Flask:
     @login_required
     def device_command_ota_check(device_uid):
         return send_device_command(device_uid, "ota_check", "OTA check command sent")
+
+    @app.get("/ota/firmware.bin")
+    def ota_firmware_bin():
+        path = Path(os.environ.get("OTA_DIR", "/opt/cof-ota")) / "firmware.bin"
+        if not path.is_file():
+            abort(404)
+        data = path.read_bytes()
+        resp = app.response_class(data, mimetype="application/octet-stream")
+        resp.headers["Content-Length"] = str(len(data))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.post("/devices/<device_uid>/commands/status-report")
     @login_required

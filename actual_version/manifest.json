@@ -1,7 +1,7 @@
 {
   "firmware": {
     "version": "0.2.31",
-    "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/firmware.bin",
+    "url": "https://app.callonfail.com.ar/ota/firmware.bin",
     "sha256": "0da7e67c55933f42622292316d604194e4919c306da5f772b378547eacc40c3e"
   },
   "audio": {

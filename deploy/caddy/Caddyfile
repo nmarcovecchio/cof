@@ -3,6 +3,13 @@
 }
 
 {$APP_DOMAIN} {
+	handle /ota/* {
+		root * /srv/ota
+		uri strip_prefix /ota
+		header Content-Type application/octet-stream
+		header Cache-Control "no-store"
+		file_server
+	}
 	reverse_proxy web:8000
 }
 

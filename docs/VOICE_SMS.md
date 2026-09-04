@@ -156,7 +156,12 @@ is AMR.
 cd /opt/callonfail
 git pull
 docker compose up -d --build web
+docker compose up -d caddy
 ```
+
+Firmware OTA reads the GitHub manifest, then downloads
+`https://app.callonfail.com.ar/ota/firmware.bin` from this VPS (same host as TTS).
+Do that deploy **before** pressing OTA on a 0.2.30 device.
 
 Device must already be on firmware `>= 0.2.31` (OTA) to download AMR `audio_url`.
 If ACK is `unsupported`, OTA first.
