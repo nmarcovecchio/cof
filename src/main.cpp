@@ -133,6 +133,7 @@ bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
+bool reportTestCallProgress = false;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
 String pendingTestSmsText = "";
@@ -667,6 +668,17 @@ void publishDeviceEvent(const char* type, const char* severity, const String& me
   doc["severity"] = severity;
   doc["message"] = message;
   publishMqttJson("event", doc, false, 1);
+}
+
+void publishTestCallProgress(const String& message) {
+  if (!reportTestCallProgress) {
+    return;
+  }
+  setStatus(message);
+  if (state.mqttConnected) {
+    mqttClient.loop();
+    publishDeviceEvent("test_call", "info", message);
+  }
 }
 
 void waitWithWatchdog(uint32_t ms) {
@@ -1778,7 +1790,7 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
     return "Call failed" + voiceContextSuffix(bearer, ceer);
   }
 
-  const String progress = waitForOutgoingCall(35000);
+  const String progress = waitForOutgoingCall(45000);
   refreshRadioMode();
   state.radioAtConnect = state.radioMode;
   const String observed = observeVoicePath(state.radioAtDial, state.radioAtConnect);
@@ -1833,6 +1845,7 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
   bool sawAlerting = false;
   const uint32_t startedAt = millis();
   uint32_t lastRadioSampleMs = startedAt;
+  constexpr uint32_t kCsfbIgnoreMs = 15000;
 
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
@@ -1843,16 +1856,24 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
     const String urc = readModemUntil(700, "");
     const String urcResult = classifyCallUrc(urc);
     if (urcResult.length() > 0) {
-      if (urcResult == "Call no carrier" && sawAlerting) {
-        return "Call no answer";
+      if (urcResult == "Call no carrier") {
+        if (sawAlerting) {
+          return "Call no answer";
+        }
+        if (millis() - startedAt < kCsfbIgnoreMs) {
+          setStatus("CSFB wait");
+        } else {
+          return urcResult;
+        }
+      } else {
+        return urcResult;
       }
-      return urcResult;
     }
 
     String clcc;
     if (sendAT("AT+CLCC", "OK", 1500, &clcc)) {
       const String clccResult = classifyCallUrc(clcc);
-      if (clccResult.length() > 0) {
+      if (clccResult.length() > 0 && clccResult != "Call no carrier") {
         return clccResult;
       }
       const int stat = parseClccStat(clcc);
@@ -1871,7 +1892,7 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
       lastRadioSampleMs = millis();
       refreshRadioMode();
     }
-    delay(300);
+    waitWithWatchdog(300);
   }
 
   if (sawAlerting) {
@@ -1918,11 +1939,14 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
 
   state.callInProgress = true;
   String bearer = prepareVoiceBearer();
+  publishTestCallProgress("Dialing, waiting CSFB");
   String result = dialAndMaybePlay(phone, bearer);
   if (shouldRetryVoice(result)) {
+    publishTestCallProgress("No carrier, bouncing radio");
     bounceRadioForCsfb();
     refreshCellularStatus();
     bearer = imsVoiceReady() ? "ims after bounce" : "csfb retry";
+    publishTestCallProgress("Retrying call");
     result = dialAndMaybePlay(phone, bearer);
   }
 
@@ -2352,8 +2376,10 @@ void loop() {
 
   if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
     pendingTestCallCommand = false;
+    reportTestCallProgress = true;
     const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
     pendingTestCallPhone = "";
+    reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
     publishDeviceEvent("test_call", ok ? "info" : "warning", result);

@@ -135,7 +135,9 @@
               <span class="badge text-bg-warning text-dark">{{ sev }}</span>
             {% elif sev == 'error' %}
               <span class="badge text-bg-danger">{{ sev }}</span>
-            {% elif event.type in ['test_call', 'test_sms'] %}
+            {% elif event.type == 'test_call' and (event.message or '').startswith('Call done') %}
+              <span class="badge text-bg-success">ok</span>
+            {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
               <span class="badge text-bg-success">ok</span>
             {% else %}
               <span class="badge text-bg-light border">{{ sev }}</span>
