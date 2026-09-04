@@ -139,6 +139,7 @@ bool pendingStatusReportCommand = false;
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioUrl = "";
+String pendingTestCallAudioFormat = "";
 bool reportTestCallProgress = false;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
@@ -427,6 +428,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallPhone.trim();
         pendingTestCallAudioUrl = doc["audio_url"] | "";
         pendingTestCallAudioUrl.trim();
+        pendingTestCallAudioFormat = doc["audio_format"] | "";
+        pendingTestCallAudioFormat.trim();
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test call scheduled";
       } else if (pendingCommandName == "test_sms") {
@@ -1412,6 +1415,17 @@ void pollModem() {
   }
 }
 
+String ttsModemPathFor(const String& url, const String& format) {
+  String fmt = format;
+  fmt.toLowerCase();
+  String path = url;
+  path.toLowerCase();
+  if (fmt.indexOf("amr") >= 0 || path.endsWith(".amr")) {
+    return "C:/tts.amr";
+  }
+  return "C:/tts.wav";
+}
+
 String uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion) {
   if (!networkConnected()) {
     return "TTS no network";
@@ -1490,7 +1504,8 @@ String uploadAudioToModem(const String& url, const String& modemPath, const Stri
   }
   http.end();
 
-  if (size < 44) {
+  const int minBytes = modemPath.endsWith(".amr") || modemPath.endsWith(".AMR") ? 12 : 44;
+  if (size < minBytes) {
     free(blob);
     return "TTS empty file";
   }
@@ -1893,7 +1908,7 @@ String playConnectedCallAudio() {
   waitWithWatchdog(1500);
   setStatus("Playing audio");
   sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
-  readModemUntil(45000, "+AUDIOSTATE: audio play stop");
+  readModemUntil(120000, "+AUDIOSTATE: audio play stop");
   sendAT("ATH", "OK", 5000);
   setStatus("Call done");
   return "Call done";
@@ -2071,14 +2086,16 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   if (adminTest) {
     if (pendingTestCallAudioUrl.length() > 0) {
       publishTestCallProgress("Downloading TTS audio");
-      const String ttsPath = "C:/tts.wav";
+      const String ttsPath = ttsModemPathFor(pendingTestCallAudioUrl, pendingTestCallAudioFormat);
       const String audioErr = uploadAudioToModem(pendingTestCallAudioUrl, ttsPath, "tts");
       if (audioErr.length() > 0) {
         pendingTestCallAudioUrl = "";
+        pendingTestCallAudioFormat = "";
         return audioErr;
       }
       state.modemAudioPath = ttsPath;
       pendingTestCallAudioUrl = "";
+      pendingTestCallAudioFormat = "";
     } else {
       setStatus("Sync test audio");
       checkManifest(false);
@@ -2550,6 +2567,7 @@ void loop() {
     const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
     pendingTestCallPhone = "";
     pendingTestCallAudioUrl = "";
+    pendingTestCallAudioFormat = "";
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");

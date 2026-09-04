@@ -10,7 +10,7 @@ ARG PIPER_VERSION=2023.11.14-2
 ARG PIPER_VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_AR/daniela/high/es_AR-daniela-high
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg libavcodec-extra \
     && rm -rf /var/lib/apt/lists/* \
     && case "${TARGETARCH}" in \
          amd64) piper_arch=x86_64 ;; \
@@ -34,4 +34,4 @@ COPY app ./app
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python -m app.init_db && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 60 app.main:app"]
+CMD ["sh", "-c", "python -m app.init_db && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 90 app.main:app"]

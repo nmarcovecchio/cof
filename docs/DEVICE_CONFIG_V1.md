@@ -476,8 +476,8 @@ including `hardware_profile`, `capabilities`, and `discovered`.
 ### Test call with audio
 
 An explicit operator action from the device page. The backend synthesizes the
-form text to 8 kHz 16-bit mono WAV (`docs/VOICE_SMS.md`) and the device
-downloads `audio_url` into `C:/tts.wav` before dialing.
+form text to AMR-NB 8 kHz (`docs/VOICE_SMS.md`) and the device
+downloads `audio_url` into `C:/tts.amr` before dialing.
 
 This command may place a call even if `calling.enabled` is false. Automatic
 alarm calls still require `calling.enabled=true`.
@@ -489,8 +489,8 @@ alarm calls still require `calling.enabled=true`.
   "device_id": "cof-000001",
   "phone": "+5491112345678",
   "text": "CallOnFail prueba de llamada",
-  "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.wav",
-  "audio_format": "wav_pcm_8000_mono_16bit",
+  "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.amr",
+  "audio_format": "amr_nb_8000",
   "created_at": "2026-09-04T00:00:00Z"
 }
 ```

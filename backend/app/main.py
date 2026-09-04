@@ -19,7 +19,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
-from .tts import public_audio_url, synthesize_pcm_wav
+from .tts import MAX_TEXT_CHARS, public_audio_url, synthesize_call_audio
 
 
 def login_required(view):
@@ -506,8 +506,8 @@ def create_app() -> Flask:
     def device_command_test_call(device_uid):
         phone = normalize_phone(request.form.get("phone", ""))
         text = (request.form.get("text") or "").strip() or "CallOnFail prueba de llamada"
-        if len(text) > 200:
-            text = text[:200]
+        if len(text) > MAX_TEXT_CHARS:
+            text = text[:MAX_TEXT_CHARS]
         if not is_e164_phone(phone):
             return send_device_command(
                 device_uid,
@@ -517,7 +517,7 @@ def create_app() -> Flask:
                 publish=False,
             )
         try:
-            _wav_path, audio_id = synthesize_pcm_wav(text)
+            _amr_path, audio_id = synthesize_call_audio(text)
         except Exception as exc:
             return send_device_command(
                 device_uid,
@@ -534,21 +534,28 @@ def create_app() -> Flask:
                 "phone": phone,
                 "text": text,
                 "audio_url": public_audio_url(audio_id),
-                "audio_format": "wav_pcm_8000_mono_16bit",
+                "audio_format": "amr_nb_8000",
             },
         )
 
+    @app.get("/audio/tmp/<audio_id>.amr")
+    def tts_audio_amr(audio_id):
+        return _serve_tts_audio(audio_id, ".amr", "audio/amr")
+
     @app.get("/audio/tmp/<audio_id>.wav")
-    def tts_audio(audio_id):
+    def tts_audio_wav(audio_id):
+        return _serve_tts_audio(audio_id, ".wav", "audio/wav")
+
+    def _serve_tts_audio(audio_id, suffix, mimetype):
         if not re.fullmatch(r"[a-f0-9]{32}", audio_id or ""):
             abort(404)
         from pathlib import Path
 
-        wav_path = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts")) / f"{audio_id}.wav"
-        if not wav_path.is_file():
+        audio_path = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts")) / f"{audio_id}{suffix}"
+        if not audio_path.is_file():
             abort(404)
-        data = wav_path.read_bytes()
-        resp = app.response_class(data, mimetype="audio/wav")
+        data = audio_path.read_bytes()
+        resp = app.response_class(data, mimetype=mimetype)
         resp.headers["Content-Length"] = str(len(data))
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["Content-Encoding"] = "identity"

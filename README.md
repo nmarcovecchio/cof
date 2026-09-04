@@ -284,7 +284,7 @@ http://IP_DEL_VPS/devices/cof-test
 
 Click en `Probar SMS` o `Probar llamada` (firmware 0.2.28+) para mandar un SMS
 o marcar un numero. El texto de la casilla es el SMS y el audio de la llamada
-(Piper `es_AR-daniela` → WAV 8 kHz). Detalle en `docs/VOICE_SMS.md`. El backend
+(Piper `es_AR-daniela` → AMR-NB 8 kHz). Detalle en `docs/VOICE_SMS.md`. El backend
 publica `test_sms` o `test_call` en `devices/<id>/command`. Si el ACK dice
 `unsupported`, primero `OTA`. Sin VoLTE la llamada prepara CS (RF bounce)
 antes del primer `ATD`.

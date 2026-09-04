@@ -472,9 +472,9 @@ radio/audio config to keep: `docs/VOICE_SMS.md`.
 - `docker-compose.yml` publishes `1883:1883` and `8883:8883`.
 - Web config form is visual (sensors / rules / call+sms+email+telegram).
   Rules are **not evaluated yet**. Email/Telegram sends are **not implemented**.
-- Latest published firmware: `0.2.30`.
+- Latest published firmware: `0.2.31`.
 - Lab device `cof-test`: MQTT `1883`, Claro A7672. Voice = CS bounce then one
-  dial. SMS = modem. Call audio = Piper `es_AR-daniela` → WAV 8 kHz.
+  dial. SMS = modem. Call audio = Piper `es_AR-daniela` → AMR-NB 8 kHz.
 
 ### Why OTA does not happen by itself
 
@@ -488,8 +488,7 @@ actually up. `0.2.11` did that and left the device offline.
 
 1. Alarm-rule evaluation in `mqtt_worker` (telemetry → match rules → notify).
 2. Email (Flask SMTP) and Telegram Bot API.
-3. Optional: AMR instead of WAV for TTS (after WAV stays proven).
-4. Only with the ESP32 at hand: MQTT TLS + auth + per-device credentials.
+3. Only with the ESP32 at hand: MQTT TLS + auth + per-device credentials.
    Follow the section below. Do not cut over remotely.
 
 ## Current security posture

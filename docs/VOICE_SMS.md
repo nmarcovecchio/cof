@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.30
+Firmware:   0.2.31 (AMR TTS; CS voice/SMS validated on 0.2.30)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -50,12 +50,12 @@ On LTE without IMS, the first `ATD` usually returns `NO CARRIER`. That is not
 a “retry that sometimes works”: the CS domain was not ready. Firmware 0.2.27+
 does this **before** the first dial:
 
-1. Download TTS WAV (test call only).
+1. Download TTS AMR (test call only).
 2. `AT+CFUN=4` → wait → `AT+CFUN=1` (RF bounce).
 3. Wait until `CREG` / radio online / `CPAS` idle / CSQ valid.
 4. One `ATD<E.164>;` (semicolon required for voice).
 5. Wait for connect URCs (ignore early CSFB `NO CARRIER` for ~40 s).
-6. `AT+CCMXPLAY="C:/tts.wav",1,0` (remote path = into the call).
+6. `AT+CCMXPLAY="C:/tts.amr",1,0` (remote path = into the call).
 7. Hang up, restore `AT+CNMP=2` and packet/SMS services.
 
 If that still fails, fallback is lock GSM (`AT+CNMP=13`), dial once, then
@@ -94,16 +94,20 @@ SMSC, then `AT+CMGS`. Result event `SMS sent` is success.
 After a failed CSFB call, firmware restores LTE + SMS bearer so SMS still
 works. Do not poll `AT` during an active CSFB in a way that aborts the call.
 
-## Test call audio (WAV first; AMR later)
+## Test call audio (AMR-NB)
 
 The text field on the device page is used for **SMS and spoken call audio**.
+SMS still caps at 160 characters. Call TTS accepts up to **800 characters**.
 
 Backend (`backend/app/tts.py`):
 
 1. Piper `es_AR-daniela-high` (español argentino; baked into the web image).
-2. `ffmpeg` → **8 kHz, 16-bit, mono WAV** (same format the modem already plays).
-3. File lives in `/tmp/cof-tts/<id>.wav` for 15 minutes.
-4. Public URL: `https://app.callonfail.com.ar/audio/tmp/<id>.wav`
+2. `ffmpeg` → **AMR-NB 8 kHz, 12.2 kbps** (`#!AMR\n`). About 1.5 KB/s vs 16 KB/s WAV.
+3. File lives in `/tmp/cof-tts/<id>.amr` for 15 minutes.
+4. Public URL: `https://app.callonfail.com.ar/audio/tmp/<id>.amr`
+
+ESP32 RAM still buffers the whole file (`kMaxAudioBytes` 180 KB). AMR at 12.2 kbps
+fits ~**2 minutes** of speech; 800 characters is typically under a minute.
 
 VPS `.env` must include:
 
@@ -119,21 +123,20 @@ MQTT command:
   "device_id": "cof-test",
   "phone": "+549...",
   "text": "CallOnFail prueba de llamada",
-  "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.wav",
-  "audio_format": "wav_pcm_8000_mono_16bit"
+  "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.amr",
+  "audio_format": "amr_nb_8000"
 }
 ```
 
 Device downloads over Ethernet (HTTPS, cert not verified) into RAM, deletes any
-previous `C:/tts.wav` (`AT+FSDEL`), uploads with `AT+CFTRANRX`, plays remote,
+previous `C:/tts.amr` (`AT+FSDEL`), uploads with `AT+CFTRANRX`, plays remote,
 then restores the previous modem audio path. If this fails, the event message
-is specific (`TTS HTTP 404`, `TTS modem prompt fail`, etc.), not a generic
-`TTS audio fail`.
+is specific (`TTS HTTP 404`, `TTS too large`, `TTS no RAM`, etc.).
 
 Admin test-call **bypasses** `calling.enabled`. Alarm-driven calls must not.
 
-AMR is a later optimization (smaller UART transfer). Do not switch until a
-real call plays an AMR file on this same A7672.
+The canned `cof_test.wav` on the modem stays WAV; only spoken test-call audio
+is AMR.
 
 ## Web / MQTT ops
 
@@ -155,7 +158,7 @@ git pull
 docker compose up -d --build web
 ```
 
-Device must already be on firmware `>= 0.2.28` (OTA) to download `audio_url`.
+Device must already be on firmware `>= 0.2.31` (OTA) to download AMR `audio_url`.
 If ACK is `unsupported`, OTA first.
 
 ## Still pending (do not mix with this win)
@@ -163,4 +166,3 @@ If ACK is `unsupported`, OTA first.
 1. Alarm rule evaluation in `mqtt_worker`.
 2. Email (Flask SMTP) and Telegram bot notifications.
 3. MQTT TLS + per-device passwords — only with Serial access to the ESP32.
-4. AMR TTS instead of WAV.
