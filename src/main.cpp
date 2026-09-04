@@ -1625,6 +1625,77 @@ String queryCallFailCause() {
   return value;
 }
 
+int queryCpas() {
+  String response;
+  if (!sendAT("AT+CPAS", "OK", 3000, &response)) {
+    return -1;
+  }
+  return extractAtTagValue(response, "+CPAS:").toInt();
+}
+
+bool callIsIdle() {
+  const int cpas = queryCpas();
+  if (cpas == 3 || cpas == 4) {
+    sendAT("ATH", "OK", 3000);
+    sendAT("AT+CHUP", "OK", 3000);
+    return false;
+  }
+  return cpas == 0;
+}
+
+bool radioIsOnline() {
+  return state.radioInfo.indexOf("Online") >= 0 ||
+         state.radioInfo.indexOf("ONLINE") >= 0;
+}
+
+bool smsStackReady() {
+  String response;
+  if (!sendAT("AT+CMGF=1", "OK", 3000)) {
+    return false;
+  }
+  if (!sendAT("AT+CPMS?", "OK", 3000, &response)) {
+    return false;
+  }
+  return response.indexOf("+CPMS:") >= 0;
+}
+
+bool isCallReady() {
+  if (!callIsIdle()) {
+    return false;
+  }
+  refreshCellularStatus();
+  return csAttached() &&
+         radioHasService() &&
+         radioIsOnline() &&
+         state.signalQuality >= 1 &&
+         state.signalQuality != 99;
+}
+
+bool isSmsReady() {
+  if (!callIsIdle()) {
+    return false;
+  }
+  refreshCellularStatus();
+  return state.networkRegistered && radioHasService() && smsStackReady();
+}
+
+bool waitUntilModemReady(bool forCall, uint32_t timeoutMs) {
+  setStatus(forCall ? "Wait call ready" : "Wait SMS ready");
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < timeoutMs) {
+    feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
+    if (forCall ? isCallReady() : isSmsReady()) {
+      waitWithWatchdog(1500);
+      return true;
+    }
+    waitWithWatchdog(1500);
+  }
+  return forCall ? isCallReady() : isSmsReady();
+}
+
 String voiceContextSuffix(const String& bearer, const String& ceer = "");
 void restoreAutoRadio();
 String waitForOutgoingCall(uint32_t timeoutMs);
@@ -1656,6 +1727,7 @@ void bounceRadioForCsfb() {
   state.forcedGsmForCall = false;
   persistSkipGsm(true);
   waitForRadioService(30000, false);
+  waitUntilModemReady(true, 25000);
 }
 
 void restorePacketServices() {
@@ -1668,6 +1740,7 @@ void restorePacketServices() {
   sendAT("AT+CGSMS=1", "OK", 3000);
   sendAT("AT+CMGF=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
+  waitUntilModemReady(false, 20000);
 }
 
 bool shouldRetryVoice(const String& result) {
@@ -1675,6 +1748,7 @@ bool shouldRetryVoice(const String& result) {
          result.startsWith("Call no carrier") ||
          result.startsWith("Call not connected") ||
          result.startsWith("Call dial timeout") ||
+         result.startsWith("Call not ready") ||
          result.startsWith("No voice radio");
 }
 
@@ -1689,8 +1763,8 @@ String playConnectedCallAudio() {
 }
 
 String dialAndMaybePlay(const String& phone, const String& bearer) {
-  if (!radioHasService()) {
-    return "No voice radio" + voiceContextSuffix(bearer);
+  if (!waitUntilModemReady(true, 25000)) {
+    return "Call not ready" + voiceContextSuffix(bearer);
   }
 
   refreshRadioMode();
@@ -1925,8 +1999,12 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     body = body.substring(0, 160);
   }
 
-  if (!radioHasService()) {
+  if (!waitUntilModemReady(false, 25000)) {
     restorePacketServices();
+    if (!waitUntilModemReady(false, 20000)) {
+      setStatus("SMS not ready");
+      return "SMS not ready";
+    }
   }
 
   String result = transmitSms(phone, body);
