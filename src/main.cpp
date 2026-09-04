@@ -28,6 +28,10 @@ constexpr uint32_t kDisplayIntervalMs = 1000;
 constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
+constexpr uint32_t kMqttKeepAliveSeconds = 20;
+constexpr uint32_t kMqttSocketTimeoutSeconds = 8;
+constexpr uint32_t kMqttSilenceReconnectMs = 3UL * 60UL * 1000UL;
+constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
 constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
@@ -117,6 +121,7 @@ uint32_t lastDisplayMs = 0;
 uint32_t lastSensorMs = 0;
 uint32_t lastModemMs = 0;
 uint32_t lastMqttReconnectMs = 0;
+uint32_t lastMqttOkMs = 0;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -165,6 +170,10 @@ void configureMqttClientTransport() {
   mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
   mqttClient.setCallback(onMqttMessage);
   mqttClient.setBufferSize(4096);
+  mqttClient.setKeepAlive(kMqttKeepAliveSeconds);
+  mqttClient.setSocketTimeout(kMqttSocketTimeoutSeconds);
+  mqttPlainClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
+  mqttTlsClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
 }
 
 bool applyDesiredConfig(JsonDocument& doc) {
@@ -547,6 +556,12 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = fa
   const bool ok = mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
   Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
   (void)qos;
+  if (ok) {
+    lastMqttOkMs = millis();
+  } else {
+    state.mqttConnected = false;
+    mqttClient.disconnect();
+  }
   return ok;
 }
 
@@ -737,6 +752,13 @@ void publishTelemetryNow() {
 }
 
 void connectMqttIfNeeded() {
+  if (state.ethernetConnected && !ETH.linkUp()) {
+    Serial.println("[eth] link down while IP was still cached");
+    state.ethernetConnected = false;
+    state.mqttConnected = false;
+    mqttClient.disconnect();
+  }
+
   if (!state.mqttConfigured || !networkConnected()) {
     return;
   }
@@ -769,6 +791,7 @@ void connectMqttIfNeeded() {
                 state.mqttUsername.c_str(),
                 mqttUsesTls() ? "yes" : "no");
 
+  feedWatchdog();
   const bool ok = mqttClient.connect(
       clientId.c_str(),
       username,
@@ -791,6 +814,32 @@ void connectMqttIfNeeded() {
   publishTelemetryNow();
   lastCellularStatusMs = millis();
   setStatus("MQTT OK");
+}
+
+void enforceMqttSilenceWatchdog() {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return;
+  }
+  if (!state.mqttConfigured) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (now - lastMqttOkMs >= kMqttSilenceRestartMs) {
+    Serial.printf("[mqtt] no successful publish for %lu ms, restarting\n",
+                  static_cast<unsigned long>(now - lastMqttOkMs));
+    setStatus("MQTT watchdog");
+    delay(300);
+    ESP.restart();
+  }
+
+  if (mqttClient.connected() && now - lastMqttOkMs >= kMqttSilenceReconnectMs) {
+    Serial.printf("[mqtt] no successful publish for %lu ms, reconnecting\n",
+                  static_cast<unsigned long>(now - lastMqttOkMs));
+    mqttClient.disconnect();
+    state.mqttConnected = false;
+    lastMqttReconnectMs = 0;
+  }
 }
 
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
@@ -1732,7 +1781,7 @@ String prepareVoiceBearer() {
 
 void bounceRadioForCsfb() {
   setStatus("Voice retry");
-  Serial.println("[call] RF off/on to reattach CS before retry");
+  Serial.println("[call] RF off/on to attach CS before dial");
   sendAT("ATH", "OK", 3000);
   sendAT("AT+CHUP", "OK", 3000);
   sendAT("AT+CFUN=4", "OK", 8000);
@@ -1744,6 +1793,17 @@ void bounceRadioForCsfb() {
   state.forcedGsmForCall = false;
   persistSkipGsm(false);
   waitForRadioService(45000, false);
+  waitUntilModemReady(true, 30000);
+}
+
+void lockGsmForCall() {
+  setStatus("GSM lock");
+  Serial.println("[call] lock GSM (CNMP=13) after prepared CSFB failed");
+  sendAT("ATH", "OK", 3000);
+  sendAT("AT+CHUP", "OK", 3000);
+  sendAT("AT+CNMP=13", "OK", 10000);
+  state.forcedGsmForCall = true;
+  waitForRadioService(45000, true);
   waitUntilModemReady(true, 30000);
 }
 
@@ -1946,10 +2006,29 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   }
 
   state.callInProgress = true;
+  refreshCellularStatus();
+  bool preparedCs = false;
+  if (!imsVoiceReady() && !radioIsGsm()) {
+    publishTestCallProgress("Preparing CS radio");
+    bounceRadioForCsfb();
+    refreshCellularStatus();
+    preparedCs = true;
+  }
+
   String bearer = prepareVoiceBearer();
+  if (preparedCs && !imsVoiceReady()) {
+    bearer = radioIsGsm() ? "gsm after bounce" : "csfb prepared";
+  }
   publishTestCallProgress("Dialing, waiting for voice");
   String result = dialAndMaybePlay(phone, bearer);
-  if (shouldRetryVoice(result)) {
+  if (shouldRetryVoice(result) && !state.skipGsmVoice) {
+    publishTestCallProgress("Locking GSM");
+    lockGsmForCall();
+    refreshCellularStatus();
+    bearer = "gsm lock";
+    publishTestCallProgress("Retrying call");
+    result = dialAndMaybePlay(phone, bearer);
+  } else if (shouldRetryVoice(result) && !preparedCs) {
     publishTestCallProgress("Resetting radio");
     bounceRadioForCsfb();
     refreshCellularStatus();
@@ -2342,6 +2421,7 @@ void setup() {
   initModem();
   readSensors();
   drawDisplay();
+  lastMqttOkMs = millis();
 }
 
 void loop() {
@@ -2360,6 +2440,7 @@ void loop() {
   }
 
   connectMqttIfNeeded();
+  enforceMqttSilenceWatchdog();
 
   if (state.mqttConnected && pendingConfigReport) {
     publishConfigReported();
