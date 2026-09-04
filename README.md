@@ -37,6 +37,12 @@ El contrato inicial para configuracion de dispositivos queda en:
 docs/DEVICE_CONFIG_V1.md
 ```
 
+Llamada y SMS validados en lab (Claro / A7672 / TTS WAV) quedan en:
+
+```text
+docs/VOICE_SMS.md
+```
+
 La configuracion diferencia capacidades del modem, llamadas habilitadas por
 cliente y estado real de audios. Un modem puede soportar audio, pero el cliente
 puede tener `calling.enabled=false`.
@@ -276,11 +282,12 @@ Para forzar chequeo OTA desde la web:
 http://IP_DEL_VPS/devices/cof-test
 ```
 
-Click en `Probar SMS` o `Probar llamada` (firmware 0.2.26+) para mandar un SMS
-o marcar un numero y reproducir el WAV de prueba. El backend publica `test_sms`
-o `test_call` en `devices/<id>/command`. Si el ACK dice `unsupported`, primero `OTA`.
-El estado celular incluye radio, modelo e IMS; si no hay VoLTE, la llamada de
-prueba fuerza 2G.
+Click en `Probar SMS` o `Probar llamada` (firmware 0.2.28+) para mandar un SMS
+o marcar un numero. El texto de la casilla es el SMS y el audio de la llamada
+(TTS WAV 8 kHz en el servidor). Detalle en `docs/VOICE_SMS.md`. El backend
+publica `test_sms` o `test_call` en `devices/<id>/command`. Si el ACK dice
+`unsupported`, primero `OTA`. Sin VoLTE la llamada prepara CS (RF bounce)
+antes del primer `ATD`.
 
 Click en `Forzar chequeo OTA`. El backend publica:
 

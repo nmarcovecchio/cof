@@ -475,8 +475,9 @@ including `hardware_profile`, `capabilities`, and `discovered`.
 
 ### Test call with audio
 
-An explicit operator action from the device page. The device dials `phone`,
-waits for answer, and plays the current test WAV from the modem filesystem.
+An explicit operator action from the device page. The backend synthesizes the
+form text to 8 kHz 16-bit mono WAV (`docs/VOICE_SMS.md`) and the device
+downloads `audio_url` into `C:/tts.wav` before dialing.
 
 This command may place a call even if `calling.enabled` is false. Automatic
 alarm calls still require `calling.enabled=true`.
@@ -487,17 +488,20 @@ alarm calls still require `calling.enabled=true`.
   "command": "test_call",
   "device_id": "cof-000001",
   "phone": "+5491112345678",
-  "created_at": "2026-09-03T00:00:00Z"
+  "text": "CallOnFail prueba de llamada",
+  "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.wav",
+  "audio_format": "wav_pcm_8000_mono_16bit",
+  "created_at": "2026-09-04T00:00:00Z"
 }
 ```
 
-The device ACKs immediately, syncs test audio if the manifest version changed,
-then publishes an `event` of type `test_call` with the result. A result that
-starts with `Call done` is success, even when radio/IMS/CEER details are
-appended. `discovered.cellular.voice.path` is inferred live from IMS, radio and
-`CREG`: `volte`, `csfb`, `gsm`, `lte_data`, or `none`. A new IMSI/operator
-clears the last learned path so another SIM is re-diagnosed. During a call the
-device samples `AT+CPSI` to confirm LTE→GSM (CSFB) vs LTE+IMS (VoLTE).
+The device ACKs immediately, downloads TTS audio when `audio_url` is present,
+prepares CS radio if VoLTE is not registered, then publishes an `event` of type
+`test_call`. A result that starts with `Call done` is success, even when
+radio/IMS/CEER details are appended. `discovered.cellular.voice.path` is
+inferred live from IMS, radio and `CREG`: `volte`, `csfb`, `gsm`, `lte_data`,
+or `none`. A new IMSI/operator clears the last learned path so another SIM is
+re-diagnosed.
 
 ### Test SMS
 
