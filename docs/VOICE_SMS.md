@@ -100,7 +100,7 @@ The text field on the device page is used for **SMS and spoken call audio**.
 
 Backend (`backend/app/tts.py`):
 
-1. `espeak-ng -v es` (robotic Spanish; good enough for lab).
+1. Piper `es_AR-daniela-high` (español argentino; baked into the web image).
 2. `ffmpeg` → **8 kHz, 16-bit, mono WAV** (same format the modem already plays).
 3. File lives in `/tmp/cof-tts/<id>.wav` for 15 minutes.
 4. Public URL: `https://app.callonfail.com.ar/audio/tmp/<id>.wav`

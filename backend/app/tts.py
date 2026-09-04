@@ -7,6 +7,11 @@ from pathlib import Path
 TTS_DIR = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts"))
 MAX_AGE_SECONDS = 15 * 60
 MAX_TEXT_CHARS = 200
+PIPER_BIN = os.environ.get("PIPER_BIN", "/opt/piper/piper")
+PIPER_MODEL = os.environ.get(
+    "PIPER_MODEL",
+    "/opt/piper-voices/es_AR-daniela-high.onnx",
+)
 
 
 def cleanup_old_audio() -> None:
@@ -42,14 +47,25 @@ def synthesize_pcm_wav(text: str) -> tuple[Path, str]:
     wav_path = TTS_DIR / f"{audio_id}.wav"
 
     speak = subprocess.run(
-        ["espeak-ng", "-v", "es", "-s", "125", "-a", "140", "-w", str(raw_path), "--", spoken],
+        [
+            PIPER_BIN,
+            "--model",
+            PIPER_MODEL,
+            "--output_file",
+            str(raw_path),
+            "--length_scale",
+            "1.05",
+            "--sentence_silence",
+            "0.4",
+        ],
+        input=spoken.encode("utf-8"),
         capture_output=True,
-        timeout=20,
+        timeout=45,
         check=False,
     )
     if speak.returncode != 0 or not raw_path.exists():
         detail = (speak.stderr or speak.stdout).decode("utf-8", errors="replace").strip()
-        raise RuntimeError(detail or "espeak-ng failed")
+        raise RuntimeError(detail or "piper failed")
 
     convert = subprocess.run(
         [
