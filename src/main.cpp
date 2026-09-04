@@ -29,6 +29,7 @@ constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
+constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogTimeoutSeconds = 60;
@@ -117,6 +118,7 @@ uint32_t lastSensorMs = 0;
 uint32_t lastModemMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastTelemetryPublishMs = 0;
+uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
 bool didInitialManifestCheck = false;
 bool lastButtonPressed = false;
@@ -556,6 +558,33 @@ String ds18b20AddressToString(const DeviceAddress address) {
   return String(buffer);
 }
 
+void fillCellularJson(JsonObject cellular) {
+  cellular["registered"] = state.networkRegistered;
+  cellular["creg"] = state.cregStat;
+  cellular["cereg"] = state.ceregStat;
+  cellular["cgreg"] = state.cgregStat;
+  cellular["csq"] = state.signalQuality;
+  cellular["operator"] = state.operatorName;
+  cellular["apn"] = state.apn;
+  cellular["smsc"] = state.smsc;
+  cellular["model"] = state.modemModel;
+  cellular["radio"] = state.radioMode;
+  cellular["cpsi"] = state.radioInfo;
+  cellular["cnmp"] = state.cnmp;
+  cellular["ims"] = state.imsReg == 1;
+  cellular["ims_reg"] = state.imsReg;
+  cellular["ims_voice"] = state.imsVoice;
+  cellular["imsi"] = state.imsi;
+  JsonObject voice = cellular["voice"].to<JsonObject>();
+  voice["path"] = state.predictedVoicePath;
+  voice["last_ok"] = state.observedVoicePath;
+  voice["cs_attached"] = csAttached();
+  voice["radio"] = state.radioMode;
+  voice["ims"] = state.imsReg == 1;
+  cellular["voice_path"] = state.predictedVoicePath;
+  cellular["gsm_usable"] = !state.skipGsmVoice;
+}
+
 void publishDeviceStatus(const char* status, bool retained = true) {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
@@ -590,31 +619,7 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   discovered["sht31"] = state.sht31Ready;
   discovered["pcf8574"] = state.pcfReady;
   discovered["modem"] = state.modemReady;
-  JsonObject cellular = discovered["cellular"].to<JsonObject>();
-  cellular["registered"] = state.networkRegistered;
-  cellular["creg"] = state.cregStat;
-  cellular["cereg"] = state.ceregStat;
-  cellular["cgreg"] = state.cgregStat;
-  cellular["csq"] = state.signalQuality;
-  cellular["operator"] = state.operatorName;
-  cellular["apn"] = state.apn;
-  cellular["smsc"] = state.smsc;
-  cellular["model"] = state.modemModel;
-  cellular["radio"] = state.radioMode;
-  cellular["cpsi"] = state.radioInfo;
-  cellular["cnmp"] = state.cnmp;
-  cellular["ims"] = state.imsReg == 1;
-  cellular["ims_reg"] = state.imsReg;
-  cellular["ims_voice"] = state.imsVoice;
-  cellular["imsi"] = state.imsi;
-  JsonObject voice = cellular["voice"].to<JsonObject>();
-  voice["path"] = state.predictedVoicePath;
-  voice["last_ok"] = state.observedVoicePath;
-  voice["cs_attached"] = csAttached();
-  voice["radio"] = state.radioMode;
-  voice["ims"] = state.imsReg == 1;
-  cellular["voice_path"] = state.predictedVoicePath;
-  cellular["gsm_usable"] = !state.skipGsmVoice;
+  fillCellularJson(discovered["cellular"].to<JsonObject>());
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
   for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
@@ -712,6 +717,7 @@ void publishTelemetryNow() {
   doc["modem_ready"] = state.modemReady;
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
+  fillCellularJson(doc["cellular"].to<JsonObject>());
   doc["input_1"] = lastButtonPressed;
   doc["output_1"] = false;
   doc["output_2"] = false;
@@ -771,6 +777,7 @@ void connectMqttIfNeeded() {
   mqttClient.subscribe(mqttTopic("command").c_str(), 1);
   publishDeviceStatus("online", true);
   publishTelemetryNow();
+  lastCellularStatusMs = millis();
   setStatus("MQTT OK");
 }
 
@@ -2259,6 +2266,13 @@ void loop() {
   if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
     lastTelemetryPublishMs = now;
     publishTelemetryNow();
+  }
+
+  if (state.mqttConnected && !state.callInProgress && !state.otaInProgress &&
+      now - lastCellularStatusMs >= kCellularStatusIntervalMs) {
+    lastCellularStatusMs = now;
+    refreshCellularStatus();
+    publishDeviceStatus("online", true);
   }
 
   if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress) {

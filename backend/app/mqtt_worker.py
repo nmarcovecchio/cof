@@ -8,6 +8,8 @@ from datetime import timedelta
 
 import paho.mqtt.client as mqtt
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from .extensions import db
 from .main import create_app, event_display_severity
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
@@ -119,6 +121,13 @@ def persist_message(topic, payload):
             device.ip_address = payload.get("ip") or payload.get("ip_address") or device.ip_address
 
             if message_type == "telemetry":
+                if isinstance(payload.get("cellular"), dict):
+                    discovered = dict(device.discovered or {})
+                    current = dict(discovered.get("cellular") or {})
+                    current.update(payload["cellular"])
+                    discovered["cellular"] = current
+                    device.discovered = discovered
+                    flag_modified(device, "discovered")
                 db.session.add(
                     Telemetry(
                         device_id=device.id,

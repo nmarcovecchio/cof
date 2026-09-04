@@ -34,6 +34,29 @@ def wants_json() -> bool:
     return request.args.get("format") == "json" or request.accept_mimetypes.best == "application/json"
 
 
+def cellular_signal(csq):
+    try:
+        value = int(csq)
+    except (TypeError, ValueError):
+        return {"tone": "secondary", "label": "Sin dato", "bars": 0, "csq": None}
+    if value < 0 or value == 99:
+        return {"tone": "secondary", "label": "Sin dato", "bars": 0, "csq": value}
+    if value >= 20:
+        return {"tone": "success", "label": "Excelente", "bars": 4, "csq": value}
+    if value >= 15:
+        return {"tone": "success", "label": "Buena", "bars": 3, "csq": value}
+    if value >= 10:
+        return {"tone": "warning", "label": "Aceptable", "bars": 2, "csq": value}
+    return {"tone": "danger", "label": "Debil", "bars": 1, "csq": value}
+
+
+def cellular_lte_ok(cell):
+    if not isinstance(cell, dict):
+        return False
+    radio = str(cell.get("radio") or "").upper()
+    return "LTE" in radio and bool(cell.get("registered")) and cell.get("cereg") in (1, 5, 9, 10)
+
+
 def event_display_severity(event_type, message, severity="info"):
     text = (message or "").strip()
     kind = (event_type or "").strip()
@@ -100,6 +123,14 @@ def create_app() -> Flask:
             getattr(event, "message", ""),
             getattr(event, "severity", "info"),
         )
+
+    @app.template_filter("cellular_signal")
+    def cellular_signal_filter(csq):
+        return cellular_signal(csq)
+
+    @app.template_filter("cellular_lte_ok")
+    def cellular_lte_ok_filter(cell):
+        return cellular_lte_ok(cell)
 
     @app.before_request
     def csrf_protect():

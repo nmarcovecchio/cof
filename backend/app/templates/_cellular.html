@@ -1,0 +1,72 @@
+{% macro signal_bars(csq) %}
+  {% set sig = csq|cellular_signal %}
+  <span class="signal-bars text-{{ sig.tone }}" title="CSQ {{ sig.csq if sig.csq is not none else '-' }}">
+    {% for i in range(1, 5) %}
+      <span{% if i <= sig.bars %} class="on"{% endif %}></span>
+    {% endfor %}
+  </span>
+{% endmacro %}
+
+{% macro cellular_summary(cell) %}
+  {% if cell %}
+    {% set sig = cell.get('csq')|cellular_signal %}
+    {% set lte_ok = cell|cellular_lte_ok %}
+    <span class="badge text-bg-{{ 'success' if lte_ok else 'warning' }}">
+      {{ 'LTE OK' if lte_ok else (cell.get('radio') or 'Sin LTE') }}
+    </span>
+    {{ signal_bars(cell.get('csq')) }}
+    <span class="small text-{{ sig.tone }}">{{ sig.label }}</span>
+  {% else %}
+    <span class="text-muted">-</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro cellular_card(cell) %}
+  <div class="card mb-4">
+    <div class="card-header">Red celular</div>
+    <div class="card-body">
+      {% if not cell %}
+        <p class="text-muted mb-0">Todavia no hay reporte de red. Esperá el heartbeat de 5 minutos o pulsá Estado.</p>
+      {% else %}
+        {% set sig = cell.get('csq')|cellular_signal %}
+        {% set lte_ok = cell|cellular_lte_ok %}
+        {% set voice = cell.get('voice') or {} %}
+        {% set voice_path = voice.get('path') or cell.get('voice_path') %}
+        <div class="row g-3">
+          <div class="col-6 col-md-3">
+            <div class="meta-label">LTE</div>
+            <div class="meta-value">
+              <span class="badge text-bg-{{ 'success' if lte_ok else 'warning' }}">
+                {{ 'Conectado' if lte_ok else 'No' }}
+              </span>
+              <span class="small text-muted">{{ cell.get('radio') or '-' }}</span>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="meta-label">Senal</div>
+            <div class="meta-value">
+              {{ signal_bars(cell.get('csq')) }}
+              <span class="text-{{ sig.tone }}">{{ sig.label }}</span>
+              <div class="small text-muted">CSQ {{ sig.csq if sig.csq is not none else '-' }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="meta-label">Voz</div>
+            <div class="meta-value">
+              <span class="badge text-bg-{{ 'success' if voice_path in ['volte', 'csfb', 'gsm'] else 'warning' }}">
+                {{ voice_path or '-' }}
+              </span>
+              {% if voice.get('last_ok') %}
+                <div class="small text-muted">Ultima {{ voice.get('last_ok') }}</div>
+              {% endif %}
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="meta-label">Operador</div>
+            <div class="meta-value">{{ cell.get('operator') or '-' }}</div>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
