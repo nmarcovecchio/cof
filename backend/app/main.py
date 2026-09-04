@@ -387,7 +387,7 @@ def create_app() -> Flask:
             recent_telemetry=recent_telemetry,
             recent_events=recent_events,
             configs=configs,
-            test_phone=first_contact_phone(configs),
+            test_phone=last_used_test_phone(device, configs),
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
@@ -507,6 +507,9 @@ def create_app() -> Flask:
         }
         if extra:
             payload.update(extra)
+            phone = normalize_phone(str(extra.get("phone") or ""))
+            if is_e164_phone(phone):
+                session["test_phone"] = phone
         event_type = "command_sent"
         severity = "info"
         if publish:
@@ -656,6 +659,24 @@ def normalize_phone(phone: str) -> str:
 
 def is_e164_phone(phone: str) -> bool:
     return bool(re.fullmatch(r"\+[1-9]\d{7,14}", phone or ""))
+
+
+def last_used_test_phone(device, configs) -> str:
+    session_phone = normalize_phone(str(session.get("test_phone") or ""))
+    if is_e164_phone(session_phone):
+        return session_phone
+    recent = (
+        Event.query.filter_by(device_id=device.id, type="command_sent")
+        .order_by(Event.started_at.desc())
+        .limit(20)
+        .all()
+    )
+    for event in recent:
+        payload = event.payload or {}
+        phone = normalize_phone(str(payload.get("phone") or ""))
+        if is_e164_phone(phone):
+            return phone
+    return first_contact_phone(configs)
 
 
 def first_contact_phone(configs) -> str:

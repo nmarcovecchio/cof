@@ -134,7 +134,8 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.21+. El chip Voz se recalcula solo si cambia la SIM o el operador.
+        Requiere firmware 0.2.26+. La llamada puede tardar hasta 3 min; <em>Dialing</em> / <em>CSFB in progress</em> no es exito.
+        El chip Voz verde solo si alguna llamada conecto.
       </p>
     </form>
     {% endif %}
@@ -300,6 +301,8 @@
                   <span class="badge text-bg-success">ok</span>
                 {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
                   <span class="badge text-bg-success">ok</span>
+                {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
+                  <span class="badge text-bg-light border">progreso</span>
                 {% else %}
                   <span class="badge text-bg-light border">{{ sev }}</span>
                 {% endif %}

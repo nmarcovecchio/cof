@@ -53,11 +53,14 @@
           <div class="col-6 col-md-3">
             <div class="meta-label">Voz</div>
             <div class="meta-value">
-              <span class="badge text-bg-{{ 'success' if voice_path in ['volte', 'csfb', 'gsm'] else 'warning' }}">
-                {{ voice_path or '-' }}
+              {% set voice_proven = voice.get('last_ok') %}
+              <span class="badge text-bg-{{ 'success' if voice_proven else 'warning' }}">
+                {{ voice_proven or voice_path or '-' }}
               </span>
-              {% if voice.get('last_ok') %}
-                <div class="small text-muted">Ultima {{ voice.get('last_ok') }}</div>
+              {% if voice_proven %}
+                <div class="small text-muted">Comprobada</div>
+              {% else %}
+                <div class="small text-muted">Estimada{{ ' · IMS no' if not (voice.get('ims') or cell.get('ims')) else '' }}</div>
               {% endif %}
             </div>
           </div>

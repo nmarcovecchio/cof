@@ -1560,11 +1560,13 @@ String classifyCallUrc(const String& raw) {
   if (urc.indexOf("NO ANSWER") >= 0) {
     return "Call no answer";
   }
+  if (urc.indexOf("VOICE CALL: BEGIN") >= 0 ||
+      urc.indexOf("MO CONNECTED") >= 0 ||
+      urc.indexOf("+COLP:") >= 0) {
+    return "Call connected";
+  }
   if (urc.indexOf("NO CARRIER") >= 0) {
     return "Call no carrier";
-  }
-  if (urc.indexOf("VOICE CALL: BEGIN") >= 0) {
-    return "Call connected";
   }
   return "";
 }
@@ -1730,16 +1732,19 @@ String prepareVoiceBearer() {
 
 void bounceRadioForCsfb() {
   setStatus("Voice retry");
-  Serial.println("[call] bouncing radio for CSFB retry");
+  Serial.println("[call] RF off/on to reattach CS before retry");
   sendAT("ATH", "OK", 3000);
   sendAT("AT+CHUP", "OK", 3000);
-  sendAT("AT+CNMP=13", "OK", 10000);
-  waitWithWatchdog(15000);
+  sendAT("AT+CFUN=4", "OK", 8000);
+  waitWithWatchdog(3000);
+  sendAT("AT+CFUN=1", "OK", 15000);
   sendAT("AT+CNMP=2", "OK", 10000);
+  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEVDP=3", "OK", 3000);
   state.forcedGsmForCall = false;
-  persistSkipGsm(true);
-  waitForRadioService(30000, false);
-  waitUntilModemReady(true, 25000);
+  persistSkipGsm(false);
+  waitForRadioService(45000, false);
+  waitUntilModemReady(true, 30000);
 }
 
 void restorePacketServices() {
@@ -1783,6 +1788,12 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
   state.radioAtDial = state.radioMode;
   state.radioAtConnect = "";
 
+  sendAT("AT+CRC=1", "OK", 2000);
+  sendAT("AT+CVHU=0", "OK", 2000);
+  sendAT("AT+COLP=1", "OK", 2000);
+  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEVDP=3", "OK", 3000);
+
   setStatus("Calling");
   if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
     const String ceer = queryCallFailCause();
@@ -1790,7 +1801,7 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
     return "Call failed" + voiceContextSuffix(bearer, ceer);
   }
 
-  const String progress = waitForOutgoingCall(45000);
+  const String progress = waitForOutgoingCall(70000);
   refreshRadioMode();
   state.radioAtConnect = state.radioMode;
   const String observed = observeVoicePath(state.radioAtDial, state.radioAtConnect);
@@ -1843,9 +1854,10 @@ String voiceContextSuffix(const String& bearer, const String& ceer) {
 String waitForOutgoingCall(uint32_t timeoutMs) {
   bool sawDialing = false;
   bool sawAlerting = false;
+  bool sawNoCarrier = false;
+  bool reportedCsfbWait = false;
   const uint32_t startedAt = millis();
-  uint32_t lastRadioSampleMs = startedAt;
-  constexpr uint32_t kCsfbIgnoreMs = 15000;
+  constexpr uint32_t kCsfbIgnoreMs = 40000;
 
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
@@ -1853,30 +1865,10 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
       mqttClient.loop();
     }
 
-    const String urc = readModemUntil(700, "");
+    const String urc = readModemUntil(800, "");
     const String urcResult = classifyCallUrc(urc);
-    if (urcResult.length() > 0) {
-      if (urcResult == "Call no carrier") {
-        if (sawAlerting) {
-          return "Call no answer";
-        }
-        if (millis() - startedAt < kCsfbIgnoreMs) {
-          setStatus("CSFB wait");
-        } else {
-          return urcResult;
-        }
-      } else {
-        return urcResult;
-      }
-    }
-
-    String clcc;
-    if (sendAT("AT+CLCC", "OK", 1500, &clcc)) {
-      const String clccResult = classifyCallUrc(clcc);
-      if (clccResult.length() > 0 && clccResult != "Call no carrier") {
-        return clccResult;
-      }
-      const int stat = parseClccStat(clcc);
+    if (urc.indexOf("+CLCC:") >= 0) {
+      const int stat = parseClccStat(urc);
       if (stat == 2) {
         sawDialing = true;
         setStatus("Dialing");
@@ -1884,15 +1876,28 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
         sawAlerting = true;
         setStatus("Ringing");
       } else if (stat == 0) {
-        refreshRadioMode();
         return "Call connected";
       }
     }
-    if (millis() - lastRadioSampleMs >= 3000) {
-      lastRadioSampleMs = millis();
-      refreshRadioMode();
+    if (urcResult.length() > 0) {
+      if (urcResult == "Call no carrier") {
+        sawNoCarrier = true;
+        if (sawAlerting) {
+          return "Call no answer";
+        }
+        if (millis() - startedAt < kCsfbIgnoreMs) {
+          setStatus("CSFB wait");
+          if (!reportedCsfbWait) {
+            reportedCsfbWait = true;
+            publishTestCallProgress("CSFB in progress");
+          }
+        } else {
+          return urcResult;
+        }
+      } else {
+        return urcResult;
+      }
     }
-    waitWithWatchdog(300);
   }
 
   if (sawAlerting) {
@@ -1900,6 +1905,9 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
   }
   if (sawDialing) {
     return "Call dial timeout";
+  }
+  if (sawNoCarrier) {
+    return "Call no carrier";
   }
   return "Call not connected";
 }
@@ -1939,10 +1947,10 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
 
   state.callInProgress = true;
   String bearer = prepareVoiceBearer();
-  publishTestCallProgress("Dialing, waiting CSFB");
+  publishTestCallProgress("Dialing, waiting for voice");
   String result = dialAndMaybePlay(phone, bearer);
   if (shouldRetryVoice(result)) {
-    publishTestCallProgress("No carrier, bouncing radio");
+    publishTestCallProgress("Resetting radio");
     bounceRadioForCsfb();
     refreshCellularStatus();
     bearer = imsVoiceReady() ? "ims after bounce" : "csfb retry";
