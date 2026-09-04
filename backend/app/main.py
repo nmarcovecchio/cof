@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -547,13 +547,12 @@ def create_app() -> Flask:
         wav_path = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts")) / f"{audio_id}.wav"
         if not wav_path.is_file():
             abort(404)
-        return send_file(
-            wav_path,
-            mimetype="audio/wav",
-            as_attachment=False,
-            download_name=f"{audio_id}.wav",
-            max_age=60,
-        )
+        data = wav_path.read_bytes()
+        resp = app.response_class(data, mimetype="audio/wav")
+        resp.headers["Content-Length"] = str(len(data))
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Content-Encoding"] = "identity"
+        return resp
 
     @app.post("/devices/<device_uid>/commands/test-sms")
     @login_required

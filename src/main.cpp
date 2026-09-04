@@ -1412,76 +1412,130 @@ void pollModem() {
   }
 }
 
-bool uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion) {
-  if (!networkConnected() || !state.modemReady || !state.modemFileTransferSupported) {
-    return false;
+String uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion) {
+  if (!networkConnected()) {
+    return "TTS no network";
+  }
+  if (!state.modemReady || !state.modemFileTransferSupported) {
+    return "TTS modem no FS";
   }
 
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(20);
   HTTPClient http;
   http.setTimeout(30000);
+  http.useHTTP10(true);
+  http.setReuse(false);
 
   if (!http.begin(client, url)) {
-    return false;
+    return "TTS HTTP begin fail";
   }
+  http.addHeader("Accept-Encoding", "identity");
 
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("[audio] download failed: %d\n", code);
     http.end();
-    return false;
+    return "TTS HTTP " + String(code);
   }
 
-  const int size = http.getSize();
-  if (size <= 0) {
-    Serial.println("[audio] missing content length");
+  int size = http.getSize();
+  constexpr int kMaxAudioBytes = 180000;
+  if (size > kMaxAudioBytes) {
     http.end();
-    return false;
+    return "TTS too large";
+  }
+
+  uint8_t* blob = nullptr;
+  int collected = 0;
+  WiFiClient* stream = http.getStreamPtr();
+  if (size > 0) {
+    blob = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
+    if (blob == nullptr) {
+      http.end();
+      return "TTS no RAM";
+    }
+    while (collected < size) {
+      feedWatchdog();
+      const int n = stream->readBytes(blob + collected, size - collected);
+      if (n <= 0) {
+        free(blob);
+        http.end();
+        return "TTS HTTP read fail";
+      }
+      collected += n;
+    }
+  } else {
+    blob = static_cast<uint8_t*>(malloc(kMaxAudioBytes));
+    if (blob == nullptr) {
+      http.end();
+      return "TTS no RAM";
+    }
+    const uint32_t startedAt = millis();
+    while (http.connected() && collected < kMaxAudioBytes && millis() - startedAt < 30000) {
+      feedWatchdog();
+      const int avail = stream->available();
+      if (avail <= 0) {
+        delay(10);
+        continue;
+      }
+      const int n = stream->readBytes(blob + collected, min(avail, kMaxAudioBytes - collected));
+      if (n <= 0) {
+        break;
+      }
+      collected += n;
+    }
+    size = collected;
+  }
+  http.end();
+
+  if (size < 44) {
+    free(blob);
+    return "TTS empty file";
   }
 
   state.audioSyncInProgress = true;
   setStatus("Audio to modem");
 
+  String fileName = modemPath;
+  const int slash = fileName.lastIndexOf('/');
+  if (slash >= 0) {
+    fileName = fileName.substring(slash + 1);
+  }
+  sendAT("AT+FSCD=C:", "OK", 3000);
+  sendAT("AT+FSDEL=" + fileName, "OK", 3000);
   flushModemInput();
   ModemSerial.printf("AT+CFTRANRX=\"%s\",%d\r\n", modemPath.c_str(), size);
   if (!modemWaitForPrompt(10000)) {
-    http.end();
+    free(blob);
     state.audioSyncInProgress = false;
     setStatus("Audio prompt fail");
-    return false;
+    return "TTS modem prompt fail";
   }
 
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buffer[512];
   int remaining = size;
+  const uint8_t* cursor = blob;
   while (remaining > 0) {
     feedWatchdog();
-    const size_t chunk = min(static_cast<int>(sizeof(buffer)), remaining);
-    const int bytesRead = stream->readBytes(buffer, chunk);
-    if (bytesRead <= 0) {
-      http.end();
-      state.audioSyncInProgress = false;
-      setStatus("Audio read fail");
-      return false;
-    }
-    ModemSerial.write(buffer, bytesRead);
-    remaining -= bytesRead;
+    const int chunk = min(512, remaining);
+    ModemSerial.write(cursor, chunk);
+    cursor += chunk;
+    remaining -= chunk;
     delay(1);
   }
+  free(blob);
 
   const String response = readModemUntil(20000, "OK");
-  http.end();
   state.audioSyncInProgress = false;
-
   if (response.indexOf("OK") >= 0) {
     preferences.putString("audioVersion", audioVersion);
     setStatus("Audio synced");
-    return true;
+    return "";
   }
 
   setStatus("Audio upload fail");
-  return false;
+  return "TTS modem upload fail";
 }
 
 bool performOta(const String& url, const String& newVersion) {
@@ -1579,7 +1633,10 @@ void checkManifest(bool allowFirmwareUpdate) {
   const String currentAudioVersion = preferences.getString("audioVersion", "");
   if (state.manifestAudioVersion.length() > 0 && state.manifestAudioUrl.length() > 0 &&
       state.manifestAudioVersion != currentAudioVersion) {
-    uploadAudioToModem(state.manifestAudioUrl, state.modemAudioPath, state.manifestAudioVersion);
+    const String audioErr = uploadAudioToModem(state.manifestAudioUrl, state.modemAudioPath, state.manifestAudioVersion);
+    if (audioErr.length() > 0) {
+      Serial.println("[audio] " + audioErr);
+    }
     return;
   }
 
@@ -2008,9 +2065,10 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     if (pendingTestCallAudioUrl.length() > 0) {
       publishTestCallProgress("Downloading TTS audio");
       const String ttsPath = "C:/tts.wav";
-      if (!uploadAudioToModem(pendingTestCallAudioUrl, ttsPath, "tts")) {
+      const String audioErr = uploadAudioToModem(pendingTestCallAudioUrl, ttsPath, "tts");
+      if (audioErr.length() > 0) {
         pendingTestCallAudioUrl = "";
-        return "TTS audio fail";
+        return audioErr;
       }
       state.modemAudioPath = ttsPath;
       pendingTestCallAudioUrl = "";

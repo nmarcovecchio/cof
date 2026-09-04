@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.28
+Firmware:   0.2.29
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -122,9 +122,11 @@ MQTT command:
 }
 ```
 
-Device downloads over Ethernet (HTTPS, cert not verified), uploads with
-`AT+CFTRANRX` to `C:/tts.wav`, plays remote, then restores the previous
-modem audio path.
+Device downloads over Ethernet (HTTPS, cert not verified) into RAM, deletes any
+previous `C:/tts.wav` (`AT+FSDEL`), uploads with `AT+CFTRANRX`, plays remote,
+then restores the previous modem audio path. If this fails, the event message
+is specific (`TTS HTTP 404`, `TTS modem prompt fail`, etc.), not a generic
+`TTS audio fail`.
 
 Admin test-call **bypasses** `calling.enabled`. Alarm-driven calls must not.
 
