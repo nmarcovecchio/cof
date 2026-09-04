@@ -15,6 +15,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-this-secret-key}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://app.callonfail.com.ar}
     depends_on:
       mosquitto:
         condition: service_started

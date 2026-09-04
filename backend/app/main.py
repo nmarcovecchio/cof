@@ -11,13 +11,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
 from markupsafe import Markup
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
+from .tts import public_audio_url, synthesize_pcm_wav
 
 
 def login_required(view):
@@ -88,6 +90,7 @@ def get_csrf_token() -> str:
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["APP_TIMEZONE"] = os.environ.get("APP_TIMEZONE", "America/Argentina/Buenos_Aires")
@@ -457,19 +460,54 @@ def create_app() -> Flask:
     @login_required
     def device_command_test_call(device_uid):
         phone = normalize_phone(request.form.get("phone", ""))
+        text = (request.form.get("text") or "").strip() or "CallOnFail prueba de llamada"
+        if len(text) > 200:
+            text = text[:200]
         if not is_e164_phone(phone):
             return send_device_command(
                 device_uid,
                 "test_call",
                 "Test call rejected: invalid phone",
-                extra={"phone": phone},
+                extra={"phone": phone, "text": text},
+                publish=False,
+            )
+        try:
+            _wav_path, audio_id = synthesize_pcm_wav(text)
+        except Exception as exc:
+            return send_device_command(
+                device_uid,
+                "test_call",
+                f"Test call rejected: TTS failed ({exc})",
+                extra={"phone": phone, "text": text},
                 publish=False,
             )
         return send_device_command(
             device_uid,
             "test_call",
             f"Test call command sent to {phone}",
-            extra={"phone": phone},
+            extra={
+                "phone": phone,
+                "text": text,
+                "audio_url": public_audio_url(audio_id),
+                "audio_format": "wav_pcm_8000_mono_16bit",
+            },
+        )
+
+    @app.get("/audio/tmp/<audio_id>.wav")
+    def tts_audio(audio_id):
+        if not re.fullmatch(r"[a-f0-9]{32}", audio_id or ""):
+            abort(404)
+        from pathlib import Path
+
+        wav_path = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts")) / f"{audio_id}.wav"
+        if not wav_path.is_file():
+            abort(404)
+        return send_file(
+            wav_path,
+            mimetype="audio/wav",
+            as_attachment=False,
+            download_name=f"{audio_id}.wav",
+            max_age=60,
         )
 
     @app.post("/devices/<device_uid>/commands/test-sms")

@@ -125,7 +125,7 @@
       <div class="small text-muted mb-2">Pruebas del modem</div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <input class="form-control" id="test-phone" name="phone" type="tel" required placeholder="+54911..." value="{{ test_phone|default('') }}" style="max-width: 16rem;">
-        <input class="form-control" id="test-sms-text" name="text" type="text" maxlength="160" value="CallOnFail prueba SMS" style="max-width: 20rem;">
+        <input class="form-control" id="test-sms-text" name="text" type="text" maxlength="200" value="CallOnFail prueba de llamada" style="max-width: 20rem;">
         <button class="btn btn-outline-success" type="submit" formaction="{{ url_for('device_command_test_sms', device_uid=device.device_uid) }}" onclick="return confirm('Enviar SMS de prueba a ' + document.getElementById('test-phone').value + '?');">
           <i class="bi bi-chat-dots"></i> Probar SMS
         </button>
@@ -134,7 +134,7 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.27+. Si no hay VoLTE, primero prepara la radio CS (puede tardar ~1 min) y despues marca una sola vez.
+        Requiere firmware 0.2.28+. El texto se usa en el SMS y, en la llamada, se convierte a WAV 8 kHz y se reproduce al atender.
         El chip Voz verde solo si alguna llamada conecto.
       </p>
     </form>

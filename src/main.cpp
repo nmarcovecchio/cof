@@ -138,6 +138,7 @@ bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
+String pendingTestCallAudioUrl = "";
 bool reportTestCallProgress = false;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
@@ -424,6 +425,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallCommand = true;
         pendingTestCallPhone = doc["phone"] | "";
         pendingTestCallPhone.trim();
+        pendingTestCallAudioUrl = doc["audio_url"] | "";
+        pendingTestCallAudioUrl.trim();
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test call scheduled";
       } else if (pendingCommandName == "test_sms") {
@@ -2000,9 +2003,21 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     return "No phone cfg";
   }
 
+  const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    setStatus("Sync test audio");
-    checkManifest(false);
+    if (pendingTestCallAudioUrl.length() > 0) {
+      publishTestCallProgress("Downloading TTS audio");
+      const String ttsPath = "C:/tts.wav";
+      if (!uploadAudioToModem(pendingTestCallAudioUrl, ttsPath, "tts")) {
+        pendingTestCallAudioUrl = "";
+        return "TTS audio fail";
+      }
+      state.modemAudioPath = ttsPath;
+      pendingTestCallAudioUrl = "";
+    } else {
+      setStatus("Sync test audio");
+      checkManifest(false);
+    }
   }
 
   state.callInProgress = true;
@@ -2040,6 +2055,7 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   restoreAutoRadio();
   restorePacketServices();
   state.callInProgress = false;
+  state.modemAudioPath = previousAudioPath;
   return result;
 }
 
@@ -2468,6 +2484,7 @@ void loop() {
     reportTestCallProgress = true;
     const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
     pendingTestCallPhone = "";
+    pendingTestCallAudioUrl = "";
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
