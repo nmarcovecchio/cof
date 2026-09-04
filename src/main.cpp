@@ -72,6 +72,12 @@ struct RuntimeState {
   int imsReg = -1;
   bool forcedGsmForCall = false;
   bool skipGsmVoice = false;
+  String imsi = "";
+  String voiceIdentity = "";
+  String predictedVoicePath = "unknown";
+  String observedVoicePath = "";
+  String radioAtDial = "";
+  String radioAtConnect = "";
   bool callInProgress = false;
   bool otaInProgress = false;
   bool audioSyncInProgress = false;
@@ -134,6 +140,7 @@ String pendingCommandName = "";
 String pendingCommandStatus = "";
 String pendingCommandMessage = "";
 
+bool csAttached();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
 
 void setStatus(const String& line) {
@@ -436,6 +443,8 @@ void loadSavedMqttConfig() {
   state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
   state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", COF_ENABLE_CALLS != 0));
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
+  state.observedVoicePath = preferences.getString("voiceOk", "");
+  state.voiceIdentity = preferences.getString("voiceId", "");
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -597,8 +606,15 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   cellular["ims"] = state.imsReg == 1;
   cellular["ims_reg"] = state.imsReg;
   cellular["ims_voice"] = state.imsVoice;
+  cellular["imsi"] = state.imsi;
+  JsonObject voice = cellular["voice"].to<JsonObject>();
+  voice["path"] = state.predictedVoicePath;
+  voice["last_ok"] = state.observedVoicePath;
+  voice["cs_attached"] = csAttached();
+  voice["radio"] = state.radioMode;
+  voice["ims"] = state.imsReg == 1;
+  cellular["voice_path"] = state.predictedVoicePath;
   cellular["gsm_usable"] = !state.skipGsmVoice;
-  cellular["voice_path"] = state.skipGsmVoice ? "csfb" : "auto";
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
   for (int i = 0; i < ds18b20.getDeviceCount(); i++) {
@@ -1063,8 +1079,84 @@ String extractAtTagValue(const String& response, const char* tag) {
   return value;
 }
 
+bool radioIsGsm();
+bool imsVoiceReady();
+void persistSkipGsm(bool skip);
+
 bool networkStatRegistered(int stat) {
-  return stat == 1 || stat == 5;
+  return stat == 1 || stat == 5 || stat == 9 || stat == 10;
+}
+
+bool csAttached() {
+  return networkStatRegistered(state.cregStat);
+}
+
+String inferVoicePath() {
+  if (imsVoiceReady()) {
+    return "volte";
+  }
+  if (radioIsGsm() && csAttached()) {
+    return "gsm";
+  }
+  if (state.radioMode.indexOf("LTE") >= 0) {
+    if (state.cregStat == 9 || state.cregStat == 10) {
+      return "csfb_not_preferred";
+    }
+    if (csAttached()) {
+      return "csfb";
+    }
+    if (networkStatRegistered(state.ceregStat)) {
+      return "lte_data";
+    }
+  }
+  if (!state.networkRegistered) {
+    return "none";
+  }
+  return "unknown";
+}
+
+String observeVoicePath(const String& radioDial, const String& radioConnect) {
+  if (imsVoiceReady() && radioConnect.indexOf("LTE") >= 0) {
+    return "volte";
+  }
+  if (radioDial.indexOf("LTE") >= 0 && radioConnect.indexOf("GSM") >= 0) {
+    return "csfb";
+  }
+  if (radioDial.indexOf("GSM") >= 0 && radioConnect.indexOf("GSM") >= 0) {
+    return "gsm";
+  }
+  if (radioDial.indexOf("LTE") >= 0 && radioConnect.indexOf("LTE") >= 0) {
+    return imsVoiceReady() ? "volte" : "csfb";
+  }
+  return inferVoicePath();
+}
+
+void persistObservedVoicePath(const String& path) {
+  state.observedVoicePath = path;
+  preferences.putString("voiceOk", path);
+}
+
+void noteSubscriberIdentity() {
+  String identity = state.imsi;
+  if (state.operatorName.length() > 0) {
+    if (identity.length() > 0) {
+      identity += "|";
+    }
+    identity += state.operatorName;
+  }
+  if (identity.length() < 3) {
+    return;
+  }
+  if (state.voiceIdentity == identity) {
+    return;
+  }
+  if (state.voiceIdentity.length() > 0) {
+    Serial.println("[modem] SIM/operator changed, relearning voice path");
+    persistSkipGsm(false);
+    persistObservedVoicePath("");
+  }
+  state.voiceIdentity = identity;
+  preferences.putString("voiceId", identity);
 }
 
 void refreshCellularStatus() {
@@ -1129,20 +1221,27 @@ void refreshCellularStatus() {
       state.imsReg = value.toInt();
     }
   }
+  if (sendAT("AT+CIMI", "OK", 2000, &response)) {
+    const String imsi = firstNonEmptyAtLine(response);
+    if (imsi.length() >= 5) {
+      state.imsi = imsi;
+    }
+  }
 
   state.networkRegistered = networkStatRegistered(state.cregStat) ||
                             networkStatRegistered(state.ceregStat) ||
                             networkStatRegistered(state.cgregStat);
+  noteSubscriberIdentity();
+  state.predictedVoicePath = inferVoicePath();
 
-  Serial.printf("[modem] net registered=%s radio=%s ims=%d creg=%d cereg=%d csq=%d op=%s model=%s\n",
+  Serial.printf("[modem] net registered=%s radio=%s voice=%s ims=%d creg=%d cereg=%d op=%s\n",
                 state.networkRegistered ? "yes" : "no",
                 state.radioMode.c_str(),
+                state.predictedVoicePath.c_str(),
                 state.imsReg,
                 state.cregStat,
                 state.ceregStat,
-                state.signalQuality,
-                state.operatorName.c_str(),
-                state.modemModel.c_str());
+                state.operatorName.c_str());
 }
 
 void configureCellularApn() {
@@ -1451,6 +1550,24 @@ String classifyCallUrc(const String& raw) {
   return "";
 }
 
+void refreshRadioMode() {
+  String response;
+  if (!sendAT("AT+CPSI?", "OK", 2000, &response)) {
+    return;
+  }
+  String cpsi = extractAtTagValue(response, "+CPSI:");
+  if (cpsi.length() > 96) {
+    cpsi = cpsi.substring(0, 96);
+  }
+  if (cpsi.length() == 0) {
+    return;
+  }
+  state.radioInfo = cpsi;
+  const int comma = cpsi.indexOf(',');
+  state.radioMode = comma >= 0 ? cpsi.substring(0, comma) : cpsi;
+  state.radioMode.trim();
+}
+
 bool radioIsGsm() {
   return state.radioMode.indexOf("GSM") >= 0;
 }
@@ -1555,6 +1672,10 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
     return "No voice radio" + voiceContextSuffix(bearer);
   }
 
+  refreshRadioMode();
+  state.radioAtDial = state.radioMode;
+  state.radioAtConnect = "";
+
   setStatus("Calling");
   if (!sendAT("ATD" + phone + ";", "OK", 10000)) {
     const String ceer = queryCallFailCause();
@@ -1563,13 +1684,18 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
   }
 
   const String progress = waitForOutgoingCall(35000);
+  refreshRadioMode();
+  state.radioAtConnect = state.radioMode;
+  const String observed = observeVoicePath(state.radioAtDial, state.radioAtConnect);
   if (progress != "Call connected") {
     const String ceer = queryCallFailCause();
     sendAT("ATH", "OK", 3000);
-    return progress + voiceContextSuffix(bearer, ceer);
+    return progress + voiceContextSuffix(observed, ceer);
   }
 
-  return playConnectedCallAudio() + voiceContextSuffix(bearer);
+  persistObservedVoicePath(observed);
+  state.predictedVoicePath = observed;
+  return playConnectedCallAudio() + voiceContextSuffix(observed);
 }
 
 void restoreAutoRadio() {
@@ -1583,14 +1709,21 @@ void restoreAutoRadio() {
 
 String voiceContextSuffix(const String& bearer, const String& ceer) {
   String suffix = " [";
-  suffix += state.radioMode.length() > 0 ? state.radioMode : "?";
+  suffix += bearer.length() > 0 ? bearer : inferVoicePath();
+  suffix += " ";
+  if (state.radioAtDial.length() > 0 && state.radioAtConnect.length() > 0 &&
+      state.radioAtDial != state.radioAtConnect) {
+    suffix += state.radioAtDial;
+    suffix += "->";
+    suffix += state.radioAtConnect;
+  } else {
+    suffix += state.radioMode.length() > 0 ? state.radioMode : "?";
+  }
   suffix += " IMS=";
   suffix += String(state.imsReg);
-  suffix += " ";
-  suffix += bearer;
-  if (state.modemModel.length() > 0) {
+  if (state.operatorName.length() > 0) {
     suffix += " ";
-    suffix += state.modemModel;
+    suffix += state.operatorName;
   }
   if (ceer.length() > 0) {
     suffix += " CEER=";
@@ -1604,6 +1737,7 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
   bool sawDialing = false;
   bool sawAlerting = false;
   const uint32_t startedAt = millis();
+  uint32_t lastRadioSampleMs = startedAt;
 
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
@@ -1634,8 +1768,13 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
         sawAlerting = true;
         setStatus("Ringing");
       } else if (stat == 0) {
+        refreshRadioMode();
         return "Call connected";
       }
+    }
+    if (millis() - lastRadioSampleMs >= 3000) {
+      lastRadioSampleMs = millis();
+      refreshRadioMode();
     }
     delay(300);
   }

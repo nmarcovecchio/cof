@@ -360,7 +360,14 @@ Example:
       "model": "A7672SA-FASE",
       "ims": false,
       "csq": 31,
-      "operator": "722310"
+      "operator": "722310",
+      "voice": {
+        "path": "csfb",
+        "last_ok": "csfb",
+        "cs_attached": true,
+        "radio": "LTE",
+        "ims": false
+      }
     },
     "ds18b20_count": 2,
     "ds18b20": [
@@ -487,8 +494,10 @@ alarm calls still require `calling.enabled=true`.
 The device ACKs immediately, syncs test audio if the manifest version changed,
 then publishes an `event` of type `test_call` with the result. A result that
 starts with `Call done` is success, even when radio/IMS/CEER details are
-appended. Voice on Claro LTE without IMS uses CSFB; if the first dial fails the
-device bounces radio and retries once instead of camping on GSM.
+appended. `discovered.cellular.voice.path` is inferred live from IMS, radio and
+`CREG`: `volte`, `csfb`, `gsm`, `lte_data`, or `none`. A new IMSI/operator
+clears the last learned path so another SIM is re-diagnosed. During a call the
+device samples `AT+CPSI` to confirm LTE→GSM (CSFB) vs LTE+IMS (VoLTE).
 
 ### Test SMS
 
