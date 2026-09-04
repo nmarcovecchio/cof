@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.29
+Firmware:   0.2.30
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -70,8 +70,10 @@ Dialing, waiting for voice
 Call done [...]
 ```
 
-`Call done` is success even if the message has radio/IMS/CEER suffixes.
-`Retrying call` should be rare now; it was the old “first ATD failed, then bounce”.
+`Call done` means the remote side **answered** (`+CLCC` state 0). CSFB
+`LTE->GSM` or `+COLP` alone is not success: Claro often emits those while the
+phone is still ringing. Unanswered calls must show `Call no answer` or
+`Call ringing timeout`, not `Call done`.
 
 ## Test SMS
 

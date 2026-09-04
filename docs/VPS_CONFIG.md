@@ -472,7 +472,7 @@ radio/audio config to keep: `docs/VOICE_SMS.md`.
 - `docker-compose.yml` publishes `1883:1883` and `8883:8883`.
 - Web config form is visual (sensors / rules / call+sms+email+telegram).
   Rules are **not evaluated yet**. Email/Telegram sends are **not implemented**.
-- Latest published firmware: `0.2.29`.
+- Latest published firmware: `0.2.30`.
 - Lab device `cof-test`: MQTT `1883`, Claro A7672. Voice = CS bounce then one
   dial. SMS = modem. Call audio = server TTS WAV 8 kHz.
 

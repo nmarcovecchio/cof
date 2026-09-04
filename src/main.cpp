@@ -1669,9 +1669,9 @@ String classifyCallUrc(const String& raw) {
   if (urc.indexOf("NO ANSWER") >= 0) {
     return "Call no answer";
   }
-  if (urc.indexOf("VOICE CALL: BEGIN") >= 0 ||
-      urc.indexOf("MO CONNECTED") >= 0 ||
-      urc.indexOf("+COLP:") >= 0) {
+  // Do not treat +COLP or VOICE CALL: BEGIN as answered: on Claro CSFB they
+  // often fire when the GSM bearer is up, while the remote is still ringing.
+  if (urc.indexOf("MO CONNECTED") >= 0) {
     return "Call connected";
   }
   if (urc.indexOf("NO CARRIER") >= 0) {
@@ -1995,7 +1995,14 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
       } else if (stat == 3) {
         sawAlerting = true;
         setStatus("Ringing");
+        publishTestCallProgress("Ringing");
       } else if (stat == 0) {
+        return "Call connected";
+      }
+    }
+    if (urc.indexOf("VOICE CALL: BEGIN") >= 0 || urc.indexOf("voice call: begin") >= 0 ||
+        urc.indexOf("MO CONNECTED") >= 0) {
+      if (sawAlerting) {
         return "Call connected";
       }
     }
