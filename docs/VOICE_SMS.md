@@ -70,38 +70,8 @@ Dialing, waiting for voice
 Call done [...]
 ```
 
-On Claro CSFB the modem reports “active” / `VOICE CALL: BEGIN` / `+COLP`
-as soon as there is ringback. Validated 2026-09-06 traces: no-answer,
-reject, and “answer and wait” are **identical** until we hang up.
-The only far-end signal is hangup: `+CLCC` stat 6 + `NO CARRIER` +
-`VOICE CALL: END` + CEER 16 (answer then remote hangup, 4 s).
-
-Play into that voice path after a **4 s** lead-in (time to pick up), then
-**2 s** of silence after `+AUDIOSTATE: play stop` before `ATH`. Never
-poll AT during the call. Results we can actually mark:
-
-- `Call done` — audio finished and we hung up, **or** remote `CLCC` 6 /
-  `NO CARRIER` / CEER 16 after ringing
-- `Call no answer` — we timed out and the call was still up (covers
-  ignore **and** reject: Claro never sends `BUSY` on decline)
-- `Call rejected` — only if `BUSY` / CEER 17/21 ever appear
-
-- `Call no answer` — we gave up after the ring timeout, or the network
-  sent CEER 18/19 (`No user responding` / `User alerting, no answer`).
-  An unanswered phone does not send DISCONNECT.
-- `Call rejected` — `BUSY` URC or CEER 17/21/22 (`User busy` /
-  `Call rejected`).
-- `Call done` — audio finished and we hung up, **or** the far end
-  released with CEER 16/31 (`Normal call clearing`). That covers
-  “answered” and “answered then hung up at any moment”.
-
-`+CLCC` state 0, `+COLP` and `VOICE CALL: BEGIN` are **not** success.
-Do not classify by how many seconds of audio played.
-
-During the call, never discard UART bytes (`flush` must keep `BUSY` /
-`VOICE CALL:END` / `+CLCC` stat 6). A7672 often sends `VOICE CALL:END:`
-without a space; that is still a remote release. The web event `Modem: …`
-is the raw hangup URC.
+Claro CSFB event table, traces and what we can mark:
+[docs/operators/claro-ar.md](operators/claro-ar.md).
 
 ## Test SMS
 

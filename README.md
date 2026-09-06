@@ -41,6 +41,7 @@ Llamada y SMS validados en lab (Claro / A7672 / TTS WAV) quedan en:
 
 ```text
 docs/VOICE_SMS.md
+docs/operators/claro-ar.md
 ```
 
 La configuracion diferencia capacidades del modem, llamadas habilitadas por

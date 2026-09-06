@@ -19,4 +19,5 @@ Validated module: **A7672SA-FASE** (LatAm: LTE B4/B28, GSM 850/1900).
 - `AT+CCMXPLAY` / `AT+CCMXSTOP` / `+AUDIOSTATE` — file playback into the call
 - `BUSY` / `NO CARRIER` / `NO ANSWER` — standard result codes
 
-On Claro CSFB (`IMS=0`) this module reports BEGIN / CLCC `0` during ringback. That is early TCH, not pickup. Do not play audio on alerting.
+On Claro CSFB (`IMS=0`) this module reports BEGIN / CLCC `0` during ringback.
+That is early TCH, not pickup. Event table: [../operators/claro-ar.md](../operators/claro-ar.md).
