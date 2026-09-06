@@ -142,6 +142,8 @@ String pendingTestCallAudioUrl = "";
 String pendingTestCallAudioFormat = "";
 bool reportTestCallProgress = false;
 String pendingCallUrcs;
+String modemCallLog;
+constexpr uint16_t kModemCallLogMax = 1800;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
 String pendingTestSmsText = "";
@@ -543,12 +545,52 @@ String currentIpAddress() {
   return "-";
 }
 
+bool modemLineInteresting(const String& line) {
+  String upper = line;
+  upper.toUpperCase();
+  return upper.indexOf("ATD") >= 0 || upper.indexOf("ATH") >= 0 ||
+         upper.indexOf("CLCC") >= 0 || upper.indexOf("CEER") >= 0 ||
+         upper.indexOf("BUSY") >= 0 || upper.indexOf("CARRIER") >= 0 ||
+         upper.indexOf("VOICE") >= 0 || upper.indexOf("AUDIO") >= 0 ||
+         upper.indexOf("COLP") >= 0 || upper.indexOf("CCMX") >= 0 ||
+         upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("CHUP") >= 0;
+}
+
+void appendModemLog(char direction, const String& text) {
+  if (!state.callInProgress && !reportTestCallProgress) {
+    return;
+  }
+  String line = text;
+  line.replace("\r", " ");
+  line.replace("\n", " | ");
+  line.trim();
+  if (line.length() == 0 || !modemLineInteresting(line)) {
+    return;
+  }
+  String entry = String(direction == '>' ? ">> " : "<< ") + line;
+  if (entry.length() > 140) {
+    entry = entry.substring(0, 140);
+  }
+  while (modemCallLog.length() + entry.length() + 1 > kModemCallLogMax) {
+    const int cut = modemCallLog.indexOf('\n');
+    if (cut < 0) {
+      modemCallLog = "";
+      break;
+    }
+    modemCallLog = modemCallLog.substring(cut + 1);
+  }
+  if (modemCallLog.length() > 0) {
+    modemCallLog += '\n';
+  }
+  modemCallLog += entry;
+}
+
 bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = false, uint8_t qos = 0) {
   if (!state.mqttConnected) {
     return false;
   }
 
-  char payload[3072];
+  char payload[4096];
   const String topic = mqttTopic(suffix);
   const size_t requiredLength = measureJson(doc);
   if (requiredLength >= sizeof(payload)) {
@@ -705,6 +747,19 @@ void publishTestCallProgress(const String& message) {
     mqttClient.loop();
     publishDeviceEvent("test_call", "info", withFirmware(message));
   }
+}
+
+void publishTestCallResult(const String& result, bool ok) {
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["type"] = "test_call";
+  doc["severity"] = ok ? "info" : "warning";
+  doc["message"] = withFirmware(result);
+  if (modemCallLog.length() > 0) {
+    doc["modem_log"] = modemCallLog;
+  }
+  publishMqttJson("event", doc, false, 1);
 }
 
 void waitWithWatchdog(uint32_t ms) {
@@ -944,11 +999,13 @@ String readModemUntil(uint32_t timeoutMs, const String& token = "") {
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr) {
   flushModemInput();
   Serial.println("[modem] >> " + command);
+  appendModemLog('>', command);
   ModemSerial.print(command);
   ModemSerial.print("\r\n");
   String response = readModemUntil(timeoutMs, expected);
   response.trim();
   Serial.println("[modem] << " + response);
+  appendModemLog('<', response);
 
   if (responseOut != nullptr) {
     *responseOut = response;
@@ -2125,7 +2182,6 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   bool sawDialing = false;
   bool sawAlerting = false;
   bool sawNoCarrier = false;
-  bool playing = false;
   bool audioDone = false;
   bool reportedCsfbWait = false;
   const uint32_t startedAt = millis();
@@ -2148,6 +2204,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
     String urc = pendingCallUrcs;
     pendingCallUrcs = "";
     urc += readModemUntil(800, "");
+    appendModemLog('<', urc);
     const String urcResult = classifyCallUrc(urc);
     const int clccStat = lastClccStat(urc);
     if (urcResult.length() > 0 || clccStat == 6) {
@@ -2205,16 +2262,6 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
         reportedCsfbWait = true;
         publishTestCallProgress("CSFB in progress");
       }
-    }
-
-    if (sawAlerting && !playing && state.modemAudioPath.length() > 0 &&
-        millis() - ringAt >= 8000) {
-      publishTestCallProgress("Playing audio");
-      String playResp;
-      sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000,
-             &playResp);
-      pendingCallUrcs = playResp + pendingCallUrcs;
-      playing = true;
     }
 
     if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 1500) {
@@ -2321,6 +2368,7 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
 
   state.callInProgress = true;
   pendingCallUrcs = "";
+  modemCallLog = "";
   refreshCellularStatus();
   bool preparedCs = false;
   if (!imsVoiceReady() && !radioIsGsm()) {
@@ -2789,7 +2837,7 @@ void loop() {
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
-    publishDeviceEvent("test_call", ok ? "info" : "warning", withFirmware(result));
+    publishTestCallResult(result, ok);
   }
 
   if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {

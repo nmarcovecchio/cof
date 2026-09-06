@@ -284,6 +284,26 @@
 
   <div class="col-xl-5">
     <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Modem</span>
+        {% if modem_trace_event %}
+        <span class="small text-muted">{{ modem_trace_event.started_at|datetime_local }}</span>
+        {% endif %}
+      </div>
+      {% if modem_trace_event and modem_trace_event.payload.get('modem_log') %}
+      <pre class="modem-log">{% for line in modem_trace_event.payload.get('modem_log').splitlines() %}{% if line.startswith('>>') %}<span class="tx">{{ line }}</span>
+{% elif line.startswith('<<') %}<span class="rx">{{ line }}</span>
+{% else %}{{ line }}
+{% endif %}{% endfor %}</pre>
+      <div class="px-3 py-2 small text-muted border-top">{{ modem_trace_event.message }}</div>
+      {% else %}
+      <div class="p-3 text-muted small">
+        Traza AT de la ultima prueba de llamada (firmware 0.2.38+).
+        No se publica en vivo: un dump al terminar, para no saturar MQTT.
+      </div>
+      {% endif %}
+    </div>
+    <div class="card mb-4">
       <div class="card-header">Eventos</div>
       {% if recent_events %}
       <ul class="event-list">

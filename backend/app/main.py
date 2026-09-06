@@ -430,6 +430,14 @@ def create_app() -> Flask:
         )
         recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
+        modem_trace_event = next(
+            (
+                event
+                for event in recent_events
+                if isinstance(event.payload, dict) and event.payload.get("modem_log")
+            ),
+            None,
+        )
         return render_template(
             "device_detail.html",
             device=device,
@@ -437,6 +445,7 @@ def create_app() -> Flask:
             recent_events=recent_events,
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
+            modem_trace_event=modem_trace_event,
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
