@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.35 (AMR TTS; hangup classified by 3GPP CEER, not duration)
+Firmware:   0.2.36 (AMR TTS; never drop call URCs; VOICE CALL:END / CLCC 6)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -87,6 +87,11 @@ pickup. The **result** is who released the call and the 3GPP cause
 
 `+CLCC` state 0, `+COLP` and `VOICE CALL: BEGIN` are **not** success.
 Do not classify by how many seconds of audio played.
+
+During the call, never discard UART bytes (`flush` must keep `BUSY` /
+`VOICE CALL:END` / `+CLCC` stat 6). A7672 often sends `VOICE CALL:END:`
+without a space; that is still a remote release. The web event `Modem: …`
+is the raw hangup URC.
 
 ## Test SMS
 

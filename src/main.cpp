@@ -141,6 +141,7 @@ String pendingTestCallPhone = "";
 String pendingTestCallAudioUrl = "";
 String pendingTestCallAudioFormat = "";
 bool reportTestCallProgress = false;
+String pendingCallUrcs;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
 String pendingTestSmsText = "";
@@ -903,7 +904,10 @@ int compareVersions(const String& a, const String& b) {
 
 void flushModemInput() {
   while (ModemSerial.available()) {
-    ModemSerial.read();
+    const char c = static_cast<char>(ModemSerial.read());
+    if (state.callInProgress) {
+      pendingCallUrcs += c;
+    }
   }
 }
 
@@ -1658,8 +1662,7 @@ void checkManifest(bool allowFirmwareUpdate) {
   setStatus("Manifest OK");
 }
 
-int parseClccStat(const String& response) {
-  const int tag = response.indexOf("+CLCC:");
+int parseClccStatAt(const String& response, int tag) {
   if (tag < 0) {
     return -1;
   }
@@ -1672,6 +1675,24 @@ int parseClccStat(const String& response) {
   return response.substring(second + 1, third).toInt();
 }
 
+int parseClccStat(const String& response) {
+  return parseClccStatAt(response, response.indexOf("+CLCC:"));
+}
+
+int lastClccStat(const String& response) {
+  int last = -1;
+  int from = 0;
+  while (from >= 0) {
+    const int tag = response.indexOf("+CLCC:", from);
+    if (tag < 0) {
+      break;
+    }
+    last = parseClccStatAt(response, tag);
+    from = tag + 6;
+  }
+  return last;
+}
+
 int queryClccStat() {
   String clcc;
   if (!sendAT("AT+CLCC", "OK", 1500, &clcc)) {
@@ -1680,9 +1701,50 @@ int queryClccStat() {
   return parseClccStat(clcc);
 }
 
+String compactAtText(const String& raw) {
+  String compact = raw;
+  compact.toUpperCase();
+  compact.replace(" ", "");
+  compact.replace("\r", "");
+  compact.replace("\n", "");
+  return compact;
+}
+
+void publishCallModemSignal(const String& raw) {
+  String upper = raw;
+  upper.toUpperCase();
+  const char* keys[] = {
+      "BUSY", "NO CARRIER", "NO ANSWER", "NO DIALTONE",
+      "VOICE CALL", "+CLCC:", "+COLP:"};
+  int hit = -1;
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    const int at = upper.indexOf(keys[i]);
+    if (at >= 0 && (hit < 0 || at < hit)) {
+      hit = at;
+    }
+  }
+  if (hit < 0) {
+    return;
+  }
+  String line = raw.substring(hit);
+  const int nl = line.indexOf('\n');
+  if (nl >= 0) {
+    line = line.substring(0, nl);
+  }
+  line.replace("\r", "");
+  line.trim();
+  if (line.length() > 80) {
+    line = line.substring(0, 80);
+  }
+  if (line.length() > 0) {
+    publishTestCallProgress(String("Modem: ") + line);
+  }
+}
+
 String classifyCallUrc(const String& raw) {
   String urc = raw;
   urc.toUpperCase();
+  const String compact = compactAtText(raw);
   if (urc.indexOf("BUSY") >= 0) {
     return "Call rejected";
   }
@@ -1692,7 +1754,7 @@ String classifyCallUrc(const String& raw) {
   if (urc.indexOf("NO ANSWER") >= 0) {
     return "Call no answer";
   }
-  if (urc.indexOf("NO CARRIER") >= 0 || urc.indexOf("VOICE CALL: END") >= 0) {
+  if (urc.indexOf("NO CARRIER") >= 0 || compact.indexOf("VOICECALL:END") >= 0) {
     return "Call no carrier";
   }
   return "";
@@ -2067,8 +2129,14 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
       mqttClient.loop();
     }
 
-    const String urc = readModemUntil(800, "");
+    String urc = pendingCallUrcs;
+    pendingCallUrcs = "";
+    urc += readModemUntil(800, "");
     const String urcResult = classifyCallUrc(urc);
+    const int clccStat = lastClccStat(urc);
+    if (urcResult.length() > 0 || clccStat == 6) {
+      publishCallModemSignal(urc);
+    }
     if (urc.indexOf("+AUDIOSTATE:") >= 0 && urc.indexOf("play stop") >= 0) {
       audioDone = true;
       if (audioDoneAt == 0) {
@@ -2078,48 +2146,59 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
       setStatus("Audio done");
     }
     if (urc.indexOf("+CLCC:") >= 0) {
-      const int stat = parseClccStat(urc);
-      if (stat == 2) {
-        sawDialing = true;
-        setStatus("Dialing");
-      } else if (stat == 3) {
-        if (!sawAlerting) {
-          publishTestCallProgress("Ringing");
-          ringAt = millis();
+      int from = 0;
+      while (from >= 0) {
+        const int tag = urc.indexOf("+CLCC:", from);
+        if (tag < 0) {
+          break;
         }
-        sawAlerting = true;
-        setStatus("Ringing");
+        const int stat = parseClccStatAt(urc, tag);
+        if (stat == 2) {
+          sawDialing = true;
+          setStatus("Dialing");
+        } else if (stat == 3) {
+          if (!sawAlerting) {
+            publishTestCallProgress("Ringing");
+            ringAt = millis();
+          }
+          sawAlerting = true;
+          setStatus("Ringing");
+        }
+        from = tag + 6;
+      }
+    }
+
+    if (urcResult.length() > 0 || clccStat == 6) {
+      if (urcResult == "Call rejected" || urcResult == "Call no answer" ||
+          urcResult == "Call no dialtone") {
+        sendAT("AT+CCMXSTOP", "OK", 2000);
+        const String ceer = queryCallFailCause();
+        storeCeer(ceer);
+        return urcResult;
+      }
+      sawNoCarrier = true;
+      if (sawAlerting || millis() - startedAt >= kCsfbIgnoreMs) {
+        sendAT("AT+CCMXSTOP", "OK", 2000);
+        const String ceer = queryCallFailCause();
+        storeCeer(ceer);
+        publishTestCallProgress("Remote hangup");
+        return classifyHangup(ceer, sawAlerting, kCallEndRemote);
+      }
+      setStatus("CSFB wait");
+      if (!reportedCsfbWait) {
+        reportedCsfbWait = true;
+        publishTestCallProgress("CSFB in progress");
       }
     }
 
     if (sawAlerting && !playing && state.modemAudioPath.length() > 0 &&
         millis() - ringAt >= 1500) {
       publishTestCallProgress("Playing audio");
-      sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
+      String playResp;
+      sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000,
+             &playResp);
+      pendingCallUrcs = playResp + pendingCallUrcs;
       playing = true;
-    }
-
-    if (urcResult.length() > 0) {
-      if (urcResult == "Call no carrier") {
-        sawNoCarrier = true;
-        if (sawAlerting || millis() - startedAt >= kCsfbIgnoreMs) {
-          sendAT("AT+CCMXSTOP", "OK", 2000);
-          const String ceer = queryCallFailCause();
-          storeCeer(ceer);
-          publishTestCallProgress("Remote hangup");
-          return classifyHangup(ceer, sawAlerting, kCallEndRemote);
-        }
-        setStatus("CSFB wait");
-        if (!reportedCsfbWait) {
-          reportedCsfbWait = true;
-          publishTestCallProgress("CSFB in progress");
-        }
-      } else {
-        sendAT("AT+CCMXSTOP", "OK", 2000);
-        const String ceer = queryCallFailCause();
-        storeCeer(ceer);
-        return urcResult;
-      }
     }
 
     if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 1500) {
@@ -2195,6 +2274,7 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
   }
 
   state.callInProgress = true;
+  pendingCallUrcs = "";
   refreshCellularStatus();
   bool preparedCs = false;
   if (!imsVoiceReady() && !radioIsGsm()) {
