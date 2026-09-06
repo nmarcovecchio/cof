@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.36 (AMR TTS; never drop call URCs; VOICE CALL:END / CLCC 6)
+Firmware:   0.2.37 (play after 8s ring; stop audio before reading hangup/CEER)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```

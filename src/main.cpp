@@ -692,6 +692,10 @@ void publishDeviceEvent(const char* type, const char* severity, const String& me
   publishMqttJson("event", doc, false, 1);
 }
 
+String withFirmware(const String& message) {
+  return message + " [" + COF_FIRMWARE_VERSION + "]";
+}
+
 void publishTestCallProgress(const String& message) {
   if (!reportTestCallProgress) {
     return;
@@ -699,7 +703,7 @@ void publishTestCallProgress(const String& message) {
   setStatus(message);
   if (state.mqttConnected) {
     mqttClient.loop();
-    publishDeviceEvent("test_call", "info", message);
+    publishDeviceEvent("test_call", "info", withFirmware(message));
   }
 }
 
@@ -911,6 +915,12 @@ void flushModemInput() {
   }
 }
 
+String takePendingCallUrcs() {
+  const String out = pendingCallUrcs;
+  pendingCallUrcs = "";
+  return out;
+}
+
 String readModemUntil(uint32_t timeoutMs, const String& token = "") {
   String response;
   const uint32_t startedAt = millis();
@@ -944,6 +954,12 @@ bool sendAT(const String& command, const String& expected = "OK", uint32_t timeo
     *responseOut = response;
   }
   return expected.length() == 0 || response.indexOf(expected) >= 0;
+}
+
+String stopPlaybackAndCollect() {
+  String resp;
+  sendAT("AT+CCMXSTOP", "OK", 2000, &resp);
+  return takePendingCallUrcs() + resp;
 }
 
 bool i2cDevicePresent(uint8_t address) {
@@ -2192,7 +2208,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
     }
 
     if (sawAlerting && !playing && state.modemAudioPath.length() > 0 &&
-        millis() - ringAt >= 1500) {
+        millis() - ringAt >= 8000) {
       publishTestCallProgress("Playing audio");
       String playResp;
       sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000,
@@ -2209,12 +2225,42 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
     }
   }
 
-  sendAT("AT+CCMXSTOP", "OK", 2000);
-  sendAT("ATH", "OK", 3000);
-  const String ceer = queryCallFailCause();
-  storeCeer(ceer);
-  if (sawAlerting) {
-    return classifyHangup(ceer, true, kCallEndTimeout);
+  const String afterStop = stopPlaybackAndCollect();
+  publishCallModemSignal(afterStop);
+  const String stopResult = classifyCallUrc(afterStop);
+  const int stopClcc = lastClccStat(afterStop);
+  if (stopResult == "Call rejected" || stopResult == "Call no answer" ||
+      stopResult == "Call no dialtone") {
+    const String ceer = queryCallFailCause();
+    storeCeer(ceer);
+    return stopResult;
+  }
+  if (stopResult == "Call no carrier" || stopClcc == 6) {
+    const String ceer = queryCallFailCause();
+    storeCeer(ceer);
+    publishTestCallProgress("Remote hangup");
+    return classifyHangup(ceer, sawAlerting, kCallEndRemote);
+  }
+
+  String clccNow;
+  sendAT("AT+CLCC", "OK", 1500, &clccNow);
+  clccNow += takePendingCallUrcs();
+  if (clccNow.indexOf("+CLCC:") >= 0) {
+    publishCallModemSignal(clccNow);
+    publishTestCallProgress("Timeout, call still up");
+    sendAT("ATH", "OK", 3000);
+    const String ceer = queryCallFailCause();
+    storeCeer(ceer);
+    if (sawAlerting) {
+      return classifyHangup(ceer, true, kCallEndTimeout);
+    }
+  } else {
+    publishTestCallProgress("Timeout, call already gone");
+    const String ceer = queryCallFailCause();
+    storeCeer(ceer);
+    if (sawAlerting) {
+      return classifyHangup(ceer, true, kCallEndRemote);
+    }
   }
   if (sawDialing) {
     return "Call dial timeout";
@@ -2743,7 +2789,7 @@ void loop() {
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
-    publishDeviceEvent("test_call", ok ? "info" : "warning", result);
+    publishDeviceEvent("test_call", ok ? "info" : "warning", withFirmware(result));
   }
 
   if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
