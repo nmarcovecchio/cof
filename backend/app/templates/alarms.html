@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Alarmas - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="mb-1">Alarmas</h1>
+    <p class="text-muted mb-0">
+      {% if device %}
+        Ciclo de avisos de <code>{{ device.device_uid }}</code>.
+      {% else %}
+        Quien se aviso, quien no atendio y cuando se normalizo.
+      {% endif %}
+    </p>
+  </div>
+  {% if device %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('device_detail', device_uid=device.device_uid) }}">Volver al equipo</a>
+  {% endif %}
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Estado</th>
+          <th>Cuando</th>
+          <th>Equipo</th>
+          <th>Que paso</th>
+          <th>Ultimo paso</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for alarm in alarms %}
+        <tr>
+          <td>
+            {% if alarm.open %}
+              <span class="badge text-bg-danger">abierta</span>
+            {% else %}
+              <span class="badge text-bg-success">cerrada</span>
+            {% endif %}
+          </td>
+          <td class="small text-muted">{{ alarm.event.started_at|datetime_local }}</td>
+          <td>
+            <a href="{{ url_for('device_detail', device_uid=alarm.event.device.device_uid) }}">{{ alarm.event.device.name }}</a>
+            <div class="small text-muted"><code>{{ alarm.event.device.device_uid }}</code></div>
+          </td>
+          <td>
+            <div class="fw-semibold">{{ alarm.title }}</div>
+            <div class="small text-muted">{{ alarm.detail }}</div>
+          </td>
+          <td class="small">{{ alarm.last }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Ver ciclo</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-muted">Todavia no hay alarmas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

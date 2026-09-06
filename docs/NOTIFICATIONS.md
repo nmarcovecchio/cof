@@ -18,10 +18,12 @@ freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 
 Si varias alarmas piden llamada o SMS a la vez, el backend arma una **cola por
 equipo**: una operacion de modem a la vez. Termina la primera y recien sale la
-siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 8 jobs.
+siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 16 jobs.
 
-La cascada de telefonos (primero X, si no atiende Y, luego Z) **todavia no esta**.
-Los telefonos ya se guardan en orden para cuando se arme.
+SMS de alarma va a **todos** los telefonos del cliente, en cola.
+Llamadas: primero el 1, si no atienden el 2, etc. (si la regla tiene escalamiento).
+Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la regla).
+El ciclo se ve en **Alarmas**.
 
 No hace falta un bot por cliente. Si un token se filtra, un solo bot ve todos
 los grupos; por eso el token vive en el VPS, no en la web.

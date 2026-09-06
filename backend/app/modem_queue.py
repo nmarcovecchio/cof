@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from .alarm_log import append_alarm_step, call_outcome, update_alarm_step
 from .extensions import db
 from .models import Device, DeviceModemJob, Event, utcnow
 from .mqtt_util import publish_mqtt
@@ -11,7 +12,7 @@ from .tts import public_audio_url, synthesize_call_audio
 
 logger = logging.getLogger("callonfail.modem_queue")
 
-MAX_QUEUED_JOBS = 8
+MAX_QUEUED_JOBS = 16
 CALL_TIMEOUT = timedelta(minutes=4)
 SMS_TIMEOUT = timedelta(minutes=2)
 
@@ -112,6 +113,7 @@ def pump_modem_queue(device: Device) -> DeviceModemJob | None:
             job.result = "timeout waiting device result"
             job.finished_at = now
             _note_alarm_job(job, job.result)
+            _maybe_escalate_call(device, job)
             continue
         in_flight = job
         break
@@ -126,6 +128,9 @@ def pump_modem_queue(device: Device) -> DeviceModemJob | None:
     extra = dict(next_job.payload or {})
     extra.pop("source", None)
     extra.pop("alarm_event_id", None)
+    extra.pop("phone_index", None)
+    extra.pop("escalate_calls", None)
+    extra.pop("clear_notice", None)
     mqtt_payload = {
         "command_id": next_job.command_id,
         "command": next_job.command,
@@ -187,6 +192,7 @@ def complete_modem_job(device: Device, event_type: str, message: str, command_id
     job.result = strip_firmware_suffix(message)[:240]
     job.finished_at = utcnow()
     _note_alarm_job(job, job.result)
+    _maybe_escalate_call(device, job)
     return job
 
 
@@ -205,3 +211,62 @@ def _note_alarm_job(job: DeviceModemJob, result: str) -> None:
     event_payload["results"] = results
     event.payload = event_payload
     flag_modified(event, "payload")
+    if not update_alarm_step(event, job.command_id, job.status if job.status != "done" else _step_status(job.command, result), result):
+        append_alarm_step(
+            event,
+            channel=key,
+            to=payload.get("phone"),
+            status=_step_status(job.command, result) if job.status == "done" else job.status,
+            detail=result,
+            command_id=job.command_id,
+        )
+
+
+def _step_status(command: str, result: str) -> str:
+    if command == "test_call":
+        return call_outcome(result)
+    if (result or "").startswith("SMS sent"):
+        return "sent"
+    if result in {"queued", "sent"}:
+        return result
+    return "error" if result else "sent"
+
+
+def _maybe_escalate_call(device: Device, job: DeviceModemJob) -> None:
+    if job.command != "test_call":
+        return
+    payload = job.payload or {}
+    if not payload.get("escalate_calls", True):
+        return
+    if call_outcome(job.result or "") != "no_answer":
+        return
+    event_id = payload.get("alarm_event_id")
+    event = Event.query.filter_by(id=event_id).first() if event_id else None
+    if event is None:
+        return
+    phones = ((event.payload or {}).get("contacts") or {}).get("phones") or []
+    next_index = int(payload.get("phone_index") or 0) + 1
+    if next_index >= len(phones):
+        append_alarm_step(event, channel="call", to=[], status="exhausted", detail="nadie atendio")
+        return
+    next_phone = phones[next_index]
+    next_job = enqueue_modem_job(
+        device,
+        "test_call",
+        {
+            "phone": next_phone,
+            "text": payload.get("text") or (event.payload or {}).get("text") or "CallOnFail alarma",
+            "alarm_event_id": event.id,
+            "phone_index": next_index,
+            "escalate_calls": True,
+        },
+        source="alarm",
+    )
+    append_alarm_step(
+        event,
+        channel="call",
+        to=next_phone,
+        status=next_job.status,
+        detail=next_job.result or "siguiente contacto",
+        command_id=next_job.command_id,
+    )

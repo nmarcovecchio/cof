@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}{{ alarm.title }} - CallOnFail{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('alarms', device=alarm.event.device.device_uid) }}">&larr; Alarmas de {{ alarm.event.device.device_uid }}</a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start gap-3">
+      <div>
+        <h1 class="h3 mb-1">{{ alarm.title }}</h1>
+        <p class="text-muted mb-0">{{ alarm.detail }}</p>
+      </div>
+      {% if alarm.open %}
+        <span class="badge text-bg-danger">abierta</span>
+      {% else %}
+        <span class="badge text-bg-success">cerrada</span>
+      {% endif %}
+    </div>
+    <div class="row g-3 mt-3">
+      <div class="col-md-3">
+        <div class="meta-label">Equipo</div>
+        <div class="meta-value">
+          <a href="{{ url_for('device_detail', device_uid=alarm.event.device.device_uid) }}">{{ alarm.event.device.name }}</a>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="meta-label">Cliente</div>
+        <div class="meta-value">{{ alarm.event.device.tenant.name }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="meta-label">Inicio</div>
+        <div class="meta-value">{{ alarm.event.started_at|datetime_local }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="meta-label">Cierre</div>
+        <div class="meta-value">{{ alarm.event.cleared_at|datetime_local if alarm.event.cleared_at else 'sigue abierta' }}</div>
+      </div>
+    </div>
+    <p class="small text-muted mb-0 mt-3">
+      Escalamiento de llamadas: {{ 'si no atienden, siguiente telefono' if alarm.escalate else 'solo el primero' }}.
+      Al normalizarse: {{ alarm.clear_actions|join(', ') if alarm.clear_actions else 'sin aviso' }}.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Ciclo de avisos</div>
+  <div class="card-body">
+    {% if alarm.steps %}
+    <ol class="timeline">
+      {% for step in alarm.steps %}
+      <li class="timeline-item is-{{ step.tone }}">
+        <div class="fw-semibold">{{ step.label }}</div>
+        <div class="small text-muted">{{ step.at|datetime_local }}</div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="text-muted mb-0">Esta alarma es anterior al ciclo detallado. {{ alarm.event.message }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

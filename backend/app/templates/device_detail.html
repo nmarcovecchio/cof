@@ -69,7 +69,10 @@
         <h2 class="h5 mb-1">Avisos del cliente</h2>
         <div class="text-muted small">Destinos de {{ device.tenant.name }}. Emails y Telegram a todos. SMS/llamada al primer telefono. La llamada solo si este equipo las tiene habilitadas.</div>
       </div>
-      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar cliente</a>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar cliente</a>
+      </div>
     </div>
     <div class="row g-3">
       <div class="col-md-4">

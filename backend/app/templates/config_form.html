@@ -177,6 +177,29 @@
         <label class="form-label small mb-1">Descripción (opcional)</label>
         <input type="text" class="form-control form-control-sm rule-description" placeholder="Ej: Temperatura alta en sala de servidores">
       </div>
+      <div class="col-md-6">
+        <div class="form-check mt-2">
+          <input class="form-check-input rule-escalate" type="checkbox" checked>
+          <label class="form-check-label small">Si no atienden, llamar al siguiente telefono (orden del cliente)</label>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small mb-1">Al normalizarse avisar por</label>
+        <div class="d-flex flex-wrap gap-3">
+          <div class="form-check">
+            <input class="form-check-input rule-clear" type="checkbox" value="email" checked>
+            <label class="form-check-label small">Email</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-clear" type="checkbox" value="telegram" checked>
+            <label class="form-check-label small">Telegram</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-clear" type="checkbox" value="sms">
+            <label class="form-check-label small">SMS</label>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -217,6 +240,11 @@ function addRule(rule) {
     const actions = rule.actions || [];
     row.querySelectorAll('.rule-action').forEach(cb => {
       cb.checked = actions.includes(cb.value);
+    });
+    row.querySelector('.rule-escalate').checked = rule.escalate_calls !== false;
+    const clearActions = rule.clear_actions || ['email', 'telegram'];
+    row.querySelectorAll('.rule-clear').forEach(cb => {
+      cb.checked = clearActions.includes(cb.value);
     });
   }
 
@@ -270,6 +298,8 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
       duration_seconds: parseInt(row.querySelector('.rule-duration').value) || 0,
       actions: actions,
       description: row.querySelector('.rule-description').value,
+      escalate_calls: row.querySelector('.rule-escalate').checked,
+      clear_actions: [...row.querySelectorAll('.rule-clear:checked')].map(cb => cb.value),
     });
   });
 

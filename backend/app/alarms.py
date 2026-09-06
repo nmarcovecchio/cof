@@ -8,6 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from .extensions import db
 from .models import Device, DeviceConfig, Event, utcnow
+from .alarm_log import append_alarm_step
 from .modem_queue import enqueue_modem_job, pump_modem_queue
 from .notify import send_email, send_telegram, smtp_configured, telegram_configured
 from .phones import parse_emails, parse_phones, parse_telegram_chats
@@ -222,7 +223,7 @@ def open_alarm_event(device_id: int, key: str) -> Event | None:
     return None
 
 
-def clear_alarm(event: Event, telemetry: dict | None = None) -> None:
+def clear_alarm(event: Event, telemetry: dict | None = None, device: Device | None = None) -> None:
     event.cleared_at = utcnow()
     payload = dict(event.payload or {})
     payload["cleared_at"] = event.cleared_at.isoformat()
@@ -230,6 +231,8 @@ def clear_alarm(event: Event, telemetry: dict | None = None) -> None:
         payload["cleared_value"] = sensor_value(telemetry, str(payload.get("sensor_id") or ""))
     event.payload = payload
     flag_modified(event, "payload")
+    if device is not None:
+        notify_alarm_cleared(device, event, telemetry)
 
 
 def _mqtt_note(contacts: dict, sent: str) -> str:
@@ -256,11 +259,15 @@ def dispatch_alarm(
     if len(spoken) > MAX_TEXT_CHARS:
         spoken = spoken[:MAX_TEXT_CHARS]
 
+    extra = extra or {}
+    escalate_calls = bool(extra.get("escalate_calls", True))
+    clear_actions = list(extra.get("clear_actions") or [])
+    phones = contacts["phones"]
     channels = {
         "email": "email" in wanted and bool(contacts["emails"]),
         "telegram": "telegram" in wanted and bool(contacts["telegram_chat_ids"]),
-        "sms": "sms" in wanted and bool(contacts["phone"]),
-        "call": "call" in wanted and contacts["calling_enabled"] and bool(contacts["phone"]),
+        "sms": "sms" in wanted and bool(phones),
+        "call": "call" in wanted and contacts["calling_enabled"] and bool(phones),
     }
     results = {}
 
@@ -283,7 +290,10 @@ def dispatch_alarm(
             },
             "channels": channels,
             "results": results,
-            **(extra or {}),
+            "steps": [],
+            "escalate_calls": escalate_calls,
+            "clear_actions": clear_actions,
+            **extra,
         },
     )
     db.session.add(event)
@@ -292,52 +302,95 @@ def dispatch_alarm(
     if channels["email"]:
         if not contacts["smtp_ready"]:
             results["email"] = "skipped: SMTP no configurado"
+            append_alarm_step(event, channel="email", to=contacts["emails"], status="skipped", detail="SMTP no configurado")
         else:
             try:
                 send_email(contacts["emails"], f"[CallOnFail] {title} - {device.name}", text)
                 results["email"] = f"sent:{len(contacts['emails'])}"
+                append_alarm_step(event, channel="email", to=contacts["emails"], status="sent")
             except Exception as exc:
                 logger.exception("Alarm email failed device=%s", device.device_uid)
                 results["email"] = f"error: {exc}"
+                append_alarm_step(event, channel="email", to=contacts["emails"], status="error", detail=str(exc))
     elif "email" in wanted:
         results["email"] = "skipped: sin email del cliente"
+        append_alarm_step(event, channel="email", to=[], status="skipped", detail="sin email del cliente")
 
     if channels["telegram"]:
         if not contacts["telegram_ready"]:
             results["telegram"] = "skipped: TELEGRAM_BOT_TOKEN no configurado"
+            append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="skipped", detail="bot no configurado")
         else:
             try:
                 send_telegram(contacts["telegram_chat_ids"], text)
                 results["telegram"] = f"sent:{len(contacts['telegram_chat_ids'])}"
+                append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="sent")
             except Exception as exc:
                 logger.exception("Alarm telegram failed device=%s", device.device_uid)
                 results["telegram"] = f"error: {exc}"
+                append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="error", detail=str(exc))
     elif "telegram" in wanted:
         results["telegram"] = "skipped: sin chat de Telegram"
+        append_alarm_step(event, channel="telegram", to=[], status="skipped", detail="sin chat de Telegram")
 
     if channels["sms"]:
-        results["sms"] = _queue_modem(
-            device,
-            "test_sms",
-            {"phone": contacts["phone"], "text": spoken[:160], "alarm_event_id": event.id},
-            contacts,
-        )
+        sms_states = []
+        for index, phone in enumerate(phones):
+            job = enqueue_modem_job(
+                device,
+                "test_sms",
+                {
+                    "phone": phone,
+                    "text": spoken[:160],
+                    "alarm_event_id": event.id,
+                    "phone_index": index,
+                },
+                source="alarm",
+            )
+            sms_states.append(job.status)
+            append_alarm_step(
+                event,
+                channel="sms",
+                to=phone,
+                status=job.status,
+                detail=job.result or "",
+                command_id=job.command_id,
+            )
+        results["sms"] = _mqtt_note(contacts, ",".join(sms_states))
     elif "sms" in wanted:
         results["sms"] = "skipped: sin telefono del cliente"
+        append_alarm_step(event, channel="sms", to=[], status="skipped", detail="sin telefono del cliente")
 
     if channels["call"]:
-        results["call"] = _queue_modem(
+        job = enqueue_modem_job(
             device,
             "test_call",
-            {"phone": contacts["phone"], "text": spoken, "alarm_event_id": event.id},
-            contacts,
+            {
+                "phone": phones[0],
+                "text": spoken,
+                "alarm_event_id": event.id,
+                "phone_index": 0,
+                "escalate_calls": escalate_calls,
+            },
+            source="alarm",
         )
-        if len(contacts["phones"]) > 1:
-            results["call_cascade"] = "pending: hoy llama al primero; la cascada X->Y->Z todavia no esta"
+        results["call"] = _mqtt_note(contacts, job.status)
+        append_alarm_step(
+            event,
+            channel="call",
+            to=phones[0],
+            status=job.status,
+            detail=job.result or "",
+            command_id=job.command_id,
+        )
+        if escalate_calls and len(phones) > 1:
+            results["call_cascade"] = f"escala {len(phones)} telefonos si no atienden"
     elif "call" in wanted and not contacts["calling_enabled"]:
         results["call"] = "skipped: llamadas deshabilitadas en el dispositivo"
+        append_alarm_step(event, channel="call", to=phones, status="skipped", detail="llamadas deshabilitadas")
     elif "call" in wanted:
         results["call"] = "skipped: sin telefono del cliente"
+        append_alarm_step(event, channel="call", to=[], status="skipped", detail="sin telefono del cliente")
 
     pump_modem_queue(device)
 
@@ -348,13 +401,63 @@ def dispatch_alarm(
     return event
 
 
-def _queue_modem(device: Device, command: str, extra: dict, contacts: dict) -> str:
-    job = enqueue_modem_job(device, command, extra, source="alarm")
-    if job.status == "failed":
-        return f"error: {job.result}"
-    if job.status == "queued":
-        return _mqtt_note(contacts, "queued")
-    return _mqtt_note(contacts, job.status)
+def notify_alarm_cleared(device: Device, event: Event, telemetry: dict | None = None) -> None:
+    payload = event.payload or {}
+    wanted = [item for item in (payload.get("clear_actions") or []) if item in {"email", "telegram", "sms"}]
+    if not wanted:
+        return
+    contacts = resolve_contacts(device)
+    detail = payload.get("detail") or event.message or "alarma"
+    value = ""
+    if telemetry is not None:
+        value = str(sensor_value(telemetry, str(payload.get("sensor_id") or "")) or "")
+    text = build_alarm_text(
+        device,
+        "Alarma normalizada",
+        f"{detail}" + (f" (ahora {value})" if value else ""),
+    )
+    via = []
+    errors = []
+    if "email" in wanted and contacts["emails"] and contacts["smtp_ready"]:
+        try:
+            send_email(contacts["emails"], f"[CallOnFail] Normalizada - {device.name}", text)
+            via.append("email")
+        except Exception as exc:
+            logger.exception("Clear email failed device=%s", device.device_uid)
+            errors.append(str(exc))
+    if "telegram" in wanted and contacts["telegram_chat_ids"] and contacts["telegram_ready"]:
+        try:
+            send_telegram(contacts["telegram_chat_ids"], text)
+            via.append("telegram")
+        except Exception as exc:
+            logger.exception("Clear telegram failed device=%s", device.device_uid)
+            errors.append(str(exc))
+    if "sms" in wanted and contacts["phones"]:
+        spoken = " ".join(text.split())[:160]
+        for index, phone in enumerate(contacts["phones"]):
+            job = enqueue_modem_job(
+                device,
+                "test_sms",
+                {
+                    "phone": phone,
+                    "text": spoken,
+                    "alarm_event_id": event.id,
+                    "phone_index": index,
+                    "clear_notice": True,
+                },
+                source="alarm_clear",
+            )
+            append_alarm_step(event, channel="sms", to=phone, status=job.status, detail="normalizacion", command_id=job.command_id)
+        via.append("sms")
+        pump_modem_queue(device)
+    status = "error" if errors and not via else "sent"
+    append_alarm_step(
+        event,
+        channel="clear",
+        to=via or wanted,
+        status=status,
+        detail="; ".join(errors),
+    )
 
 
 def _safe_duration(rule: dict) -> int:
@@ -384,7 +487,7 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
             _condition_since(device.id, key, now_ts, False)
             open_event = open_alarm_event(device.id, key)
             if open_event is not None:
-                clear_alarm(open_event, telemetry)
+                clear_alarm(open_event, telemetry, device)
             continue
 
         since = _condition_since(device.id, key, now_ts, True)
@@ -411,6 +514,8 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
                 "operator": rule.get("operator"),
                 "threshold": rule.get("threshold"),
                 "value": sensor_value(telemetry, str(rule.get("sensor_id") or "")),
+                "escalate_calls": bool(rule.get("escalate_calls", True)),
+                "clear_actions": [item for item in (rule.get("clear_actions") or ["email", "telegram"]) if item in {"email", "telegram", "sms"}],
             },
             config=config,
         )

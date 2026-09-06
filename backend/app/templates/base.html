@@ -250,6 +250,34 @@
       .modem-log .tx { color: #93c5fd; }
       .modem-log .rx { color: #86efac; }
 
+      .timeline {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .timeline-item {
+        position: relative;
+        padding: 0 0 1.1rem 1.4rem;
+        border-left: 2px solid var(--cof-border);
+      }
+      .timeline-item:last-child {
+        padding-bottom: 0;
+      }
+      .timeline-item::before {
+        content: "";
+        position: absolute;
+        left: -7px;
+        top: 0.35rem;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #94a3b8;
+      }
+      .timeline-item.is-ok::before { background: #16a34a; }
+      .timeline-item.is-wait::before { background: #d97706; }
+      .timeline-item.is-bad::before { background: #dc2626; }
+      .timeline-item.is-clear::before { background: #2563eb; }
+
       @media (max-width: 991.98px) {
         .action-bar .btn {
           flex: 0 0 auto;
@@ -271,6 +299,9 @@
             </li>
             <li class="nav-item">
               <a class="nav-link" href="{{ url_for('devices') }}">Dispositivos</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('alarms') }}">Alarmas</a>
             </li>
             <li class="nav-item">
               <a class="nav-link" href="{{ url_for('tenants') }}">Clientes</a>

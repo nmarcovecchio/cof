@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from .alarm_log import friendly_step
 from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
@@ -256,6 +257,24 @@ def create_app() -> Flask:
             recent_events=recent_events,
             recent_telemetry=recent_telemetry,
         )
+
+    @app.get("/alarms")
+    @login_required
+    def alarms():
+        device_uid = (request.args.get("device") or "").strip()
+        query = Event.query.filter_by(type="alarm").order_by(Event.started_at.desc())
+        device = None
+        if device_uid:
+            device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+            query = query.filter_by(device_id=device.id)
+        rows = query.limit(80).all()
+        return render_template("alarms.html", alarms=[alarm_view(event) for event in rows], device=device)
+
+    @app.get("/alarms/<int:event_id>")
+    @login_required
+    def alarm_detail(event_id):
+        event = Event.query.filter_by(id=event_id, type="alarm").first_or_404()
+        return render_template("alarm_detail.html", alarm=alarm_view(event))
 
     @app.route("/tenants")
     @login_required
@@ -794,6 +813,40 @@ def apply_tenant_form(tenant: Tenant) -> str | None:
     tenant.telegram_chat_id = join_values(chats) or None
     tenant.phone = join_values(phones) or None
     return None
+
+
+def _step_tone(step: dict) -> str:
+    channel = step.get("channel") or ""
+    status = step.get("status") or ""
+    detail = step.get("detail") or ""
+    if channel == "clear":
+        return "clear" if not status.startswith("error") else "bad"
+    if status == "answered" or detail.startswith("Call done") or detail.startswith("SMS sent"):
+        return "ok"
+    if status == "sent" and channel != "call":
+        return "ok"
+    if status in {"queued"} or (status == "sent" and channel == "call"):
+        return "wait"
+    if status in {"no_answer", "error", "failed", "skipped", "exhausted"}:
+        return "bad"
+    return "wait"
+
+
+def alarm_view(event: Event) -> dict:
+    payload = event.payload or {}
+    steps = []
+    for step in payload.get("steps") or []:
+        steps.append({**step, "label": friendly_step(step), "tone": _step_tone(step)})
+    return {
+        "event": event,
+        "open": event.cleared_at is None and (payload.get("source") != "manual"),
+        "title": payload.get("title") or "Alarma",
+        "detail": payload.get("detail") or event.message or "",
+        "steps": steps,
+        "last": steps[-1]["label"] if steps else (event.message or "Sin actividad"),
+        "escalate": bool(payload.get("escalate_calls", True)),
+        "clear_actions": payload.get("clear_actions") or [],
+    }
 
 
 def publish_config_desired(device: Device, payload: dict):
