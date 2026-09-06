@@ -19,17 +19,22 @@ def ensure_schema_columns():
     if "archived_at" not in device_columns:
         statements.append("ALTER TABLE devices ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE")
     if "notify_email" not in tenant_columns:
-        statements.append("ALTER TABLE tenants ADD COLUMN notify_email VARCHAR(255)")
+        statements.append("ALTER TABLE tenants ADD COLUMN notify_email TEXT")
     if "telegram_chat_id" not in tenant_columns:
-        statements.append("ALTER TABLE tenants ADD COLUMN telegram_chat_id VARCHAR(80)")
+        statements.append("ALTER TABLE tenants ADD COLUMN telegram_chat_id VARCHAR(255)")
     if "phone" not in tenant_columns:
-        statements.append("ALTER TABLE tenants ADD COLUMN phone VARCHAR(32)")
+        statements.append("ALTER TABLE tenants ADD COLUMN phone VARCHAR(512)")
 
-    if not statements:
-        return
+    widen = [
+        "ALTER TABLE tenants ALTER COLUMN notify_email TYPE TEXT",
+        "ALTER TABLE tenants ALTER COLUMN telegram_chat_id TYPE VARCHAR(255)",
+        "ALTER TABLE tenants ALTER COLUMN phone TYPE VARCHAR(512)",
+    ]
 
     with db.engine.begin() as connection:
         for statement in statements:
+            connection.execute(text(statement))
+        for statement in widen:
             connection.execute(text(statement))
 
 

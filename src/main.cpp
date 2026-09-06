@@ -774,7 +774,15 @@ void waitWithWatchdog(uint32_t ms) {
 }
 
 bool phoneLooksValid(const String& phone) {
-  return phone.length() >= 8 && phone.indexOf("X") < 0;
+  if (phone.length() < 9 || phone.length() > 16 || !phone.startsWith("+")) {
+    return false;
+  }
+  for (unsigned i = 1; i < phone.length(); i++) {
+    if (phone[i] < '0' || phone[i] > '9') {
+      return false;
+    }
+  }
+  return true;
 }
 
 void publishTelemetryNow() {
@@ -2336,7 +2344,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   return "Call not connected";
 }
 
-String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false) {
+String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioUrl = "", const String& audioFormat = "") {
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
@@ -2366,18 +2374,14 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
 
   const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    if (pendingTestCallAudioUrl.length() > 0) {
+    if (audioUrl.length() > 0) {
       publishTestCallProgress("Downloading TTS audio");
-      const String ttsPath = ttsModemPathFor(pendingTestCallAudioUrl, pendingTestCallAudioFormat);
-      const String audioErr = uploadAudioToModem(pendingTestCallAudioUrl, ttsPath, "tts");
+      const String ttsPath = ttsModemPathFor(audioUrl, audioFormat);
+      const String audioErr = uploadAudioToModem(audioUrl, ttsPath, "tts");
       if (audioErr.length() > 0) {
-        pendingTestCallAudioUrl = "";
-        pendingTestCallAudioFormat = "";
         return audioErr;
       }
       state.modemAudioPath = ttsPath;
-      pendingTestCallAudioUrl = "";
-      pendingTestCallAudioFormat = "";
     } else {
       setStatus("Sync test audio");
       checkManifest(false);
@@ -2845,27 +2849,32 @@ void loop() {
     publishDeviceStatus("online", true);
   }
 
+  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+    const String smsPhone = pendingTestSmsPhone;
+    const String smsText = pendingTestSmsText;
+    pendingTestSmsCommand = false;
+    pendingTestSmsPhone = "";
+    pendingTestSmsText = "";
+    const String result = sendTestSms(smsPhone, smsText);
+    connectMqttIfNeeded();
+    const bool ok = result == "SMS sent";
+    publishDeviceEvent("test_sms", ok ? "info" : "warning", result);
+  }
+
   if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+    const String callPhone = pendingTestCallPhone;
+    const String callAudioUrl = pendingTestCallAudioUrl;
+    const String callAudioFormat = pendingTestCallAudioFormat;
     pendingTestCallCommand = false;
-    reportTestCallProgress = true;
-    const String result = placeCallAndPlayAudio(pendingTestCallPhone, true);
     pendingTestCallPhone = "";
     pendingTestCallAudioUrl = "";
     pendingTestCallAudioFormat = "";
+    reportTestCallProgress = true;
+    const String result = placeCallAndPlayAudio(callPhone, true, callAudioUrl, callAudioFormat);
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
     publishTestCallResult(result, ok);
-  }
-
-  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
-    pendingTestSmsCommand = false;
-    const String result = sendTestSms(pendingTestSmsPhone, pendingTestSmsText);
-    pendingTestSmsPhone = "";
-    pendingTestSmsText = "";
-    connectMqttIfNeeded();
-    const bool ok = result == "SMS sent";
-    publishDeviceEvent("test_sms", ok ? "info" : "warning", result);
   }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {

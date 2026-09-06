@@ -32,7 +32,7 @@
         <tr>
           <td>{{ tenant.name }}</td>
           <td><code>{{ tenant.slug }}</code></td>
-          <td class="small">
+          <td class="small" style="white-space: pre-line;">
             <div>{{ tenant.notify_email or 'sin email' }}</div>
             <div class="text-muted">{{ tenant.telegram_chat_id or 'sin Telegram' }}</div>
             <div class="text-muted">{{ tenant.phone or 'sin telefono' }}</div>

@@ -82,11 +82,10 @@
     <div class="card-header fw-semibold">Notificaciones</div>
     <div class="card-body">
       <p class="mb-2">Email, Telegram y telefono se configuran en el cliente, no aca.</p>
-      <p class="text-muted small mb-2">
-        {{ device.tenant.notify_email or 'sin email' }}
-        · {{ device.tenant.telegram_chat_id or 'sin Telegram' }}
-        · {{ device.tenant.phone or 'sin telefono' }}
-      </p>
+      <p class="text-muted small mb-2" style="white-space: pre-line;">{{ device.tenant.notify_email or 'sin email' }}
+{{ device.tenant.telegram_chat_id or 'sin Telegram' }}
+{{ device.tenant.phone or 'sin telefono' }}</p>
+      <p class="text-muted small mb-2">Varios destinos: uno por linea en el cliente. La llamada usa el primer telefono.</p>
       <a href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar avisos de {{ device.tenant.name }}</a>
     </div>
   </div>

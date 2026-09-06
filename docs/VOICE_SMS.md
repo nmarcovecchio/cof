@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.39 (play after 4s lead-in; hang up 2s after audio; Claro CSFB events)
+Firmware:   0.2.40 (SMS before call when both queued; snapshot MQTT command so a second command during a call is not wiped)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```

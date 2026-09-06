@@ -11,8 +11,9 @@
   <div class="card-body">
     <h1 class="h3">{% if tenant %}Editar cliente{% else %}Nuevo cliente{% endif %}</h1>
     <p class="text-muted">
-      Email, grupo de Telegram y telefono son del cliente. Todos sus equipos usan estos destinos.
-      El bot de Telegram es uno solo de CallOnFail; aca solo va el chat del grupo.
+      Destinos del cliente, no del equipo. Varios emails o grupos: uno por linea.
+      Varios telefonos: uno por linea, en orden. Hoy SMS y llamada usan el primero;
+      la cascada X &rarr; Y &rarr; Z todavia no esta.
     </p>
     {% if error %}
     <div class="alert alert-danger">{{ error }}</div>
@@ -28,19 +29,19 @@
         <input class="form-control" id="slug" name="slug" placeholder="opcional, se genera desde el nombre" value="{{ tenant.slug if tenant else '' }}">
       </div>
       <div class="mb-3">
-        <label class="form-label" for="notify_email">Email de alerta</label>
-        <input class="form-control" id="notify_email" name="notify_email" type="email" placeholder="alertas@cliente.com" value="{{ tenant.notify_email if tenant and tenant.notify_email else '' }}">
-        <div class="form-text">Destinatario. El SMTP (Gmail) se configura una sola vez en el VPS.</div>
+        <label class="form-label" for="notify_email">Emails de alerta</label>
+        <textarea class="form-control" id="notify_email" name="notify_email" rows="3" placeholder="dueño@cliente.com&#10;backup@cliente.com">{{ tenant.notify_email if tenant and tenant.notify_email else '' }}</textarea>
+        <div class="form-text">Uno por linea. Se avisa a todos. El SMTP (Gmail) es uno solo en el VPS.</div>
       </div>
       <div class="mb-3">
-        <label class="form-label" for="telegram_chat_id">Telegram chat ID del grupo</label>
-        <input class="form-control" id="telegram_chat_id" name="telegram_chat_id" placeholder="-1001234567890" value="{{ tenant.telegram_chat_id if tenant and tenant.telegram_chat_id else '' }}">
-        <div class="form-text">El grupo del cliente, no el token del bot. Empieza con <code>-100</code> si es un supergrupo.</div>
+        <label class="form-label" for="telegram_chat_id">Telegram chat ID</label>
+        <textarea class="form-control" id="telegram_chat_id" name="telegram_chat_id" rows="2" placeholder="-1001234567890">{{ tenant.telegram_chat_id if tenant and tenant.telegram_chat_id else '' }}</textarea>
+        <div class="form-text">Grupo del cliente, no el token del bot. Uno por linea si hay varios grupos.</div>
       </div>
       <div class="mb-3">
-        <label class="form-label" for="phone">Telefono</label>
-        <input class="form-control" id="phone" name="phone" type="tel" placeholder="+54911..." value="{{ tenant.phone if tenant and tenant.phone else '' }}">
-        <div class="form-text">Formato internacional. Se usa para SMS y, si el dispositivo tiene llamadas habilitadas, para llamar.</div>
+        <label class="form-label" for="phone">Telefonos</label>
+        <textarea class="form-control" id="phone" name="phone" rows="3" placeholder="+54911...&#10;+54911...">{{ tenant.phone if tenant and tenant.phone else '' }}</textarea>
+        <div class="form-text">Formato internacional, uno por linea. El primero se usa ahora para SMS y llamada.</div>
       </div>
       <button class="btn btn-primary" type="submit">{% if tenant %}Guardar cliente{% else %}Crear cliente{% endif %}</button>
     </form>

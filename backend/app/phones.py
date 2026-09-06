@@ -1,5 +1,15 @@
 import re
 
+_SPLIT = re.compile(r"[\n,;]+")
+
+
+def split_values(value: str) -> list[str]:
+    return [part.strip() for part in _SPLIT.split(value or "") if part.strip()]
+
+
+def join_values(values: list[str]) -> str:
+    return "\n".join(values)
+
 
 def normalize_phone(phone: str) -> str:
     return "".join(ch for ch in (phone or "").strip() if ch.isdigit() or ch == "+")
@@ -22,4 +32,45 @@ def normalize_email(value: str) -> str:
 
 
 def is_email(value: str) -> bool:
-    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value or ""))
+    if "\n" in (value or "") or "\r" in (value or ""):
+        return False
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value or "", flags=re.IGNORECASE))
+
+
+def parse_emails(value: str) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for raw in split_values(value):
+        email = normalize_email(raw)
+        if is_email(email):
+            if email not in valid:
+                valid.append(email)
+        elif email:
+            invalid.append(raw)
+    return valid, invalid
+
+
+def parse_phones(value: str) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for raw in split_values(value):
+        phone = normalize_phone(raw)
+        if is_e164_phone(phone):
+            if phone not in valid:
+                valid.append(phone)
+        elif raw:
+            invalid.append(raw)
+    return valid, invalid
+
+
+def parse_telegram_chats(value: str) -> tuple[list[str], list[str]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for raw in split_values(value):
+        chat_id = normalize_telegram_chat_id(raw)
+        if is_telegram_chat_id(chat_id):
+            if chat_id not in valid:
+                valid.append(chat_id)
+        elif raw:
+            invalid.append(raw)
+    return valid, invalid

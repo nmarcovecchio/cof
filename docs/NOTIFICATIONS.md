@@ -1,7 +1,8 @@
 # Avisos por cliente (email, Telegram, telefono)
 
-Un bot y un SMTP para todo CallOnFail. Cada **cliente** tiene su email, su
-grupo de Telegram y su telefono. Los equipos heredan eso. La llamada de un
+Un bot y un SMTP para todo CallOnFail. Cada **cliente** tiene emails, grupos
+de Telegram y telefonos (uno por linea). Los equipos heredan eso. Email y
+Telegram van a todos. SMS y llamada usan el primer telefono. La llamada de un
 freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 
 ## Que configura quien
@@ -10,10 +11,13 @@ freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 | --- | --- | --- |
 | Token del bot de Telegram | `.env` del VPS `TELEGRAM_BOT_TOKEN` | Una vez, CallOnFail |
 | Gmail SMTP | `.env` del VPS `SMTP_*` | Una vez, CallOnFail |
-| Email del cliente | Web → Clientes → Editar | Por cliente |
-| Chat ID del grupo | Web → Clientes → Editar | Por cliente |
-| Telefono | Web → Clientes → Editar | Por cliente (`+54911...`) |
+| Emails del cliente | Web → Clientes → Editar, uno por linea | Se avisa a todos |
+| Chat ID del grupo | Web → Clientes → Editar, uno por linea | Se avisa a todos |
+| Telefonos | Web → Clientes → Editar, uno por linea | Hoy SMS/llamada usan el **primero** |
 | Llamadas si/no | Web → dispositivo → Publicar config | Por equipo |
+
+La cascada de llamadas (primero X, si no atiende Y, luego Z) **todavia no esta**.
+Los telefonos ya se guardan en orden para cuando se arme.
 
 No hace falta un bot por cliente. Si un token se filtra, un solo bot ve todos
 los grupos; por eso el token vive en el VPS, no en la web.
@@ -98,7 +102,7 @@ Hace falta rebuild porque cambiaron variables y el worker ahora evalua reglas.
 
 1. Login admin.
 2. **Clientes** → crear o **Editar** el cliente (ej. Demo).
-3. Cargar email, chat ID, telefono `+549...`.
+3. Cargar emails, chat IDs y telefonos `+549...` (uno por linea).
 4. **Probar email** y **Probar Telegram**.
 5. En el dispositivo: **Publicar config** → habilitar llamadas si ese equipo
    debe llamar → guardar reglas (sensor, umbral, acciones).

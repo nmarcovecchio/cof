@@ -22,7 +22,14 @@ from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
 from .mqtt_util import publish_mqtt, publish_mqtt_raw
 from .notify import send_email, send_telegram
-from .phones import is_e164_phone, is_email, is_telegram_chat_id, normalize_email, normalize_phone, normalize_telegram_chat_id
+from .phones import (
+    is_e164_phone,
+    join_values,
+    normalize_phone,
+    parse_emails,
+    parse_phones,
+    parse_telegram_chats,
+)
 from .tts import MAX_TEXT_CHARS, public_audio_url, synthesize_call_audio
 
 
@@ -294,17 +301,17 @@ def create_app() -> Flask:
     @login_required
     def tenant_test_email(tenant_id):
         tenant = Tenant.query.get_or_404(tenant_id)
-        email = normalize_email(tenant.notify_email or "")
-        if not is_email(email):
+        emails, _ = parse_emails(tenant.notify_email or "")
+        if not emails:
             flash("Configura un email valido en el cliente", "danger")
             return redirect(url_for("tenant_edit", tenant_id=tenant.id))
         try:
             send_email(
-                email,
+                emails,
                 "[CallOnFail] Prueba de email",
                 f"Prueba de alerta para {tenant.name}.\nSi recibis esto, SMTP esta bien.",
             )
-            flash(f"Email de prueba enviado a {email}", "success")
+            flash("Email de prueba enviado a " + ", ".join(emails), "success")
         except Exception as exc:
             flash(f"No se pudo enviar el email: {exc}", "danger")
         return redirect(url_for("tenant_edit", tenant_id=tenant.id))
@@ -313,12 +320,12 @@ def create_app() -> Flask:
     @login_required
     def tenant_test_telegram(tenant_id):
         tenant = Tenant.query.get_or_404(tenant_id)
-        chat_id = normalize_telegram_chat_id(tenant.telegram_chat_id or "")
-        if not is_telegram_chat_id(chat_id):
+        chats, _ = parse_telegram_chats(tenant.telegram_chat_id or "")
+        if not chats:
             flash("Configura el chat ID de Telegram del cliente", "danger")
             return redirect(url_for("tenant_edit", tenant_id=tenant.id))
         try:
-            send_telegram(chat_id, f"CallOnFail prueba de Telegram para {tenant.name}.")
+            send_telegram(chats, f"CallOnFail prueba de Telegram para {tenant.name}.")
             flash("Mensaje de prueba enviado a Telegram", "success")
         except Exception as exc:
             flash(f"No se pudo enviar a Telegram: {exc}", "danger")
@@ -650,7 +657,7 @@ def create_app() -> Flask:
         )
         db.session.commit()
         results = (event.payload or {}).get("results") or {}
-        sent = [name for name, value in results.items() if value == "sent"]
+        sent = [name for name, value in results.items() if str(value).startswith("sent")]
         if sent:
             flash("Alarma disparada: " + ", ".join(sent), "success")
         else:
@@ -767,24 +774,24 @@ def check_redis() -> dict:
 def apply_tenant_form(tenant: Tenant) -> str | None:
     name = request.form.get("name", "").strip()
     slug = request.form.get("slug", "").strip() or slugify(name)
-    email = normalize_email(request.form.get("notify_email", ""))
-    chat_id = normalize_telegram_chat_id(request.form.get("telegram_chat_id", ""))
-    phone = normalize_phone(request.form.get("phone", ""))
+    emails, bad_emails = parse_emails(request.form.get("notify_email", ""))
+    chats, bad_chats = parse_telegram_chats(request.form.get("telegram_chat_id", ""))
+    phones, bad_phones = parse_phones(request.form.get("phone", ""))
 
     if not name or not slug:
         return "Nombre y slug son requeridos"
-    if email and not is_email(email):
-        return "Email invalido"
-    if chat_id and not is_telegram_chat_id(chat_id):
-        return "Telegram chat ID invalido (ej. -1001234567890)"
-    if phone and not is_e164_phone(phone):
-        return "Telefono invalido. Usa formato internacional, ej. +5491168619589"
+    if bad_emails:
+        return "Email invalido: " + ", ".join(bad_emails)
+    if bad_chats:
+        return "Telegram chat ID invalido: " + ", ".join(bad_chats)
+    if bad_phones:
+        return "Telefono invalido. Usa +54911... uno por linea. Error: " + ", ".join(bad_phones)
 
     tenant.name = name
     tenant.slug = slug
-    tenant.notify_email = email or None
-    tenant.telegram_chat_id = chat_id or None
-    tenant.phone = phone or None
+    tenant.notify_email = join_values(emails) or None
+    tenant.telegram_chat_id = join_values(chats) or None
+    tenant.phone = join_values(phones) or None
     return None
 
 
@@ -840,9 +847,9 @@ def default_device_config(device: Device) -> dict:
 
 
 def last_used_test_phone(device, configs) -> str:
-    tenant_phone = normalize_phone(getattr(getattr(device, "tenant", None), "phone", "") or "")
-    if is_e164_phone(tenant_phone):
-        return tenant_phone
+    tenant_phones, _ = parse_phones(getattr(getattr(device, "tenant", None), "phone", "") or "")
+    if tenant_phones:
+        return tenant_phones[0]
     session_phone = normalize_phone(str(session.get("test_phone") or ""))
     if is_e164_phone(session_phone):
         return session_phone
