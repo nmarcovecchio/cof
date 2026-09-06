@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.34 (AMR TTS; no AT polls during call)
+Firmware:   0.2.35 (AMR TTS; hangup classified by 3GPP CEER, not duration)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -71,14 +71,22 @@ Call done [...]
 ```
 
 On Claro CSFB the modem reports “active” / `VOICE CALL: BEGIN` as soon as
-there is ringback, even if nobody answered. Firmware 0.2.33 plays audio
-while the call is up, but the **result** comes from how the call ended:
+there is ringback (early TCH assignment, 3GPP 24.008 §5.2.1.9). That is
+**not** answer. Firmware plays into the call so the far end hears TTS on
+pickup. The **result** is who released the call and the 3GPP cause
+(`AT+CEER` / `AT+CLCC=1` URCs — never poll AT during the call):
 
-- `Call rejected` — `BUSY` or CEER 17/21/22
-- `Call no answer` / `Call ringing timeout` — no pickup
-- `Call done` — remote hung up after hearing audio, or stayed through a long message
+- `Call no answer` — we gave up after the ring timeout, or the network
+  sent CEER 18/19 (`No user responding` / `User alerting, no answer`).
+  An unanswered phone does not send DISCONNECT.
+- `Call rejected` — `BUSY` URC or CEER 17/21/22 (`User busy` /
+  `Call rejected`).
+- `Call done` — audio finished and we hung up, **or** the far end
+  released with CEER 16/31 (`Normal call clearing`). That covers
+  “answered” and “answered then hung up at any moment”.
 
 `+CLCC` state 0, `+COLP` and `VOICE CALL: BEGIN` are **not** success.
+Do not classify by how many seconds of audio played.
 
 ## Test SMS
 
