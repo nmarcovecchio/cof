@@ -1672,6 +1672,14 @@ int parseClccStat(const String& response) {
   return response.substring(second + 1, third).toInt();
 }
 
+int queryClccStat() {
+  String clcc;
+  if (!sendAT("AT+CLCC", "OK", 1500, &clcc)) {
+    return -1;
+  }
+  return parseClccStat(clcc);
+}
+
 String classifyCallUrc(const String& raw) {
   String urc = raw;
   urc.toUpperCase();
@@ -1683,11 +1691,6 @@ String classifyCallUrc(const String& raw) {
   }
   if (urc.indexOf("NO ANSWER") >= 0) {
     return "Call no answer";
-  }
-  // Do not treat +COLP or VOICE CALL: BEGIN as answered: on Claro CSFB they
-  // often fire when the GSM bearer is up, while the remote is still ringing.
-  if (urc.indexOf("MO CONNECTED") >= 0) {
-    return "Call connected";
   }
   if (urc.indexOf("NO CARRIER") >= 0) {
     return "Call no carrier";
@@ -1992,6 +1995,8 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
   bool sawNoCarrier = false;
   bool reportedCsfbWait = false;
   const uint32_t startedAt = millis();
+  uint32_t lastClccPollMs = startedAt;
+  uint32_t activeSinceMs = 0;
   constexpr uint32_t kCsfbIgnoreMs = 40000;
 
   while (millis() - startedAt < timeoutMs) {
@@ -2008,19 +2013,51 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
         sawDialing = true;
         setStatus("Dialing");
       } else if (stat == 3) {
+        if (!sawAlerting) {
+          publishTestCallProgress("Ringing");
+        }
         sawAlerting = true;
         setStatus("Ringing");
-        publishTestCallProgress("Ringing");
+      } else if (stat == 0 && sawAlerting) {
+        return "Call connected";
+      }
+    }
+
+    const bool maybeAnsweredUrc =
+        urc.indexOf("VOICE CALL: BEGIN") >= 0 ||
+        urc.indexOf("voice call: begin") >= 0 ||
+        urc.indexOf("MO CONNECTED") >= 0;
+    const bool canPollClcc = sawAlerting || maybeAnsweredUrc ||
+                             (millis() - startedAt >= kCsfbIgnoreMs);
+    if (canPollClcc && (maybeAnsweredUrc || millis() - lastClccPollMs >= 2000)) {
+      lastClccPollMs = millis();
+      const int stat = queryClccStat();
+      if (stat == 2) {
+        sawDialing = true;
+        activeSinceMs = 0;
+      } else if (stat == 3) {
+        if (!sawAlerting) {
+          publishTestCallProgress("Ringing");
+        }
+        sawAlerting = true;
+        activeSinceMs = 0;
+        setStatus("Ringing");
       } else if (stat == 0) {
-        return "Call connected";
+        if (sawAlerting) {
+          return "Call connected";
+        }
+        if (activeSinceMs == 0) {
+          activeSinceMs = millis();
+        } else if (millis() - activeSinceMs >= 2000) {
+          return "Call connected";
+        }
+      } else if (stat < 0 && sawAlerting) {
+        return "Call no answer";
+      } else {
+        activeSinceMs = 0;
       }
     }
-    if (urc.indexOf("VOICE CALL: BEGIN") >= 0 || urc.indexOf("voice call: begin") >= 0 ||
-        urc.indexOf("MO CONNECTED") >= 0) {
-      if (sawAlerting) {
-        return "Call connected";
-      }
-    }
+
     if (urcResult.length() > 0) {
       if (urcResult == "Call no carrier") {
         sawNoCarrier = true;
