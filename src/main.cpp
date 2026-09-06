@@ -1684,7 +1684,7 @@ String classifyCallUrc(const String& raw) {
   String urc = raw;
   urc.toUpperCase();
   if (urc.indexOf("BUSY") >= 0) {
-    return "Call busy";
+    return "Call rejected";
   }
   if (urc.indexOf("NO DIALTONE") >= 0) {
     return "Call no dialtone";
@@ -1766,6 +1766,38 @@ String queryCallFailCause() {
   return value;
 }
 
+int parseCeerCode(const String& ceer) {
+  for (int i = 0; i < ceer.length(); i++) {
+    if (isDigit(ceer[i])) {
+      return ceer.substring(i).toInt();
+    }
+  }
+  return -1;
+}
+
+String classifyHangup(const String& ceer, bool sawAlerting, uint32_t playedMs,
+                      bool audioDone, uint32_t ringMs) {
+  const int code = parseCeerCode(ceer);
+  String upper = ceer;
+  upper.toUpperCase();
+  if (code == 17 || code == 21 || code == 22 ||
+      upper.indexOf("BUSY") >= 0 || upper.indexOf("REJECT") >= 0) {
+    return "Call rejected";
+  }
+  if (!sawAlerting) {
+    return "Call no carrier";
+  }
+  if (code == 18 || code == 19 ||
+      upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("NO USER") >= 0) {
+    return "Call no answer";
+  }
+  if (playedMs >= 4000 && (code == 16 || code == 31) &&
+      (audioDone || ringMs < 28000)) {
+    return "Call done";
+  }
+  return "Call no answer";
+}
+
 int queryCpas() {
   String response;
   if (!sendAT("AT+CPAS", "OK", 3000, &response)) {
@@ -1839,7 +1871,7 @@ bool waitUntilModemReady(bool forCall, uint32_t timeoutMs) {
 
 String voiceContextSuffix(const String& bearer, const String& ceer = "");
 void restoreAutoRadio();
-String waitForOutgoingCall(uint32_t timeoutMs);
+String conductOutgoingCall(uint32_t timeoutMs);
 
 void persistSkipGsm(bool skip) {
   state.skipGsmVoice = skip;
@@ -1907,16 +1939,6 @@ bool shouldRetryVoice(const String& result) {
          result.startsWith("No voice radio");
 }
 
-String playConnectedCallAudio() {
-  waitWithWatchdog(1500);
-  setStatus("Playing audio");
-  sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
-  readModemUntil(120000, "+AUDIOSTATE: audio play stop");
-  sendAT("ATH", "OK", 5000);
-  setStatus("Call done");
-  return "Call done";
-}
-
 String dialAndMaybePlay(const String& phone, const String& bearer) {
   if (!waitUntilModemReady(true, 25000)) {
     return "Call not ready" + voiceContextSuffix(bearer);
@@ -1939,19 +1961,19 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
     return "Call failed" + voiceContextSuffix(bearer, ceer);
   }
 
-  const String progress = waitForOutgoingCall(70000);
+  const String progress = conductOutgoingCall(70000);
   refreshRadioMode();
   state.radioAtConnect = state.radioMode;
   const String observed = observeVoicePath(state.radioAtDial, state.radioAtConnect);
-  if (progress != "Call connected") {
-    const String ceer = queryCallFailCause();
+  if (progress.startsWith("Call done")) {
+    persistObservedVoicePath(observed);
+    state.predictedVoicePath = observed;
+  } else {
+    sendAT("AT+CCMXSTOP", "OK", 2000);
     sendAT("ATH", "OK", 3000);
-    return progress + voiceContextSuffix(observed, ceer);
   }
-
-  persistObservedVoicePath(observed);
-  state.predictedVoicePath = observed;
-  return playConnectedCallAudio() + voiceContextSuffix(observed);
+  const String ceer = queryCallFailCause();
+  return progress + voiceContextSuffix(observed, ceer);
 }
 
 void restoreAutoRadio() {
@@ -1989,14 +2011,18 @@ String voiceContextSuffix(const String& bearer, const String& ceer) {
   return suffix;
 }
 
-String waitForOutgoingCall(uint32_t timeoutMs) {
+String conductOutgoingCall(uint32_t timeoutMs) {
   bool sawDialing = false;
   bool sawAlerting = false;
   bool sawNoCarrier = false;
+  bool playing = false;
+  bool audioDone = false;
   bool reportedCsfbWait = false;
   const uint32_t startedAt = millis();
+  uint32_t ringAt = 0;
+  uint32_t playStartedAt = 0;
+  uint32_t audioDoneAt = 0;
   uint32_t lastClccPollMs = startedAt;
-  uint32_t activeSinceMs = 0;
   constexpr uint32_t kCsfbIgnoreMs = 40000;
 
   while (millis() - startedAt < timeoutMs) {
@@ -2007,6 +2033,11 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
 
     const String urc = readModemUntil(800, "");
     const String urcResult = classifyCallUrc(urc);
+    if (urc.indexOf("+AUDIOSTATE:") >= 0 && urc.indexOf("play stop") >= 0) {
+      audioDone = true;
+      audioDoneAt = millis();
+      setStatus("Audio done");
+    }
     if (urc.indexOf("+CLCC:") >= 0) {
       const int stat = parseClccStat(urc);
       if (stat == 2) {
@@ -2015,70 +2046,73 @@ String waitForOutgoingCall(uint32_t timeoutMs) {
       } else if (stat == 3) {
         if (!sawAlerting) {
           publishTestCallProgress("Ringing");
+          ringAt = millis();
         }
         sawAlerting = true;
         setStatus("Ringing");
-      } else if (stat == 0 && sawAlerting) {
-        return "Call connected";
       }
     }
 
-    const bool maybeAnsweredUrc =
-        urc.indexOf("VOICE CALL: BEGIN") >= 0 ||
-        urc.indexOf("voice call: begin") >= 0 ||
-        urc.indexOf("MO CONNECTED") >= 0;
-    const bool canPollClcc = sawAlerting || maybeAnsweredUrc ||
-                             (millis() - startedAt >= kCsfbIgnoreMs);
-    if (canPollClcc && (maybeAnsweredUrc || millis() - lastClccPollMs >= 2000)) {
+    if (sawAlerting && !playing && state.modemAudioPath.length() > 0) {
+      publishTestCallProgress("Playing audio");
+      sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
+      playing = true;
+      playStartedAt = millis();
+    }
+
+    if (sawAlerting && millis() - lastClccPollMs >= 3000) {
       lastClccPollMs = millis();
       const int stat = queryClccStat();
       if (stat == 2) {
         sawDialing = true;
-        activeSinceMs = 0;
       } else if (stat == 3) {
         if (!sawAlerting) {
           publishTestCallProgress("Ringing");
+          ringAt = millis();
         }
         sawAlerting = true;
-        activeSinceMs = 0;
-        setStatus("Ringing");
-      } else if (stat == 0) {
-        if (sawAlerting) {
-          return "Call connected";
-        }
-        if (activeSinceMs == 0) {
-          activeSinceMs = millis();
-        } else if (millis() - activeSinceMs >= 2000) {
-          return "Call connected";
-        }
-      } else if (stat < 0 && sawAlerting) {
-        return "Call no answer";
-      } else {
-        activeSinceMs = 0;
+      } else if (stat < 0 && sawAlerting && audioDone) {
+        const String ceer = queryCallFailCause();
+        const uint32_t played = playStartedAt ? millis() - playStartedAt : 0;
+        const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
+        return classifyHangup(ceer, true, played, true, ringMs);
       }
     }
 
     if (urcResult.length() > 0) {
       if (urcResult == "Call no carrier") {
         sawNoCarrier = true;
-        if (sawAlerting) {
-          return "Call no answer";
+        if (sawAlerting || millis() - startedAt >= kCsfbIgnoreMs) {
+          sendAT("AT+CCMXSTOP", "OK", 2000);
+          const String ceer = queryCallFailCause();
+          const uint32_t played = playStartedAt ? millis() - playStartedAt : 0;
+          const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
+          return classifyHangup(ceer, sawAlerting, played, audioDone, ringMs);
         }
-        if (millis() - startedAt < kCsfbIgnoreMs) {
-          setStatus("CSFB wait");
-          if (!reportedCsfbWait) {
-            reportedCsfbWait = true;
-            publishTestCallProgress("CSFB in progress");
-          }
-        } else {
-          return urcResult;
+        setStatus("CSFB wait");
+        if (!reportedCsfbWait) {
+          reportedCsfbWait = true;
+          publishTestCallProgress("CSFB in progress");
         }
       } else {
+        sendAT("AT+CCMXSTOP", "OK", 2000);
         return urcResult;
       }
     }
+
+    if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 8000) {
+      sendAT("ATH", "OK", 3000);
+      const uint32_t played = playStartedAt ? millis() - playStartedAt : 0;
+      const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
+      if (played >= 20000 || ringMs >= 35000) {
+        return "Call done";
+      }
+      return "Call no answer";
+    }
   }
 
+  sendAT("AT+CCMXSTOP", "OK", 2000);
+  sendAT("ATH", "OK", 3000);
   if (sawAlerting) {
     return "Call ringing timeout";
   }

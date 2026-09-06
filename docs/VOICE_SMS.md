@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.32 (AMR TTS; answer = +CLCC active)
+Firmware:   0.2.33 (AMR TTS; outcome from hangup/CEER)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -70,10 +70,15 @@ Dialing, waiting for voice
 Call done [...]
 ```
 
-`Call done` means the remote side **answered** (`+CLCC` state 0, after
-ringing). `VOICE CALL: BEGIN`, `MO CONNECTED` and `+COLP` are **not**
-success: Claro CSFB often emits those while the phone is still ringing.
-Unanswered calls must show `Call no answer` or `Call ringing timeout`.
+On Claro CSFB the modem reports “active” / `VOICE CALL: BEGIN` as soon as
+there is ringback, even if nobody answered. Firmware 0.2.33 plays audio
+while the call is up, but the **result** comes from how the call ended:
+
+- `Call rejected` — `BUSY` or CEER 17/21/22
+- `Call no answer` / `Call ringing timeout` — no pickup
+- `Call done` — remote hung up after hearing audio, or stayed through a long message
+
+`+CLCC` state 0, `+COLP` and `VOICE CALL: BEGIN` are **not** success.
 
 ## Test SMS
 
