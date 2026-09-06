@@ -1692,7 +1692,7 @@ String classifyCallUrc(const String& raw) {
   if (urc.indexOf("NO ANSWER") >= 0) {
     return "Call no answer";
   }
-  if (urc.indexOf("NO CARRIER") >= 0) {
+  if (urc.indexOf("NO CARRIER") >= 0 || urc.indexOf("VOICE CALL: END") >= 0) {
     return "Call no carrier";
   }
   return "";
@@ -1791,8 +1791,10 @@ String classifyHangup(const String& ceer, bool sawAlerting, uint32_t playedMs,
       upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("NO USER") >= 0) {
     return "Call no answer";
   }
-  if (playedMs >= 4000 && (code == 16 || code == 31) &&
-      (audioDone || ringMs < 28000)) {
+  if (sawAlerting && ringMs < 10000 && playedMs < 4000) {
+    return "Call rejected";
+  }
+  if (playedMs >= 4000 && (code == 16 || code == 31 || audioDone)) {
     return "Call done";
   }
   return "Call no answer";
@@ -2022,7 +2024,6 @@ String conductOutgoingCall(uint32_t timeoutMs) {
   uint32_t ringAt = 0;
   uint32_t playStartedAt = 0;
   uint32_t audioDoneAt = 0;
-  uint32_t lastClccPollMs = startedAt;
   constexpr uint32_t kCsfbIgnoreMs = 40000;
 
   while (millis() - startedAt < timeoutMs) {
@@ -2035,7 +2036,10 @@ String conductOutgoingCall(uint32_t timeoutMs) {
     const String urcResult = classifyCallUrc(urc);
     if (urc.indexOf("+AUDIOSTATE:") >= 0 && urc.indexOf("play stop") >= 0) {
       audioDone = true;
-      audioDoneAt = millis();
+      if (audioDoneAt == 0) {
+        audioDoneAt = millis();
+        publishTestCallProgress("Audio finished");
+      }
       setStatus("Audio done");
     }
     if (urc.indexOf("+CLCC:") >= 0) {
@@ -2053,30 +2057,12 @@ String conductOutgoingCall(uint32_t timeoutMs) {
       }
     }
 
-    if (sawAlerting && !playing && state.modemAudioPath.length() > 0) {
+    if (sawAlerting && !playing && state.modemAudioPath.length() > 0 &&
+        millis() - ringAt >= 1500) {
       publishTestCallProgress("Playing audio");
       sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000);
       playing = true;
       playStartedAt = millis();
-    }
-
-    if (sawAlerting && millis() - lastClccPollMs >= 3000) {
-      lastClccPollMs = millis();
-      const int stat = queryClccStat();
-      if (stat == 2) {
-        sawDialing = true;
-      } else if (stat == 3) {
-        if (!sawAlerting) {
-          publishTestCallProgress("Ringing");
-          ringAt = millis();
-        }
-        sawAlerting = true;
-      } else if (stat < 0 && sawAlerting && audioDone) {
-        const String ceer = queryCallFailCause();
-        const uint32_t played = playStartedAt ? millis() - playStartedAt : 0;
-        const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
-        return classifyHangup(ceer, true, played, true, ringMs);
-      }
     }
 
     if (urcResult.length() > 0) {
@@ -2100,21 +2086,22 @@ String conductOutgoingCall(uint32_t timeoutMs) {
       }
     }
 
-    if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 8000) {
+    if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 1500) {
       sendAT("ATH", "OK", 3000);
       const uint32_t played = playStartedAt ? millis() - playStartedAt : 0;
-      const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
-      if (played >= 20000 || ringMs >= 35000) {
+      if (played >= 4000) {
         return "Call done";
       }
-      return "Call no answer";
+      const String ceer = queryCallFailCause();
+      const uint32_t ringMs = ringAt ? millis() - ringAt : 0;
+      return classifyHangup(ceer, sawAlerting, played, true, ringMs);
     }
   }
 
   sendAT("AT+CCMXSTOP", "OK", 2000);
   sendAT("ATH", "OK", 3000);
   if (sawAlerting) {
-    return "Call ringing timeout";
+    return "Call no answer";
   }
   if (sawDialing) {
     return "Call dial timeout";
