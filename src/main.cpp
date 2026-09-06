@@ -2125,7 +2125,7 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
   }
 
   String hangupCeer;
-  const String progress = conductOutgoingCall(70000, &hangupCeer);
+  const String progress = conductOutgoingCall(120000, &hangupCeer);
   refreshRadioMode();
   state.radioAtConnect = state.radioMode;
   const String observed = observeVoicePath(state.radioAtDial, state.radioAtConnect);
@@ -2182,12 +2182,15 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   bool sawDialing = false;
   bool sawAlerting = false;
   bool sawNoCarrier = false;
+  bool playing = false;
   bool audioDone = false;
   bool reportedCsfbWait = false;
   const uint32_t startedAt = millis();
-  uint32_t ringAt = 0;
+  uint32_t voicePathAt = 0;
   uint32_t audioDoneAt = 0;
   constexpr uint32_t kCsfbIgnoreMs = 40000;
+  constexpr uint32_t kLeadInMs = 4000;
+  constexpr uint32_t kTrailMs = 2000;
 
   auto storeCeer = [&](const String& ceer) {
     if (ceerOut != nullptr) {
@@ -2209,6 +2212,9 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
     const int clccStat = lastClccStat(urc);
     if (urcResult.length() > 0 || clccStat == 6) {
       publishCallModemSignal(urc);
+    }
+    if (compactAtText(urc).indexOf("VOICECALL:BEGIN") >= 0 && voicePathAt == 0) {
+      voicePathAt = millis();
     }
     if (urc.indexOf("+AUDIOSTATE:") >= 0 && urc.indexOf("play stop") >= 0) {
       audioDone = true;
@@ -2232,10 +2238,11 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
         } else if (stat == 3) {
           if (!sawAlerting) {
             publishTestCallProgress("Ringing");
-            ringAt = millis();
           }
           sawAlerting = true;
           setStatus("Ringing");
+        } else if (stat == 0 && voicePathAt == 0) {
+          voicePathAt = millis();
         }
         from = tag + 6;
       }
@@ -2264,7 +2271,18 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
       }
     }
 
-    if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= 1500) {
+    if (voicePathAt > 0 && !playing && !audioDone &&
+        state.modemAudioPath.length() > 0 &&
+        millis() - voicePathAt >= kLeadInMs) {
+      publishTestCallProgress("Playing audio");
+      String playResp;
+      sendAT("AT+CCMXPLAY=\"" + state.modemAudioPath + "\",1,0", "OK", 5000,
+             &playResp);
+      pendingCallUrcs = playResp + pendingCallUrcs;
+      playing = true;
+    }
+
+    if (audioDone && audioDoneAt > 0 && millis() - audioDoneAt >= kTrailMs) {
       sendAT("ATH", "OK", 3000);
       const String ceer = queryCallFailCause();
       storeCeer(ceer);

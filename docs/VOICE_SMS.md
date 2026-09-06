@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.38 (no play on ring; modem AT trace on the device page)
+Firmware:   0.2.39 (play after 4s lead-in; hang up 2s after audio; Claro CSFB events)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```
@@ -70,13 +70,21 @@ Dialing, waiting for voice
 Call done [...]
 ```
 
-On Claro CSFB the modem reports “active” / `VOICE CALL: BEGIN` as soon as
-there is ringback (early TCH assignment, 3GPP 24.008 §5.2.1.9). That is
-**not** answer. Firmware **must not** play TTS on ringing — that is why
-no-answer and reject were logged as `Playing audio`. Play only after a
-real pickup URC proven in the device-page modem trace. The **result** is
-who released the call and the 3GPP cause (`AT+CEER` / `AT+CLCC=1` URCs —
-never poll AT during the call):
+On Claro CSFB the modem reports “active” / `VOICE CALL: BEGIN` / `+COLP`
+as soon as there is ringback. Validated 2026-09-06 traces: no-answer,
+reject, and “answer and wait” are **identical** until we hang up.
+The only far-end signal is hangup: `+CLCC` stat 6 + `NO CARRIER` +
+`VOICE CALL: END` + CEER 16 (answer then remote hangup, 4 s).
+
+Play into that voice path after a **4 s** lead-in (time to pick up), then
+**2 s** of silence after `+AUDIOSTATE: play stop` before `ATH`. Never
+poll AT during the call. Results we can actually mark:
+
+- `Call done` — audio finished and we hung up, **or** remote `CLCC` 6 /
+  `NO CARRIER` / CEER 16 after ringing
+- `Call no answer` — we timed out and the call was still up (covers
+  ignore **and** reject: Claro never sends `BUSY` on decline)
+- `Call rejected` — only if `BUSY` / CEER 17/21 ever appear
 
 - `Call no answer` — we gave up after the ring timeout, or the network
   sent CEER 18/19 (`No user responding` / `User alerting, no answer`).
