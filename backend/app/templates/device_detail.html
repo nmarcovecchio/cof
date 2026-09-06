@@ -36,7 +36,9 @@
     <div class="row g-3">
       <div class="col-6 col-md-4 col-xl-2">
         <div class="meta-label">Cliente</div>
-        <div class="meta-value">{{ device.tenant.name }}</div>
+        <div class="meta-value">
+          <a href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">{{ device.tenant.name }}</a>
+        </div>
       </div>
       <div class="col-6 col-md-4 col-xl-2">
         <div class="meta-label">Sitio</div>
@@ -59,6 +61,36 @@
 </div>
 
 {{ cellular_card(device.discovered.get('cellular') if device.discovered else none, device) }}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Avisos del cliente</h2>
+        <div class="text-muted small">Destinos de {{ device.tenant.name }}. La llamada solo sale si este dispositivo tiene llamadas habilitadas.</div>
+      </div>
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar cliente</a>
+    </div>
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="meta-label">Email</div>
+        <div class="meta-value">{{ contacts.email or 'sin configurar' }}</div>
+      </div>
+      <div class="col-md-4">
+        <div class="meta-label">Telegram</div>
+        <div class="meta-value">{{ contacts.telegram_chat_id or 'sin configurar' }}</div>
+      </div>
+      <div class="col-md-4">
+        <div class="meta-label">Telefono</div>
+        <div class="meta-value">{{ contacts.phone or 'sin configurar' }}</div>
+      </div>
+      <div class="col-md-4">
+        <div class="meta-label">Llamadas de este equipo</div>
+        <div class="meta-value">{{ 'habilitadas' if contacts.calling_enabled else 'deshabilitadas' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="card mb-4">
   <div class="card-body">
@@ -109,6 +141,12 @@
         {{ csrf_field() }}
         <button class="btn btn-outline-secondary" type="submit">
           <i class="bi bi-activity"></i> Estado
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar alarma de este equipo? Envia email, Telegram, SMS y llamada si estan configurados.');">
+        {{ csrf_field() }}
+        <button class="btn btn-outline-danger" type="submit">
+          <i class="bi bi-exclamation-triangle"></i> Disparar alarma
         </button>
       </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">

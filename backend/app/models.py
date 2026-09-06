@@ -15,6 +15,9 @@ class Tenant(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(160), nullable=False)
     slug = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    notify_email = db.Column(db.String(255), nullable=True)
+    telegram_chat_id = db.Column(db.String(80), nullable=True)
+    phone = db.Column(db.String(32), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
     sites = db.relationship("Site", back_populates="tenant", cascade="all, delete-orphan")

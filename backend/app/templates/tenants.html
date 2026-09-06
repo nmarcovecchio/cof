@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h1 class="mb-1">Clientes</h1>
-    <p class="text-muted mb-0">Empresas/clientes, sitios y dispositivos asociados.</p>
+    <p class="text-muted mb-0">Empresas/clientes, sitios, dispositivos, email, Telegram y telefono de alerta.</p>
   </div>
   <div class="d-flex gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('site_new') }}">Nuevo sitio</a>
@@ -21,6 +21,7 @@
         <tr>
           <th>Cliente</th>
           <th>Slug</th>
+          <th>Avisos</th>
           <th>Sitios</th>
           <th>Dispositivos</th>
           <th></th>
@@ -31,6 +32,11 @@
         <tr>
           <td>{{ tenant.name }}</td>
           <td><code>{{ tenant.slug }}</code></td>
+          <td class="small">
+            <div>{{ tenant.notify_email or 'sin email' }}</div>
+            <div class="text-muted">{{ tenant.telegram_chat_id or 'sin Telegram' }}</div>
+            <div class="text-muted">{{ tenant.phone or 'sin telefono' }}</div>
+          </td>
           <td>
             {% for site in tenant.sites %}
               <form class="d-inline" method="post" action="{{ url_for('site_delete', site_id=site.id) }}" onsubmit="return confirm('Eliminar sitio {{ site.name }}? Los dispositivos quedaran sin sitio.');">
@@ -46,14 +52,17 @@
           </td>
           <td>{{ tenant.devices|length }}</td>
           <td class="text-end">
-            <form method="post" action="{{ url_for('tenant_delete', tenant_id=tenant.id) }}" onsubmit="return confirm('Eliminar cliente {{ tenant.name }} con sus sitios, dispositivos e historial?');">
-              {{ csrf_field() }}
-              <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
-            </form>
+            <div class="d-flex justify-content-end gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=tenant.id) }}">Editar</a>
+              <form method="post" action="{{ url_for('tenant_delete', tenant_id=tenant.id) }}" onsubmit="return confirm('Eliminar cliente {{ tenant.name }} con sus sitios, dispositivos e historial?');">
+                {{ csrf_field() }}
+                <button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button>
+              </form>
+            </div>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-muted">Sin clientes todavia.</td></tr>
+        <tr><td colspan="6" class="text-muted">Sin clientes todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>

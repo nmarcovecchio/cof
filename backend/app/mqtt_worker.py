@@ -10,6 +10,7 @@ import paho.mqtt.client as mqtt
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from .alarms import evaluate_device_rules
 from .extensions import db
 from .main import create_app, event_display_severity
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
@@ -133,6 +134,7 @@ def persist_message(topic, payload):
                         water_leak=to_bool_or_none(payload.get("water_leak")),
                     )
                 )
+                evaluate_device_rules(device, payload)
             elif message_type == "event":
                 event_type = str(payload.get("type", "event"))
                 message = payload.get("message")

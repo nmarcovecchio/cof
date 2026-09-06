@@ -80,17 +80,14 @@
   {# ── Notificaciones ────────────────────────────────────────────── #}
   <div class="card shadow-sm mb-3">
     <div class="card-header fw-semibold">Notificaciones</div>
-    <div class="card-body row g-3">
-      <div class="col-md-5">
-        <label class="form-label">Email de alerta</label>
-        <input type="email" class="form-control" id="notify_email" placeholder="ejemplo@dominio.com" value="{{ cfg.notifications.email | default('') if cfg.notifications else '' }}">
-        <div class="form-text">Dejar vacío para no enviar email.</div>
-      </div>
-      <div class="col-md-5">
-        <label class="form-label">Telegram Chat ID</label>
-        <input type="text" class="form-control" id="notify_telegram" placeholder="Ej: -1001234567890" value="{{ cfg.notifications.telegram_chat_id | default('') if cfg.notifications else '' }}">
-        <div class="form-text">Obtené tu chat ID hablando con <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a>.</div>
-      </div>
+    <div class="card-body">
+      <p class="mb-2">Email, Telegram y telefono se configuran en el cliente, no aca.</p>
+      <p class="text-muted small mb-2">
+        {{ device.tenant.notify_email or 'sin email' }}
+        · {{ device.tenant.telegram_chat_id or 'sin Telegram' }}
+        · {{ device.tenant.phone or 'sin telefono' }}
+      </p>
+      <a href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar avisos de {{ device.tenant.name }}</a>
     </div>
   </div>
 
@@ -213,6 +210,7 @@ function addRule(rule) {
 
   // Fill values if editing existing
   if (rule) {
+    if (rule.id) row.dataset.ruleId = rule.id;
     row.querySelector('.rule-operator').value = rule.operator || 'gt';
     row.querySelector('.rule-threshold').value = rule.threshold ?? '';
     row.querySelector('.rule-duration').value = rule.duration_seconds ?? 0;
@@ -266,6 +264,7 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
     if (!sensorId) return; // skip incomplete
     const actions = [...row.querySelectorAll('.rule-action:checked')].map(cb => cb.value);
     rules.push({
+      id: row.dataset.ruleId || ('rule_' + sensorId + '_' + rules.length),
       sensor_id: sensorId,
       operator: row.querySelector('.rule-operator').value,
       threshold: parseFloat(row.querySelector('.rule-threshold').value),
@@ -275,12 +274,6 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
     });
   });
 
-  // Notifications
-  const notifications = {
-    email: document.getElementById('notify_email').value.trim(),
-    telegram_chat_id: document.getElementById('notify_telegram').value.trim(),
-  };
-
   const payload = {{ cfg | tojson }};
   payload.telemetry_interval_seconds = parseInt(document.getElementById('telemetry_interval').value);
   payload.calling = {
@@ -289,7 +282,6 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
   };
   payload.sensors = sensors;
   payload.rules = rules;
-  payload.notifications = notifications;
 
   document.getElementById('payload-hidden').value = JSON.stringify(payload);
   this.submit();

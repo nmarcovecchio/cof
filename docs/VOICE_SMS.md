@@ -166,6 +166,7 @@ If ACK is `unsupported`, OTA first.
 
 ## Still pending (do not mix with this win)
 
-1. Alarm rule evaluation in `mqtt_worker`.
-2. Email (Flask SMTP) and Telegram bot notifications.
-3. MQTT TLS + per-device passwords — only with Serial access to the ESP32.
+1. MQTT TLS + per-device passwords — only with Serial access to the ESP32.
+
+Alarmas por regla, email, Telegram y el boton **Disparar alarma** estan en
+`docs/NOTIFICATIONS.md`. El telefono/email/chat van en el cliente.

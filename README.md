@@ -154,11 +154,12 @@ http://IP_DEL_VPS/devices/cof-test/config
 
 Flujo multi-cliente inicial:
 
-1. Crear cliente en `/tenants/new`.
+1. Crear cliente en `/tenants/new` (email, grupo de Telegram, telefono).
 2. Crear sitio en `/sites/new`.
 3. Crear dispositivo en `/devices/new`.
 4. Usar el mismo `Device ID` que usa el firmware en MQTT.
 5. Entrar al dispositivo y publicar config o forzar OTA.
+6. Configurar SMTP/bot una sola vez en el VPS: `docs/NOTIFICATIONS.md`.
 
 Los dispositivos reportan `hardware_profile`, capacidades y recursos
 descubiertos. En `/devices/<device_id>` se muestran esos datos para poder mapear

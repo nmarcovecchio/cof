@@ -470,8 +470,9 @@ radio/audio config to keep: `docs/VOICE_SMS.md`.
 
 - VPS Mosquitto: anonymous, public `1883` only. No TLS certs, no passwd.
 - `docker-compose.yml` publishes `1883:1883` and `8883:8883`.
-- Web config form is visual (sensors / rules / call+sms+email+telegram).
-  Rules are **not evaluated yet**. Email/Telegram sends are **not implemented**.
+- Web config form is visual (sensors / rules / call on/off).
+  Email, Telegram chat ID and phone live on the **tenant**.
+  Rules are evaluated in `mqtt_worker`. Setup: `docs/NOTIFICATIONS.md`.
 - Latest published firmware: `0.2.34`.
 - Lab device `cof-test`: MQTT `1883`, Claro A7672. Voice = CS bounce then one
   dial. SMS = modem. Call audio = Piper `es_AR-daniela` → AMR-NB 8 kHz.
@@ -486,9 +487,7 @@ actually up. `0.2.11` did that and left the device offline.
 
 ### Next (in this order)
 
-1. Alarm-rule evaluation in `mqtt_worker` (telemetry → match rules → notify).
-2. Email (Flask SMTP) and Telegram Bot API.
-3. Only with the ESP32 at hand: MQTT TLS + auth + per-device credentials.
+1. Only with the ESP32 at hand: MQTT TLS + auth + per-device credentials.
    Follow the section below. Do not cut over remotely.
 
 ## Current security posture

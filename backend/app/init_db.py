@@ -7,6 +7,7 @@ from sqlalchemy import inspect, text
 def ensure_schema_columns():
     inspector = inspect(db.engine)
     device_columns = {column["name"] for column in inspector.get_columns("devices")}
+    tenant_columns = {column["name"] for column in inspector.get_columns("tenants")}
 
     statements = []
     if "hardware_profile" not in device_columns:
@@ -17,6 +18,12 @@ def ensure_schema_columns():
         statements.append("ALTER TABLE devices ADD COLUMN discovered JSONB")
     if "archived_at" not in device_columns:
         statements.append("ALTER TABLE devices ADD COLUMN archived_at TIMESTAMP WITH TIME ZONE")
+    if "notify_email" not in tenant_columns:
+        statements.append("ALTER TABLE tenants ADD COLUMN notify_email VARCHAR(255)")
+    if "telegram_chat_id" not in tenant_columns:
+        statements.append("ALTER TABLE tenants ADD COLUMN telegram_chat_id VARCHAR(80)")
+    if "phone" not in tenant_columns:
+        statements.append("ALTER TABLE tenants ADD COLUMN phone VARCHAR(32)")
 
     if not statements:
         return

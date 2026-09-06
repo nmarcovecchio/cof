@@ -10,16 +10,19 @@ from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import paho.mqtt.publish as mqtt_publish
 import redis
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
+from .mqtt_util import publish_mqtt, publish_mqtt_raw
+from .notify import send_email, send_telegram
+from .phones import is_e164_phone, is_email, is_telegram_chat_id, normalize_email, normalize_phone, normalize_telegram_chat_id
 from .tts import MAX_TEXT_CHARS, public_audio_url, synthesize_call_audio
 
 
@@ -257,19 +260,69 @@ def create_app() -> Flask:
     def tenant_new():
         error = None
         if request.method == "POST":
-            name = request.form.get("name", "").strip()
-            slug = request.form.get("slug", "").strip() or slugify(name)
-            if not name or not slug:
-                error = "Nombre y slug son requeridos"
-            else:
-                db.session.add(Tenant(name=name, slug=slug))
+            tenant = Tenant()
+            error = apply_tenant_form(tenant)
+            if error is None:
+                db.session.add(tenant)
                 try:
                     db.session.commit()
-                    return redirect(url_for("tenants"))
+                    flash("Cliente creado", "success")
+                    return redirect(url_for("tenant_edit", tenant_id=tenant.id))
                 except IntegrityError:
                     db.session.rollback()
                     error = "Ya existe un cliente con ese slug"
-        return render_template("tenant_form.html", error=error)
+        return render_template("tenant_form.html", tenant=None, error=error)
+
+    @app.route("/tenants/<int:tenant_id>/edit", methods=["GET", "POST"])
+    @login_required
+    def tenant_edit(tenant_id):
+        tenant = Tenant.query.get_or_404(tenant_id)
+        error = None
+        if request.method == "POST":
+            error = apply_tenant_form(tenant)
+            if error is None:
+                try:
+                    db.session.commit()
+                    flash("Cliente actualizado", "success")
+                    return redirect(url_for("tenant_edit", tenant_id=tenant.id))
+                except IntegrityError:
+                    db.session.rollback()
+                    error = "Ya existe un cliente con ese slug"
+        return render_template("tenant_form.html", tenant=tenant, error=error)
+
+    @app.post("/tenants/<int:tenant_id>/test-email")
+    @login_required
+    def tenant_test_email(tenant_id):
+        tenant = Tenant.query.get_or_404(tenant_id)
+        email = normalize_email(tenant.notify_email or "")
+        if not is_email(email):
+            flash("Configura un email valido en el cliente", "danger")
+            return redirect(url_for("tenant_edit", tenant_id=tenant.id))
+        try:
+            send_email(
+                email,
+                "[CallOnFail] Prueba de email",
+                f"Prueba de alerta para {tenant.name}.\nSi recibis esto, SMTP esta bien.",
+            )
+            flash(f"Email de prueba enviado a {email}", "success")
+        except Exception as exc:
+            flash(f"No se pudo enviar el email: {exc}", "danger")
+        return redirect(url_for("tenant_edit", tenant_id=tenant.id))
+
+    @app.post("/tenants/<int:tenant_id>/test-telegram")
+    @login_required
+    def tenant_test_telegram(tenant_id):
+        tenant = Tenant.query.get_or_404(tenant_id)
+        chat_id = normalize_telegram_chat_id(tenant.telegram_chat_id or "")
+        if not is_telegram_chat_id(chat_id):
+            flash("Configura el chat ID de Telegram del cliente", "danger")
+            return redirect(url_for("tenant_edit", tenant_id=tenant.id))
+        try:
+            send_telegram(chat_id, f"CallOnFail prueba de Telegram para {tenant.name}.")
+            flash("Mensaje de prueba enviado a Telegram", "success")
+        except Exception as exc:
+            flash(f"No se pudo enviar a Telegram: {exc}", "danger")
+        return redirect(url_for("tenant_edit", tenant_id=tenant.id))
 
     @app.post("/tenants/<int:tenant_id>/delete")
     @login_required
@@ -446,6 +499,7 @@ def create_app() -> Flask:
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
             modem_trace_event=modem_trace_event,
+            contacts=resolve_contacts(device, latest_config_payload(device)),
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
@@ -582,6 +636,27 @@ def create_app() -> Flask:
         resp.headers["Content-Encoding"] = "identity"
         return resp
 
+    @app.post("/devices/<device_uid>/alarms/trigger")
+    @login_required
+    def device_trigger_alarm(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        if device.archived_at is not None:
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
+        event = dispatch_alarm(
+            device,
+            source="manual",
+            title="Alarma de prueba",
+            detail="Disparada desde la web",
+        )
+        db.session.commit()
+        results = (event.payload or {}).get("results") or {}
+        sent = [name for name, value in results.items() if value == "sent"]
+        if sent:
+            flash("Alarma disparada: " + ", ".join(sent), "success")
+        else:
+            flash("Alarma registrada. Revisa eventos: " + ", ".join(f"{k}={v}" for k, v in results.items()), "warning")
+        return redirect(url_for("device_detail", device_uid=device.device_uid))
+
     @app.post("/devices/<device_uid>/commands/test-sms")
     @login_required
     def device_command_test_sms(device_uid):
@@ -689,31 +764,32 @@ def check_redis() -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+def apply_tenant_form(tenant: Tenant) -> str | None:
+    name = request.form.get("name", "").strip()
+    slug = request.form.get("slug", "").strip() or slugify(name)
+    email = normalize_email(request.form.get("notify_email", ""))
+    chat_id = normalize_telegram_chat_id(request.form.get("telegram_chat_id", ""))
+    phone = normalize_phone(request.form.get("phone", ""))
+
+    if not name or not slug:
+        return "Nombre y slug son requeridos"
+    if email and not is_email(email):
+        return "Email invalido"
+    if chat_id and not is_telegram_chat_id(chat_id):
+        return "Telegram chat ID invalido (ej. -1001234567890)"
+    if phone and not is_e164_phone(phone):
+        return "Telefono invalido. Usa formato internacional, ej. +5491168619589"
+
+    tenant.name = name
+    tenant.slug = slug
+    tenant.notify_email = email or None
+    tenant.telegram_chat_id = chat_id or None
+    tenant.phone = phone or None
+    return None
+
+
 def publish_config_desired(device: Device, payload: dict):
     publish_mqtt(f"devices/{device.device_uid}/config/desired", payload, qos=1, retain=True)
-
-
-def publish_mqtt(topic: str, payload: dict, qos: int = 1, retain: bool = False):
-    publish_mqtt_raw(topic, json.dumps(payload, separators=(",", ":")), qos=qos, retain=retain)
-
-
-def publish_mqtt_raw(topic: str, payload: str, qos: int = 1, retain: bool = False):
-    mqtt_host = os.environ.get("MQTT_HOST", "mosquitto")
-    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
-    auth = None
-    username = os.environ.get("MQTT_USERNAME", "")
-    if username:
-        auth = {"username": username, "password": os.environ.get("MQTT_PASSWORD", "")}
-
-    mqtt_publish.single(
-        topic,
-        payload=payload,
-        qos=qos,
-        retain=retain,
-        hostname=mqtt_host,
-        port=mqtt_port,
-        auth=auth,
-    )
 
 
 def default_device_config(device: Device) -> dict:
@@ -763,15 +839,10 @@ def default_device_config(device: Device) -> dict:
     }
 
 
-def normalize_phone(phone: str) -> str:
-    return "".join(ch for ch in (phone or "").strip() if ch.isdigit() or ch == "+")
-
-
-def is_e164_phone(phone: str) -> bool:
-    return bool(re.fullmatch(r"\+[1-9]\d{7,14}", phone or ""))
-
-
 def last_used_test_phone(device, configs) -> str:
+    tenant_phone = normalize_phone(getattr(getattr(device, "tenant", None), "phone", "") or "")
+    if is_e164_phone(tenant_phone):
+        return tenant_phone
     session_phone = normalize_phone(str(session.get("test_phone") or ""))
     if is_e164_phone(session_phone):
         return session_phone

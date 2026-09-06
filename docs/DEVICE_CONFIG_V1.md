@@ -217,7 +217,9 @@ Controlled from the web:
 ```
 
 If `calling.enabled` is false, the device must not place phone calls even if the
-modem is ready.
+modem is ready. Alarm email, Telegram chat ID and phone number are stored on
+the tenant (see `docs/NOTIFICATIONS.md`). Device `notifications` in this JSON
+is a leftover override only.
 
 Audio assets should be dynamic. A customer may have no audio assets, one shared
 test audio, or different audios per alarm flow.
