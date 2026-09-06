@@ -2,17 +2,16 @@ import logging
 import math
 import os
 import time
-import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.orm.attributes import flag_modified
 
 from .extensions import db
 from .models import Device, DeviceConfig, Event, utcnow
-from .mqtt_util import publish_mqtt
+from .modem_queue import enqueue_modem_job, pump_modem_queue
 from .notify import send_email, send_telegram, smtp_configured, telegram_configured
 from .phones import parse_emails, parse_phones, parse_telegram_chats
-from .tts import MAX_TEXT_CHARS, public_audio_url, synthesize_call_audio
+from .tts import MAX_TEXT_CHARS
 
 logger = logging.getLogger("callonfail.alarms")
 
@@ -317,25 +316,30 @@ def dispatch_alarm(
         results["telegram"] = "skipped: sin chat de Telegram"
 
     if channels["sms"]:
-        results["sms"] = _mqtt_note(
+        results["sms"] = _queue_modem(
+            device,
+            "test_sms",
+            {"phone": contacts["phone"], "text": spoken[:160], "alarm_event_id": event.id},
             contacts,
-            _publish_device_command(
-                device,
-                "test_sms",
-                {"phone": contacts["phone"], "text": spoken[:160]},
-            ),
         )
     elif "sms" in wanted:
         results["sms"] = "skipped: sin telefono del cliente"
 
     if channels["call"]:
-        results["call"] = _mqtt_note(contacts, _publish_alarm_call(device, contacts["phone"], spoken))
+        results["call"] = _queue_modem(
+            device,
+            "test_call",
+            {"phone": contacts["phone"], "text": spoken, "alarm_event_id": event.id},
+            contacts,
+        )
         if len(contacts["phones"]) > 1:
             results["call_cascade"] = "pending: hoy llama al primero; la cascada X->Y->Z todavia no esta"
     elif "call" in wanted and not contacts["calling_enabled"]:
         results["call"] = "skipped: llamadas deshabilitadas en el dispositivo"
     elif "call" in wanted:
         results["call"] = "skipped: sin telefono del cliente"
+
+    pump_modem_queue(device)
 
     event.payload = {**(event.payload or {}), "results": results}
     flag_modified(event, "payload")
@@ -344,35 +348,13 @@ def dispatch_alarm(
     return event
 
 
-def _publish_device_command(device: Device, command: str, extra: dict) -> str:
-    payload = {
-        "command_id": str(uuid.uuid4()),
-        "command": command,
-        "device_id": device.device_uid,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        **extra,
-    }
-    try:
-        publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
-        return "sent"
-    except Exception as exc:
-        logger.exception("Alarm command failed device=%s command=%s", device.device_uid, command)
-        return f"error: {exc}"
-
-
-def _publish_alarm_call(device: Device, phone: str, text: str) -> str:
-    try:
-        _path, audio_id = synthesize_call_audio(text)
-        extra = {
-            "phone": phone,
-            "text": text,
-            "audio_url": public_audio_url(audio_id),
-            "audio_format": "amr_nb_8000",
-        }
-    except Exception as exc:
-        logger.exception("Alarm TTS failed device=%s", device.device_uid)
-        return f"error: TTS failed ({exc})"
-    return _publish_device_command(device, "test_call", extra)
+def _queue_modem(device: Device, command: str, extra: dict, contacts: dict) -> str:
+    job = enqueue_modem_job(device, command, extra, source="alarm")
+    if job.status == "failed":
+        return f"error: {job.result}"
+    if job.status == "queued":
+        return _mqtt_note(contacts, "queued")
+    return _mqtt_note(contacts, job.status)
 
 
 def _safe_duration(rule: dict) -> int:

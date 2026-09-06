@@ -88,6 +88,20 @@
         <div class="meta-label">Llamadas de este equipo</div>
         <div class="meta-value">{{ 'habilitadas' if contacts.calling_enabled else 'deshabilitadas' }}</div>
       </div>
+      <div class="col-md-8">
+        <div class="meta-label">Cola del modem</div>
+        <div class="meta-value">
+          {% if modem_jobs %}
+            {% for job in modem_jobs %}
+              <div class="small">
+                {{ job.status }} · {{ job.command }} · {{ (job.payload or {}).get('phone') or '-' }}
+              </div>
+            {% endfor %}
+          {% else %}
+            vacia
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 </div>

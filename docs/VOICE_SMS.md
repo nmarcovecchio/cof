@@ -10,7 +10,7 @@ Validated on:
 Device:     cof-test
 Hardware:   WT32-ETH01 + A7672
 SIM:        Claro Argentina (operator 722310)
-Firmware:   0.2.40 (SMS before call when both queued; snapshot MQTT command so a second command during a call is not wiped)
+Firmware:   0.2.41 (command_id on call/SMS result so the backend can drain the modem queue)
 MQTT:       mqtt.callonfail.com.ar:1883 (anonymous, no TLS)
 Web:        https://app.callonfail.com.ar/devices/cof-test
 ```

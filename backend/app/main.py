@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
+from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
 from .mqtt_util import publish_mqtt, publish_mqtt_raw
@@ -30,7 +31,7 @@ from .phones import (
     parse_phones,
     parse_telegram_chats,
 )
-from .tts import MAX_TEXT_CHARS, public_audio_url, synthesize_call_audio
+from .tts import MAX_TEXT_CHARS
 
 
 def login_required(view):
@@ -507,6 +508,7 @@ def create_app() -> Flask:
             test_phone=last_used_test_phone(device, configs),
             modem_trace_event=modem_trace_event,
             contacts=resolve_contacts(device, latest_config_payload(device)),
+            modem_jobs=active_modem_jobs(device),
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
@@ -598,26 +600,11 @@ def create_app() -> Flask:
                 extra={"phone": phone, "text": text},
                 publish=False,
             )
-        try:
-            _amr_path, audio_id = synthesize_call_audio(text)
-        except Exception as exc:
-            return send_device_command(
-                device_uid,
-                "test_call",
-                f"Test call rejected: TTS failed ({exc})",
-                extra={"phone": phone, "text": text},
-                publish=False,
-            )
         return send_device_command(
             device_uid,
             "test_call",
-            f"Test call command sent to {phone}",
-            extra={
-                "phone": phone,
-                "text": text,
-                "audio_url": public_audio_url(audio_id),
-                "audio_format": "amr_nb_8000",
-            },
+            f"Test call queued to {phone}",
+            extra={"phone": phone, "text": text},
         )
 
     @app.get("/audio/tmp/<audio_id>.amr")
@@ -657,9 +644,9 @@ def create_app() -> Flask:
         )
         db.session.commit()
         results = (event.payload or {}).get("results") or {}
-        sent = [name for name, value in results.items() if str(value).startswith("sent")]
+        sent = [name for name, value in results.items() if str(value).startswith("sent") or str(value).startswith("queued")]
         if sent:
-            flash("Alarma disparada: " + ", ".join(sent), "success")
+            flash("Alarma disparada: " + ", ".join(f"{name}={results[name]}" for name in sent), "success")
         else:
             flash("Alarma registrada. Revisa eventos: " + ", ".join(f"{k}={v}" for k, v in results.items()), "warning")
         return redirect(url_for("device_detail", device_uid=device.device_uid))
@@ -682,7 +669,7 @@ def create_app() -> Flask:
         return send_device_command(
             device_uid,
             "test_sms",
-            f"Test SMS command sent to {phone}",
+            f"Test SMS queued to {phone}",
             extra={"phone": phone, "text": text},
         )
 
@@ -704,7 +691,21 @@ def create_app() -> Flask:
                 session["test_phone"] = phone
         event_type = "command_sent"
         severity = "info"
-        if publish:
+        if publish and command in {"test_call", "test_sms"}:
+            job = enqueue_modem_job(device, command, extra or {}, source="test")
+            started = pump_modem_queue(device)
+            payload["command_id"] = job.command_id
+            payload["queue_status"] = job.status
+            if started is not None and started.id == job.id:
+                message = message.replace("queued", "sent")
+                payload["queue_status"] = started.status
+            elif job.status == "queued":
+                message = message if "queued" in message else message.replace("sent", "queued")
+            elif job.status == "failed":
+                event_type = "command_failed"
+                severity = "warning"
+                message = f"{command} failed: {job.result}"
+        elif publish:
             try:
                 publish_mqtt(f"devices/{device.device_uid}/command", payload, qos=1, retain=False)
             except Exception as exc:

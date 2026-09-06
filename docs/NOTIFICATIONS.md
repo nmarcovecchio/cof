@@ -16,7 +16,11 @@ freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 | Telefonos | Web → Clientes → Editar, uno por linea | Hoy SMS/llamada usan el **primero** |
 | Llamadas si/no | Web → dispositivo → Publicar config | Por equipo |
 
-La cascada de llamadas (primero X, si no atiende Y, luego Z) **todavia no esta**.
+Si varias alarmas piden llamada o SMS a la vez, el backend arma una **cola por
+equipo**: una operacion de modem a la vez. Termina la primera y recien sale la
+siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 8 jobs.
+
+La cascada de telefonos (primero X, si no atiende Y, luego Z) **todavia no esta**.
 Los telefonos ya se guardan en orden para cuando se arme.
 
 No hace falta un bot por cliente. Si un token se filtra, un solo bot ve todos

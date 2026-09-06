@@ -11,6 +11,7 @@ import paho.mqtt.client as mqtt
 from sqlalchemy.orm.attributes import flag_modified
 
 from .alarms import evaluate_device_rules
+from .modem_queue import complete_modem_job, pump_modem_queue
 from .extensions import db
 from .main import create_app, event_display_severity
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
@@ -135,6 +136,7 @@ def persist_message(topic, payload):
                     )
                 )
                 evaluate_device_rules(device, payload)
+                pump_modem_queue(device)
             elif message_type == "event":
                 event_type = str(payload.get("type", "event"))
                 message = payload.get("message")
@@ -151,6 +153,9 @@ def persist_message(topic, payload):
                         payload=payload,
                     )
                 )
+                if event_type in {"test_call", "test_sms"}:
+                    complete_modem_job(device, event_type, message or "", payload.get("command_id"))
+                    pump_modem_queue(device)
             elif message_type == "status":
                 device.status = str(payload.get("status", "online"))
                 device.hardware_profile = payload.get("hardware_profile") or device.hardware_profile

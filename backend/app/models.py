@@ -64,6 +64,7 @@ class Device(db.Model):
     configs = db.relationship("DeviceConfig", back_populates="device", cascade="all, delete-orphan")
     telemetry = db.relationship("Telemetry", back_populates="device", cascade="all, delete-orphan")
     events = db.relationship("Event", back_populates="device", cascade="all, delete-orphan")
+    modem_jobs = db.relationship("DeviceModemJob", back_populates="device", cascade="all, delete-orphan")
 
 
 class DeviceConfig(db.Model):
@@ -99,6 +100,23 @@ class Telemetry(db.Model):
     water_leak = db.Column(db.Boolean, nullable=True)
 
     device = db.relationship("Device", back_populates="telemetry")
+
+
+class DeviceModemJob(db.Model):
+    __tablename__ = "device_modem_jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey("devices.id"), nullable=False, index=True)
+    command = db.Column(db.String(40), nullable=False)
+    command_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    status = db.Column(db.String(20), nullable=False, default="queued", index=True)
+    payload = db.Column(db.JSON, nullable=False, default=dict)
+    result = db.Column(db.String(240), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    finished_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    device = db.relationship("Device", back_populates="modem_jobs")
 
 
 class Event(db.Model):

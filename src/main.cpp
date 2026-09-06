@@ -140,6 +140,7 @@ bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioUrl = "";
 String pendingTestCallAudioFormat = "";
+String pendingTestCallCommandId = "";
 bool reportTestCallProgress = false;
 String pendingCallUrcs;
 String modemCallLog;
@@ -147,6 +148,7 @@ constexpr uint16_t kModemCallLogMax = 1800;
 bool pendingTestSmsCommand = false;
 String pendingTestSmsPhone = "";
 String pendingTestSmsText = "";
+String pendingTestSmsCommandId = "";
 bool pendingCommandAck = false;
 String pendingCommandId = "";
 String pendingCommandName = "";
@@ -433,6 +435,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallAudioUrl.trim();
         pendingTestCallAudioFormat = doc["audio_format"] | "";
         pendingTestCallAudioFormat.trim();
+        pendingTestCallCommandId = pendingCommandId;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test call scheduled";
       } else if (pendingCommandName == "test_sms") {
@@ -441,6 +444,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestSmsPhone.trim();
         pendingTestSmsText = doc["text"] | "CallOnFail prueba SMS";
         pendingTestSmsText.trim();
+        pendingTestSmsCommandId = pendingCommandId;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test SMS scheduled";
       } else {
@@ -724,13 +728,16 @@ void publishCommandAck() {
   publishMqttJson("ack", doc, false, 1);
 }
 
-void publishDeviceEvent(const char* type, const char* severity, const String& message) {
+void publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId = "") {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
   doc["type"] = type;
   doc["severity"] = severity;
   doc["message"] = message;
+  if (commandId.length() > 0) {
+    doc["command_id"] = commandId;
+  }
   publishMqttJson("event", doc, false, 1);
 }
 
@@ -749,13 +756,16 @@ void publishTestCallProgress(const String& message) {
   }
 }
 
-void publishTestCallResult(const String& result, bool ok) {
+void publishTestCallResult(const String& result, bool ok, const String& commandId = "") {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
   doc["type"] = "test_call";
   doc["severity"] = ok ? "info" : "warning";
   doc["message"] = withFirmware(result);
+  if (commandId.length() > 0) {
+    doc["command_id"] = commandId;
+  }
   if (modemCallLog.length() > 0) {
     doc["modem_log"] = modemCallLog;
   }
@@ -2852,29 +2862,33 @@ void loop() {
   if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
     const String smsPhone = pendingTestSmsPhone;
     const String smsText = pendingTestSmsText;
+    const String smsCommandId = pendingTestSmsCommandId;
     pendingTestSmsCommand = false;
     pendingTestSmsPhone = "";
     pendingTestSmsText = "";
+    pendingTestSmsCommandId = "";
     const String result = sendTestSms(smsPhone, smsText);
     connectMqttIfNeeded();
     const bool ok = result == "SMS sent";
-    publishDeviceEvent("test_sms", ok ? "info" : "warning", result);
+    publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId);
   }
 
   if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
     const String callPhone = pendingTestCallPhone;
     const String callAudioUrl = pendingTestCallAudioUrl;
     const String callAudioFormat = pendingTestCallAudioFormat;
+    const String callCommandId = pendingTestCallCommandId;
     pendingTestCallCommand = false;
     pendingTestCallPhone = "";
     pendingTestCallAudioUrl = "";
     pendingTestCallAudioFormat = "";
+    pendingTestCallCommandId = "";
     reportTestCallProgress = true;
     const String result = placeCallAndPlayAudio(callPhone, true, callAudioUrl, callAudioFormat);
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");
-    publishTestCallResult(result, ok);
+    publishTestCallResult(result, ok, callCommandId);
   }
 
   if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
