@@ -1,10 +1,7 @@
 import imaplib
-import json
 import logging
 import os
 import re
-import urllib.error
-import urllib.request
 from datetime import timedelta
 from email import message_from_bytes
 from email.header import decode_header
@@ -25,9 +22,6 @@ logger = logging.getLogger("callonfail.alarm_ack")
 ACK_WORD = re.compile(r"\bok\b", re.IGNORECASE)
 EVENT_IN_SUBJECT = re.compile(r"alarma\s*#\s*(\d+)", re.IGNORECASE)
 TOKEN_IN_TEXT = re.compile(r"/(?:alarms/(\d+)/ack|a/(\d+))/([A-Za-z0-9_\-]+)")
-
-_telegram_offset = 0
-_telegram_offset_loaded = False
 
 
 def is_ack_text(text: str, *, email_body: bool = False) -> bool:
@@ -100,12 +94,21 @@ def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: b
     return True
 
 
-def event_for_ack_token(event_id: int, token: str) -> Event | None:
+def lookup_ack_link(event_id: int, token: str) -> tuple[Event | None, str]:
     event = Event.query.filter_by(id=event_id, type="alarm").first()
     if event is None:
-        return None
+        return None, "invalid"
     expected = str((event.payload or {}).get("ack_token") or "")
     if not expected or expected != token:
+        return None, "invalid"
+    if event.cleared_at is not None:
+        return event, "expired"
+    return event, "open"
+
+
+def event_for_ack_token(event_id: int, token: str) -> Event | None:
+    event, status = lookup_ack_link(event_id, token)
+    if status != "open":
         return None
     return event
 
@@ -147,42 +150,6 @@ def handle_inbound_sms(device: Device, payload: dict) -> None:
     if event is None:
         return
     acknowledge_device_from_event(event, channel="sms", sender=sender or "sms")
-
-
-def poll_telegram_acks() -> int:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        return 0
-    offset = _telegram_update_offset()
-    url = f"https://api.telegram.org/bot{token}/getUpdates?timeout=0&limit=20"
-    if offset:
-        url += f"&offset={offset}"
-    try:
-        with urllib.request.urlopen(url, timeout=8) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        logger.warning("Telegram getUpdates failed: %s", exc)
-        return 0
-    if not data.get("ok"):
-        return 0
-
-    handled = 0
-    last_id = offset
-    for update in data.get("result") or []:
-        last_id = max(last_id, int(update.get("update_id") or 0) + 1)
-        msg = update.get("message") or update.get("channel_post") or {}
-        text = str(msg.get("text") or "")
-        chat = msg.get("chat") or {}
-        chat_id = str(chat.get("id") or "").strip()
-        if not chat_id or not is_ack_text(text):
-            continue
-        event = _open_alarm_for(chat_id=chat_id)
-        if event is None:
-            continue
-        if acknowledge_device_from_event(event, channel="telegram", sender=chat_id):
-            handled += 1
-    _store_telegram_offset(last_id)
-    return handled
 
 
 def poll_imap_acks() -> int:
@@ -350,38 +317,3 @@ def _email_text(message) -> str:
     if isinstance(payload, bytes):
         return payload.decode(charset, errors="replace")
     return str(payload or "")
-
-
-def _telegram_update_offset() -> int:
-    global _telegram_offset, _telegram_offset_loaded
-    if _telegram_offset_loaded:
-        return _telegram_offset
-    _telegram_offset_loaded = True
-    url = os.environ.get("REDIS_URL")
-    if not url:
-        return _telegram_offset
-    try:
-        import redis
-
-        value = redis.Redis.from_url(url, socket_connect_timeout=2, decode_responses=True).get("cof:telegram:offset")
-        if value:
-            _telegram_offset = int(value)
-    except Exception:
-        logger.exception("Telegram offset read failed")
-    return _telegram_offset
-
-
-def _store_telegram_offset(value: int) -> None:
-    global _telegram_offset
-    if value <= _telegram_offset:
-        return
-    _telegram_offset = value
-    url = os.environ.get("REDIS_URL")
-    if not url:
-        return
-    try:
-        import redis
-
-        redis.Redis.from_url(url, socket_connect_timeout=2, decode_responses=True).set("cof:telegram:offset", str(value))
-    except Exception:
-        logger.exception("Telegram offset write failed")

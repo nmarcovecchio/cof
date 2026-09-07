@@ -10,7 +10,7 @@ import paho.mqtt.client as mqtt
 
 from sqlalchemy.orm.attributes import flag_modified
 
-from .alarm_ack import handle_inbound_sms, poll_imap_acks, poll_telegram_acks
+from .alarm_ack import handle_inbound_sms, poll_imap_acks
 from .alarms import evaluate_device_rules
 from .modem_queue import complete_modem_job, pump_due_modem_jobs, pump_modem_queue
 from .extensions import db
@@ -302,7 +302,6 @@ def main():
             client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
             client.loop_start()
             last_pump = 0.0
-            last_telegram = 0.0
             last_imap = 0.0
             while running:
                 time.sleep(1)
@@ -312,9 +311,6 @@ def main():
                         if now - last_pump >= 2:
                             pump_due_modem_jobs()
                             last_pump = now
-                        if now - last_telegram >= 3:
-                            poll_telegram_acks()
-                            last_telegram = now
                         if now - last_imap >= 20:
                             poll_imap_acks()
                             last_imap = now

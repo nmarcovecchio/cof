@@ -28,11 +28,11 @@ Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
 regla). El ciclo se ve en **Alarmas**.
 
 Cada aviso lleva un **enlace para confirmar y silenciar** (SMS, Telegram con
-boton, email). Hay que tocarlo y confirmar. Tambien vale un mensaje que
-**contenga ok**. Eso silencia **todas** las alarmas abiertas de ese equipo.
-Atender una llamada no corta: sigue el siguiente contacto. En la web hay
-**Silenciar alarmas de este equipo**. WhatsApp todavia no: hace falta API
-Business (Meta/Twilio), no un numero comun.
+boton, email). Hay que tocarlo y confirmar. Eso silencia las alarmas abiertas
+de **ese equipo**. El enlace muere cuando esa alarma se cierra. En el grupo
+de Telegram no vale escribir ok: solo el boton. En SMS/email, un mensaje con
+ok sigue de respaldo. Atender una llamada no corta. En la web hay
+**Silenciar alarmas de este equipo**.
 El aviso de detencion va al grupo de Telegram y queda en el ciclo (auditoria).
 Si el sensor sigue mal, se repite el ciclo cada N segundos (mismo N que
 despues de un OK). 0 = no se repite hasta que se normalice.
@@ -76,7 +76,7 @@ podés sacar).
 Los supergrupos empiezan con `-100`. Si reenviás el grupo a un canal, el ID
 cambia: volvé a leer `getUpdates`.
 
-Para detener el escalamiento: responder **ok** en ese chat.
+Para detener el escalamiento: tocar **Confirmar y silenciar** en el aviso.
 
 ## 3. Gmail SMTP (pruebas) e IMAP (respuesta OK)
 
@@ -167,4 +167,4 @@ rearme por histeresis). **Disparar alarma** no espera eso: es una prueba.
 - [ ] En la regla, tildar quien recibe SMS/email/Telegram/llamada
 - [ ] En el equipo, llamadas habilitadas si corresponde
 - [ ] **Disparar alarma** genera evento `alarm` y los avisos
-- [ ] Responder `ok` (SMS / Telegram / email o enlace) detiene la cascada
+- [ ] El enlace/boton confirma y silencia; al cerrarse la alarma el enlace muere

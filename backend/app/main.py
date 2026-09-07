@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .alarm_ack import acknowledge_by_token, acknowledge_device_from_event, event_for_ack_token, open_device_alarms
+from .alarm_ack import acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
 from .alarm_log import friendly_step
 from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
@@ -285,9 +285,16 @@ def create_app() -> Flask:
     @app.get("/a/<int:event_id>/<token>")
     @app.get("/alarms/<int:event_id>/ack/<token>")
     def alarm_ack_public(event_id, token):
-        event = event_for_ack_token(event_id, token)
-        if event is None:
+        event, status = lookup_ack_link(event_id, token)
+        if status == "invalid" or event is None:
             return render_template("alarm_ack.html", state="invalid", event=None), 404
+        if status == "expired":
+            return render_template(
+                "alarm_ack.html",
+                state="expired",
+                event=event,
+                device_name=event.device.name if event.device else "",
+            )
         return render_template(
             "alarm_ack.html",
             state="confirm",
@@ -299,6 +306,14 @@ def create_app() -> Flask:
     @app.post("/a/<int:event_id>/<token>")
     @app.post("/alarms/<int:event_id>/ack/<token>")
     def alarm_ack_confirm(event_id, token):
+        event, status = lookup_ack_link(event_id, token)
+        if status == "expired":
+            return render_template(
+                "alarm_ack.html",
+                state="expired",
+                event=event,
+                device_name=event.device.name if event and event.device else "",
+            )
         event = acknowledge_by_token(event_id, token, channel="link", sender="enlace")
         if event is None:
             return render_template("alarm_ack.html", state="invalid", event=None), 404
