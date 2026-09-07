@@ -1,5 +1,41 @@
 # Avisos por cliente (agenda, canales, OK e histeresis)
 
+## Estado (retomar aca)
+
+Codigo en `main`. Proximo paso: **configurar el VPS**. Todavia no estan el bot
+de Telegram ni Gmail. No probar alarmas hasta tener eso y rebuild.
+
+En `/opt/callonfail/.env` (no commitear secretos):
+
+```text
+TELEGRAM_BOT_TOKEN=123456:ABC...
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=tu.cuenta@gmail.com
+SMTP_PASSWORD=xxxx xxxx xxxx xxxx
+SMTP_FROM=CallOnFail <tu.cuenta@gmail.com>
+SMTP_STARTTLS=true
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+```
+
+`IMAP_*` es solo si queres responder OK por email. El enlace/boton confirma
+sin IMAP. `PUBLIC_BASE_URL=https://app.callonfail.com.ar` ya tiene que estar
+(sino el SMS/Telegram/email sale sin link).
+
+Despues:
+
+```bash
+cd /opt/callonfail
+git pull
+docker compose up -d --build web mqtt-worker
+```
+
+Recien ahi: web → cliente (grupo Telegram + agenda) → **Probar Telegram** /
+**Probar email** → **Disparar alarma**. WhatsApp no va.
+
+---
+
 Un bot y un SMTP para todo CallOnFail. Cada **cliente** tiene una **agenda de
 contactos** (nombre + telefono y/o email) y **un grupo de Telegram**. Cada
 **regla** elige a quien avisar por SMS, email y llamadas. Telegram, si la
@@ -51,8 +87,8 @@ los grupos; por eso el token vive en el VPS, no en la web.
    TELEGRAM_BOT_TOKEN=123456:ABC...
    ```
 
-5. `/setprivacy` en BotFather → Disable, para que el bot vea el **OK** en el
-   grupo. Sin eso solo ve comandos.
+5. El bot no lee mensajes del grupo: solo manda el aviso con el boton
+   **Confirmar y silenciar**. No hace falta `/setprivacy` Disable.
 
 ## 2. Telegram — grupo o chat de cada contacto
 
@@ -67,7 +103,7 @@ los grupos; por eso el token vive en el VPS, no en la web.
    ```
 
 5. Buscá `"chat":{"id":-100...`. Ese número es el chat ID.
-6. En la web: **Clientes → Editar** → contacto → pegalo → Guardar → **Probar Telegram**.
+6. En la web: **Clientes → Editar** → grupo Telegram del cliente → pegalo → Guardar → **Probar Telegram**.
 
 Otras formas de ver el ID: agregar [@userinfobot](https://t.me/userinfobot) o
 [@RawDataBot](https://t.me/RawDataBot) al grupo y leer el `id` (después los
@@ -126,8 +162,8 @@ git pull
 docker compose up -d --build web mqtt-worker
 ```
 
-Hace falta rebuild porque cambiaron variables, la agenda y el worker ahora
-escucha OK por Telegram/IMAP. `init_db` agrega la columna `contacts`; no toca
+Hace falta rebuild porque cambiaron variables, la agenda y el worker. IMAP
+sigue leyendo OK por email. `init_db` agrega la columna `contacts`; no toca
 datos. Los emails/telefonos viejos se leen como contactos hasta que guardes
 el cliente de nuevo.
 
@@ -157,8 +193,8 @@ rearme por histeresis). **Disparar alarma** no espera eso: es una prueba.
 ## 6. Checklist rapido
 
 - [ ] `TELEGRAM_BOT_TOKEN` en `.env` y compose rebuild
-- [ ] Bot agregado al grupo del cliente y privacy Disable
-- [ ] Chat ID `-100...` guardado en un contacto
+- [ ] Bot agregado al grupo del cliente
+- [ ] Chat ID `-100...` guardado en el cliente
 - [ ] **Probar Telegram** llega al grupo
 - [ ] Gmail 2FA + App Password en `SMTP_*` e IMAP habilitado
 - [ ] Email del contacto cargado
