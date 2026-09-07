@@ -455,6 +455,9 @@ primera prueba conviene dejarlo fijo en el firmware.
 
 ## Pines WT32
 
+La placa v1 (4 IN, 2 OUT, leak, RESET del A7672, WDT con corte de 5 V) esta
+en `docs/HARDWARE_V1.md`. Abajo queda el cableado de **lab** actual.
+
 ### Alimentacion
 
 Usar una sola entrada de alimentacion en el WT32:
