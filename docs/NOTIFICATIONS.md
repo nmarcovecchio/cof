@@ -27,10 +27,12 @@ siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 16 jobs.
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
 regla). El ciclo se ve en **Alarmas**.
 
-Responder un mensaje que **contenga ok** (da igual mayusculas) por SMS,
-Telegram o email silencia **todas** las alarmas abiertas de ese equipo.
-Atender una llamada no corta: sigue el siguiente contacto. El email pide
-confirmar en una pagina. En la web hay **Silenciar alarmas de este equipo**.
+Cada aviso lleva un **enlace para confirmar y silenciar** (SMS, Telegram con
+boton, email). Hay que tocarlo y confirmar. Tambien vale un mensaje que
+**contenga ok**. Eso silencia **todas** las alarmas abiertas de ese equipo.
+Atender una llamada no corta: sigue el siguiente contacto. En la web hay
+**Silenciar alarmas de este equipo**. WhatsApp todavia no: hace falta API
+Business (Meta/Twilio), no un numero comun.
 El aviso de detencion va al grupo de Telegram y queda en el ciclo (auditoria).
 Si el sensor sigue mal, se repite el ciclo cada N segundos (mismo N que
 despues de un OK). 0 = no se repite hasta que se normalice.

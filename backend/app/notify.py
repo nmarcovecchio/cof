@@ -65,7 +65,7 @@ def send_email(to_addrs, subject: str, body: str, extra_headers: dict | None = N
         smtp.send_message(message)
 
 
-def send_telegram(chat_ids, text: str) -> None:
+def send_telegram(chat_ids, text: str, button_url: str = "", button_text: str = "Confirmar y silenciar") -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN no esta configurado en el VPS")
@@ -80,22 +80,25 @@ def send_telegram(chat_ids, text: str) -> None:
     errors = []
     for chat_id in targets:
         try:
-            _send_telegram_one(token, chat_id, body)
+            _send_telegram_one(token, chat_id, body, button_url=button_url, button_text=button_text)
         except Exception as exc:
             errors.append(f"{chat_id}: {exc}")
     if errors:
         raise RuntimeError("; ".join(errors))
 
 
-def _send_telegram_one(token: str, chat_id: str, text: str) -> None:
+def _send_telegram_one(token: str, chat_id: str, text: str, button_url: str = "", button_text: str = "Confirmar y silenciar") -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps(
-        {
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": True,
+    message = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if button_url.startswith("https://") and button_text:
+        message["reply_markup"] = {
+            "inline_keyboard": [[{"text": button_text, "url": button_url}]],
         }
-    ).encode("utf-8")
+    payload = json.dumps(message).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=payload,

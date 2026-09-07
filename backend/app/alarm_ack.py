@@ -24,7 +24,7 @@ logger = logging.getLogger("callonfail.alarm_ack")
 
 ACK_WORD = re.compile(r"\bok\b", re.IGNORECASE)
 EVENT_IN_SUBJECT = re.compile(r"alarma\s*#\s*(\d+)", re.IGNORECASE)
-TOKEN_IN_TEXT = re.compile(r"/alarms/(\d+)/ack/([A-Za-z0-9_\-]+)")
+TOKEN_IN_TEXT = re.compile(r"/(?:alarms/(\d+)/ack|a/(\d+))/([A-Za-z0-9_\-]+)")
 
 _telegram_offset = 0
 _telegram_offset_loaded = False
@@ -56,7 +56,15 @@ def public_ack_url(event_id: int, token: str) -> str:
     base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
     if not base or not token:
         return ""
-    return f"{base}/alarms/{event_id}/ack/{token}"
+    return f"{base}/a/{event_id}/{token}"
+
+
+def _ids_from_ack_match(match) -> tuple[int, str] | None:
+    event_id = match.group(1) or match.group(2)
+    token = match.group(3) if match.lastindex and match.lastindex >= 3 else None
+    if not event_id or not token:
+        return None
+    return int(event_id), token
 
 
 def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: bool = True) -> bool:
@@ -219,7 +227,11 @@ def _ack_from_email(message) -> bool:
 
     token_match = TOKEN_IN_TEXT.search(body) or TOKEN_IN_TEXT.search(subject)
     if token_match:
-        event = acknowledge_by_token(int(token_match.group(1)), token_match.group(2), channel="email", sender=sender)
+        parsed = _ids_from_ack_match(token_match)
+        if parsed is None:
+            return False
+        event_id, token = parsed
+        event = acknowledge_by_token(event_id, token, channel="email", sender=sender)
         return event is not None
 
     subject_match = EVENT_IN_SUBJECT.search(subject)

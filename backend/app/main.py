@@ -206,7 +206,8 @@ def create_app() -> Flask:
     def csrf_protect():
         if request.method != "POST":
             return
-        if "/ack/" in (request.path or ""):
+        path = request.path or ""
+        if "/ack/" in path or path.startswith("/a/"):
             return
 
         expected = session.get("_csrf_token")
@@ -281,6 +282,7 @@ def create_app() -> Flask:
         event = Event.query.filter_by(id=event_id, type="alarm").first_or_404()
         return render_template("alarm_detail.html", alarm=alarm_view(event))
 
+    @app.get("/a/<int:event_id>/<token>")
     @app.get("/alarms/<int:event_id>/ack/<token>")
     def alarm_ack_public(event_id, token):
         event = event_for_ack_token(event_id, token)
@@ -294,6 +296,7 @@ def create_app() -> Flask:
             device_name=event.device.name if event.device else "",
         )
 
+    @app.post("/a/<int:event_id>/<token>")
     @app.post("/alarms/<int:event_id>/ack/<token>")
     def alarm_ack_confirm(event_id, token):
         event = acknowledge_by_token(event_id, token, channel="link", sender="enlace")

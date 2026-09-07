@@ -33,7 +33,7 @@ _rule_since: dict[str, float] = {}
 _rearm_until: dict[str, float] = {}
 _redis = None
 _redis_failed = False
-ACK_HINT = "Responde OK (da igual mayusculas) para detener el escalamiento."
+ACK_HINT = "Toca el enlace para confirmar y silenciar las alarmas de este equipo."
 
 
 def latest_config_payload(device: Device) -> dict:
@@ -260,6 +260,18 @@ def clear_alarm(event: Event, telemetry: dict | None = None, device: Device | No
         notify_alarm_cleared(device, event, telemetry)
 
 
+def _sms_with_ack_link(spoken: str, ack_url: str) -> str:
+    spoken = " ".join((spoken or "").split())
+    if not ack_url:
+        return spoken[:160]
+    prefix = "Confirmar: "
+    room = 160 - len(prefix) - len(ack_url) - 1
+    body = spoken[: max(0, room)].rstrip()
+    if body:
+        return f"{body} {prefix}{ack_url}"[:160]
+    return f"{prefix}{ack_url}"[:160]
+
+
 def _mqtt_note(contacts: dict, sent: str) -> str:
     if contacts.get("device_live"):
         return sent
@@ -336,8 +348,8 @@ def dispatch_alarm(
     ack_url = public_ack_url(event.id, ack_token)
     notify_text = text + "\n\n" + ACK_HINT
     if ack_url:
-        notify_text += f"\nO abre este enlace: {ack_url}"
-    sms_text = (spoken + " Responde OK para frenar.")[:160]
+        notify_text += f"\n{ack_url}"
+    sms_text = _sms_with_ack_link(spoken, ack_url)
 
     if channels["email"]:
         if not contacts["smtp_ready"]:
@@ -369,7 +381,7 @@ def dispatch_alarm(
             append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="skipped", detail="bot no configurado")
         else:
             try:
-                send_telegram(contacts["telegram_chat_ids"], notify_text)
+                send_telegram(contacts["telegram_chat_ids"], notify_text, button_url=ack_url)
                 results["telegram"] = f"sent:{len(contacts['telegram_chat_ids'])}"
                 append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="sent")
             except Exception as exc:
