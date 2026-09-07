@@ -26,7 +26,7 @@ def _as_list(value) -> list[str]:
     return [item] if item else []
 
 
-def send_email(to_addrs, subject: str, body: str) -> None:
+def send_email(to_addrs, subject: str, body: str, extra_headers: dict | None = None) -> None:
     host = os.environ.get("SMTP_HOST", "").strip()
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "").strip()
@@ -45,6 +45,9 @@ def send_email(to_addrs, subject: str, body: str) -> None:
     message["To"] = ", ".join(recipients)
     message["Subject"] = " ".join((subject or "").split())
     message.set_content(body or "")
+    for key, value in (extra_headers or {}).items():
+        if key and value:
+            message[key] = str(value)
 
     if starttls:
         with smtplib.SMTP(host, port, timeout=20) as smtp:

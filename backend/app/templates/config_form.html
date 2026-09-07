@@ -81,12 +81,21 @@
   <div class="card shadow-sm mb-3">
     <div class="card-header fw-semibold">Notificaciones</div>
     <div class="card-body">
-      <p class="mb-2">Email, Telegram y telefono se configuran en el cliente, no aca.</p>
-      <p class="text-muted small mb-2" style="white-space: pre-line;">{{ device.tenant.notify_email or 'sin email' }}
-{{ device.tenant.telegram_chat_id or 'sin Telegram' }}
-{{ device.tenant.phone or 'sin telefono' }}</p>
-      <p class="text-muted small mb-2">Varios destinos: uno por linea en el cliente. La llamada usa el primer telefono.</p>
-      <a href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar avisos de {{ device.tenant.name }}</a>
+      <p class="mb-2">La agenda vive en el cliente. Esta regla elige a quien avisar.</p>
+      {% if contacts %}
+      <ul class="small mb-2">
+        {% for c in contacts %}
+        <li><strong>{{ c.name }}</strong>
+          {% if c.phone %} · {{ c.phone }}{% endif %}
+          {% if c.email %} · {{ c.email }}{% endif %}
+          {% if c.telegram_chat_id %} · TG {{ c.telegram_chat_id }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-muted small mb-2">Este cliente no tiene contactos todavia.</p>
+      {% endif %}
+      <a href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar agenda de {{ device.tenant.name }}</a>
     </div>
   </div>
 
@@ -177,10 +186,39 @@
         <label class="form-label small mb-1">Descripción (opcional)</label>
         <input type="text" class="form-control form-control-sm rule-description" placeholder="Ej: Temperatura alta en sala de servidores">
       </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Espera entre llamadas (seg)</label>
+        <input type="number" class="form-control form-control-sm rule-escalate-delay" min="0" max="3600" value="30">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Rearmar si sigue prendida (seg)</label>
+        <input type="number" class="form-control form-control-sm rule-hysteresis" min="0" max="86400" value="300">
+        <div class="form-text">0 = no vuelve a sonar hasta que se normalice. Si alguien respondio OK y el sensor sigue mal, espera esto y arranca otro ciclo.</div>
+      </div>
       <div class="col-md-6">
         <div class="form-check mt-2">
           <input class="form-check-input rule-escalate" type="checkbox" checked>
-          <label class="form-check-label small">Si no atienden, llamar al siguiente telefono (orden del cliente)</label>
+          <label class="form-check-label small">Si no atienden, llamar al siguiente (despues de la espera)</label>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="row g-2">
+          <div class="col-md-3">
+            <label class="form-label small mb-1">SMS a</label>
+            <div class="rule-sms-contacts small"></div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-1">Email a</label>
+            <div class="rule-email-contacts small"></div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-1">Telegram a</label>
+            <div class="rule-telegram-contacts small"></div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-1">Llamadas (orden)</label>
+            <div class="rule-call-contacts small"></div>
+          </div>
         </div>
       </div>
       <div class="col-md-6">
@@ -214,6 +252,32 @@ const SENSORS = [
 
 // Existing rules from server
 const EXISTING_RULES = {{ cfg.rules | default([]) | tojson }};
+const CONTACTS = {{ contacts | default([]) | tojson }};
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
+function contactBoxes(channel, field, selectedIds) {
+  const usable = CONTACTS.filter(c => c[field]);
+  if (!usable.length) {
+    return `<div class="text-muted">Nadie en la agenda tiene ${escapeHtml(channel)}</div>`;
+  }
+  const selected = new Set(selectedIds || []);
+  return usable.map(c => `
+    <div class="form-check">
+      <input class="form-check-input rule-contact-${channel}" type="checkbox" value="${escapeHtml(c.id)}" ${selected.has(c.id) ? 'checked' : ''}>
+      <label class="form-check-label">${escapeHtml(c.name)} <span class="text-muted">${escapeHtml(c[field])}</span></label>
+    </div>
+  `).join('');
+}
+
+function selectedOrAll(rule, key, field) {
+  if (rule && Array.isArray(rule[key])) return rule[key];
+  return CONTACTS.filter(c => c[field]).map(c => c.id);
+}
 
 function getSensorOptions(selectedId) {
   return SENSORS.map(s =>
@@ -242,11 +306,18 @@ function addRule(rule) {
       cb.checked = actions.includes(cb.value);
     });
     row.querySelector('.rule-escalate').checked = rule.escalate_calls !== false;
+    row.querySelector('.rule-escalate-delay').value = rule.escalate_delay_seconds ?? 30;
+    row.querySelector('.rule-hysteresis').value = rule.hysteresis_seconds ?? 300;
     const clearActions = rule.clear_actions || ['email', 'telegram'];
     row.querySelectorAll('.rule-clear').forEach(cb => {
       cb.checked = clearActions.includes(cb.value);
     });
   }
+
+  row.querySelector('.rule-sms-contacts').innerHTML = contactBoxes('sms', 'phone', selectedOrAll(rule, 'sms_contact_ids', 'phone'));
+  row.querySelector('.rule-email-contacts').innerHTML = contactBoxes('email', 'email', selectedOrAll(rule, 'email_contact_ids', 'email'));
+  row.querySelector('.rule-telegram-contacts').innerHTML = contactBoxes('telegram', 'telegram_chat_id', selectedOrAll(rule, 'telegram_contact_ids', 'telegram_chat_id'));
+  row.querySelector('.rule-call-contacts').innerHTML = contactBoxes('call', 'phone', selectedOrAll(rule, 'call_contact_ids', 'phone'));
 
   document.getElementById('rules-container').appendChild(clone);
 
@@ -299,6 +370,12 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
       actions: actions,
       description: row.querySelector('.rule-description').value,
       escalate_calls: row.querySelector('.rule-escalate').checked,
+      escalate_delay_seconds: parseInt(row.querySelector('.rule-escalate-delay').value) || 0,
+      hysteresis_seconds: parseInt(row.querySelector('.rule-hysteresis').value) || 0,
+      sms_contact_ids: [...row.querySelectorAll('.rule-contact-sms:checked')].map(cb => cb.value),
+      email_contact_ids: [...row.querySelectorAll('.rule-contact-email:checked')].map(cb => cb.value),
+      telegram_contact_ids: [...row.querySelectorAll('.rule-contact-telegram:checked')].map(cb => cb.value),
+      call_contact_ids: [...row.querySelectorAll('.rule-contact-call:checked')].map(cb => cb.value),
       clear_actions: [...row.querySelectorAll('.rule-clear:checked')].map(cb => cb.value),
     });
   });

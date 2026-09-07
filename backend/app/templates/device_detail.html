@@ -67,7 +67,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
         <h2 class="h5 mb-1">Avisos del cliente</h2>
-        <div class="text-muted small">Destinos de {{ device.tenant.name }}. Emails y Telegram a todos. SMS/llamada al primer telefono. La llamada solo si este equipo las tiene habilitadas.</div>
+        <div class="text-muted small">Agenda de {{ device.tenant.name }}. Cada regla elige a quien avisar. La llamada solo si este equipo las tiene habilitadas.</div>
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
@@ -75,17 +75,22 @@
       </div>
     </div>
     <div class="row g-3">
-      <div class="col-md-4">
-        <div class="meta-label">Email</div>
-        <div class="meta-value" style="white-space: pre-line;">{{ (contacts.emails or [contacts.email])|join('\n') if contacts.emails or contacts.email else 'sin configurar' }}</div>
-      </div>
-      <div class="col-md-4">
-        <div class="meta-label">Telegram</div>
-        <div class="meta-value" style="white-space: pre-line;">{{ (contacts.telegram_chat_ids or [contacts.telegram_chat_id])|join('\n') if contacts.telegram_chat_ids or contacts.telegram_chat_id else 'sin configurar' }}</div>
-      </div>
-      <div class="col-md-4">
-        <div class="meta-label">Telefonos</div>
-        <div class="meta-value" style="white-space: pre-line;">{{ (contacts.phones or [contacts.phone])|join('\n') if contacts.phones or contacts.phone else 'sin configurar' }}</div>
+      <div class="col-12">
+        <div class="meta-label">Agenda</div>
+        <div class="meta-value">
+          {% if contacts.agenda %}
+            {% for c in contacts.agenda %}
+            <div class="small">
+              <strong>{{ c.name }}</strong>
+              {% if c.phone %} · {{ c.phone }}{% endif %}
+              {% if c.email %} · {{ c.email }}{% endif %}
+              {% if c.telegram_chat_id %} · TG {{ c.telegram_chat_id }}{% endif %}
+            </div>
+            {% endfor %}
+          {% else %}
+            sin contactos
+          {% endif %}
+        </div>
       </div>
       <div class="col-md-4">
         <div class="meta-label">Llamadas de este equipo</div>

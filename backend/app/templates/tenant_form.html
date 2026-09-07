@@ -11,14 +11,13 @@
   <div class="card-body">
     <h1 class="h3">{% if tenant %}Editar cliente{% else %}Nuevo cliente{% endif %}</h1>
     <p class="text-muted">
-      Destinos del cliente, no del equipo. Varios emails o grupos: uno por linea.
-      Varios telefonos: uno por linea, en orden. Hoy SMS y llamada usan el primero;
-      la cascada X &rarr; Y &rarr; Z todavia no esta.
+      Agenda del cliente. Cada contacto puede tener telefono, email y/o Telegram.
+      Las reglas del equipo eligen a quien avisar y en que orden llamar.
     </p>
     {% if error %}
     <div class="alert alert-danger">{{ error }}</div>
     {% endif %}
-    <form method="post">
+    <form method="post" id="tenant-form">
       {{ csrf_field() }}
       <div class="mb-3">
         <label class="form-label" for="name">Nombre</label>
@@ -28,21 +27,28 @@
         <label class="form-label" for="slug">Slug</label>
         <input class="form-control" id="slug" name="slug" placeholder="opcional, se genera desde el nombre" value="{{ tenant.slug if tenant else '' }}">
       </div>
-      <div class="mb-3">
-        <label class="form-label" for="notify_email">Emails de alerta</label>
-        <textarea class="form-control" id="notify_email" name="notify_email" rows="3" placeholder="dueño@cliente.com&#10;backup@cliente.com">{{ tenant.notify_email if tenant and tenant.notify_email else '' }}</textarea>
-        <div class="form-text">Uno por linea. Se avisa a todos. El SMTP (Gmail) es uno solo en el VPS.</div>
+
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h5 mb-0">Contactos</h2>
+        <button type="button" class="btn btn-sm btn-outline-primary" onclick="addContact()">+ Agregar contacto</button>
       </div>
-      <div class="mb-3">
-        <label class="form-label" for="telegram_chat_id">Telegram chat ID</label>
-        <textarea class="form-control" id="telegram_chat_id" name="telegram_chat_id" rows="2" placeholder="-1001234567890">{{ tenant.telegram_chat_id if tenant and tenant.telegram_chat_id else '' }}</textarea>
-        <div class="form-text">Grupo del cliente, no el token del bot. Uno por linea si hay varios grupos.</div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead class="table-light">
+            <tr>
+              <th style="width: 3rem;"></th>
+              <th>Nombre</th>
+              <th>Telefono</th>
+              <th>Email</th>
+              <th>Telegram chat ID</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="contacts-body">
+          </tbody>
+        </table>
       </div>
-      <div class="mb-3">
-        <label class="form-label" for="phone">Telefonos</label>
-        <textarea class="form-control" id="phone" name="phone" rows="3" placeholder="+54911...&#10;+54911...">{{ tenant.phone if tenant and tenant.phone else '' }}</textarea>
-        <div class="form-text">Formato internacional, uno por linea. El primero se usa ahora para SMS y llamada.</div>
-      </div>
+      <p class="form-text">Telefono en formato internacional (+54911...). Telegram es el chat ID del grupo o persona, no el token del bot.</p>
       <button class="btn btn-primary" type="submit">{% if tenant %}Guardar cliente{% else %}Crear cliente{% endif %}</button>
     </form>
     {% if tenant %}
@@ -51,13 +57,13 @@
     <div class="d-flex flex-wrap gap-2">
       <form method="post" action="{{ url_for('tenant_test_email', tenant_id=tenant.id) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-primary" type="submit" {% if not tenant.notify_email %}disabled{% endif %}>
+        <button class="btn btn-outline-primary" type="submit" {% if not contacts|map(attribute='email')|select|list %}disabled{% endif %}>
           Probar email
         </button>
       </form>
       <form method="post" action="{{ url_for('tenant_test_telegram', tenant_id=tenant.id) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-primary" type="submit" {% if not tenant.telegram_chat_id %}disabled{% endif %}>
+        <button class="btn btn-outline-primary" type="submit" {% if not contacts|map(attribute='telegram_chat_id')|select|list %}disabled{% endif %}>
           Probar Telegram
         </button>
       </form>
@@ -65,4 +71,56 @@
     {% endif %}
   </div>
 </div>
+
+<template id="contact-template">
+  <tr class="contact-row">
+    <td>
+      <div class="btn-group-vertical">
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="moveContact(this, -1)">↑</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0" onclick="moveContact(this, 1)">↓</button>
+      </div>
+    </td>
+    <td>
+      <input type="hidden" name="contact_id" class="contact-id" value="">
+      <input class="form-control form-control-sm" name="contact_name" placeholder="Juan / Guardia">
+    </td>
+    <td><input class="form-control form-control-sm" name="contact_phone" placeholder="+54911..."></td>
+    <td><input class="form-control form-control-sm" name="contact_email" placeholder="dueño@cliente.com"></td>
+    <td><input class="form-control form-control-sm" name="contact_telegram" placeholder="-1001234567890"></td>
+    <td class="text-end">
+      <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">🗑</button>
+    </td>
+  </tr>
+</template>
+
+<script>
+const EXISTING_CONTACTS = {{ contacts | default([]) | tojson }};
+
+function addContact(contact) {
+  const tmpl = document.getElementById('contact-template');
+  const row = tmpl.content.cloneNode(true).querySelector('tr');
+  if (contact) {
+    row.querySelector('.contact-id').value = contact.id || '';
+    row.querySelector('[name=contact_name]').value = contact.name || '';
+    row.querySelector('[name=contact_phone]').value = contact.phone || '';
+    row.querySelector('[name=contact_email]').value = contact.email || '';
+    row.querySelector('[name=contact_telegram]').value = contact.telegram_chat_id || '';
+  }
+  document.getElementById('contacts-body').appendChild(row);
+}
+
+function moveContact(btn, dir) {
+  const row = btn.closest('tr');
+  const sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if (!sibling) return;
+  if (dir < 0) row.parentNode.insertBefore(row, sibling);
+  else row.parentNode.insertBefore(sibling, row);
+}
+
+if (EXISTING_CONTACTS.length) {
+  EXISTING_CONTACTS.forEach(addContact);
+} else {
+  addContact();
+}
+</script>
 {% endblock %}

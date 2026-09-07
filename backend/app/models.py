@@ -18,6 +18,7 @@ class Tenant(db.Model):
     notify_email = db.Column(db.Text, nullable=True)
     telegram_chat_id = db.Column(db.String(255), nullable=True)
     phone = db.Column(db.String(512), nullable=True)
+    contacts = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
     sites = db.relationship("Site", back_populates="tenant", cascade="all, delete-orphan")

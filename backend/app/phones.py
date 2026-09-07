@@ -63,6 +63,26 @@ def parse_phones(value: str) -> tuple[list[str], list[str]]:
     return valid, invalid
 
 
+def phone_digits(phone: str) -> str:
+    return "".join(ch for ch in (phone or "") if ch.isdigit())
+
+
+def phones_match(incoming: str, stored) -> bool:
+    left = phone_digits(incoming)
+    if not left:
+        return False
+    items = stored if isinstance(stored, (list, tuple)) else [stored]
+    for item in items:
+        right = phone_digits(str(item or ""))
+        if not right:
+            continue
+        if left == right:
+            return True
+        if len(left) >= 8 and len(right) >= 8 and (left.endswith(right[-8:]) or right.endswith(left[-8:])):
+            return True
+    return False
+
+
 def parse_telegram_chats(value: str) -> tuple[list[str], list[str]]:
     valid: list[str] = []
     invalid: list[str] = []

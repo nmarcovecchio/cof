@@ -1,17 +1,19 @@
 import logging
 import math
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from .alarm_ack import public_ack_url
+from .alarm_log import append_alarm_step
+from .contacts import pick_contacts, tenant_contacts
 from .extensions import db
 from .models import Device, DeviceConfig, Event, utcnow
-from .alarm_log import append_alarm_step
 from .modem_queue import enqueue_modem_job, pump_modem_queue
 from .notify import send_email, send_telegram, smtp_configured, telegram_configured
-from .phones import parse_emails, parse_phones, parse_telegram_chats
 from .tts import MAX_TEXT_CHARS
 
 logger = logging.getLogger("callonfail.alarms")
@@ -28,8 +30,10 @@ DEFAULT_MANUAL_ACTIONS = ("email", "telegram", "sms", "call")
 DEVICE_LIVE_SECONDS = 180
 
 _rule_since: dict[str, float] = {}
+_rearm_until: dict[str, float] = {}
 _redis = None
 _redis_failed = False
+ACK_HINT = "Responde OK (da igual mayusculas) para detener el escalamiento."
 
 
 def latest_config_payload(device: Device) -> dict:
@@ -53,19 +57,42 @@ def device_recently_seen(device: Device) -> bool:
     return (datetime.now(timezone.utc) - seen).total_seconds() < DEVICE_LIVE_SECONDS
 
 
-def resolve_contacts(device: Device, config: dict | None = None) -> dict:
+def _id_list(value) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def resolve_contacts(device: Device, config: dict | None = None, selection: dict | None = None) -> dict:
     del config  # Contacts live on the tenant. Device JSON is not an override.
-    tenant = device.tenant
-    emails, _ = parse_emails(getattr(tenant, "notify_email", "") or "")
-    chats, _ = parse_telegram_chats(getattr(tenant, "telegram_chat_id", "") or "")
-    phones, _ = parse_phones(getattr(tenant, "phone", "") or "")
+    agenda = tenant_contacts(device.tenant)
+    selection = selection or {}
+    email_ids = _id_list(selection.get("email_contact_ids"))
+    sms_ids = _id_list(selection.get("sms_contact_ids"))
+    telegram_ids = _id_list(selection.get("telegram_contact_ids"))
+    call_ids = _id_list(selection.get("call_contact_ids"))
+    email_contacts = pick_contacts(agenda, email_ids, "email")
+    sms_contacts = pick_contacts(agenda, sms_ids, "phone")
+    telegram_contacts = pick_contacts(agenda, telegram_ids, "telegram_chat_id")
+    call_contacts = pick_contacts(agenda, call_ids, "phone")
+    emails = [item["email"] for item in email_contacts]
+    sms_phones = [item["phone"] for item in sms_contacts]
+    chats = [item["telegram_chat_id"] for item in telegram_contacts]
+    call_phones = [item["phone"] for item in call_contacts]
     return {
+        "agenda": agenda,
         "emails": emails,
         "email": emails[0] if emails else "",
         "telegram_chat_ids": chats,
         "telegram_chat_id": chats[0] if chats else "",
-        "phones": phones,
-        "phone": phones[0] if phones else "",
+        "phones": sms_phones or call_phones,
+        "sms_phones": sms_phones,
+        "call_phones": call_phones,
+        "phone": (sms_phones or call_phones or [""])[0],
         "calling_enabled": calling_enabled(device),
         "smtp_ready": smtp_configured(),
         "telegram_ready": telegram_configured(),
@@ -251,25 +278,29 @@ def dispatch_alarm(
     extra: dict | None = None,
     config: dict | None = None,
 ) -> Event:
+    extra = extra or {}
     payload_cfg = config if config is not None else latest_config_payload(device)
-    contacts = resolve_contacts(device, payload_cfg)
+    contacts = resolve_contacts(device, payload_cfg, extra)
     wanted = set(DEFAULT_MANUAL_ACTIONS if actions is None else actions)
     text = build_alarm_text(device, title, detail)
     spoken = " ".join(text.split())
     if len(spoken) > MAX_TEXT_CHARS:
         spoken = spoken[:MAX_TEXT_CHARS]
 
-    extra = extra or {}
     escalate_calls = bool(extra.get("escalate_calls", True))
     clear_actions = list(extra.get("clear_actions") or [])
-    phones = contacts["phones"]
+    escalate_delay = _safe_seconds(extra.get("escalate_delay_seconds"), 0)
+    hysteresis = _safe_seconds(extra.get("hysteresis_seconds"), 0)
+    sms_phones = contacts["sms_phones"]
+    call_phones = contacts["call_phones"]
     channels = {
         "email": "email" in wanted and bool(contacts["emails"]),
         "telegram": "telegram" in wanted and bool(contacts["telegram_chat_ids"]),
-        "sms": "sms" in wanted and bool(phones),
-        "call": "call" in wanted and contacts["calling_enabled"] and bool(phones),
+        "sms": "sms" in wanted and bool(sms_phones),
+        "call": "call" in wanted and contacts["calling_enabled"] and bool(call_phones),
     }
     results = {}
+    ack_token = secrets.token_urlsafe(16)
 
     event = Event(
         device_id=device.id,
@@ -281,10 +312,13 @@ def dispatch_alarm(
             "title": title,
             "detail": detail,
             "text": text,
+            "ack_token": ack_token,
             "contacts": {
                 "emails": contacts["emails"],
                 "telegram_chat_ids": contacts["telegram_chat_ids"],
-                "phones": contacts["phones"],
+                "phones": sms_phones or call_phones,
+                "sms_phones": sms_phones,
+                "call_phones": call_phones,
                 "phone": contacts["phone"],
                 "calling_enabled": contacts["calling_enabled"],
             },
@@ -292,6 +326,8 @@ def dispatch_alarm(
             "results": results,
             "steps": [],
             "escalate_calls": escalate_calls,
+            "escalate_delay_seconds": escalate_delay,
+            "hysteresis_seconds": hysteresis,
             "clear_actions": clear_actions,
             **extra,
         },
@@ -299,13 +335,26 @@ def dispatch_alarm(
     db.session.add(event)
     db.session.flush()
 
+    ack_url = public_ack_url(event.id, ack_token)
+    notify_text = text + "\n\n" + ACK_HINT
+    if ack_url:
+        notify_text += f"\nO abre este enlace: {ack_url}"
+    sms_text = (spoken + " Responde OK para frenar.")[:160]
+
     if channels["email"]:
         if not contacts["smtp_ready"]:
             results["email"] = "skipped: SMTP no configurado"
             append_alarm_step(event, channel="email", to=contacts["emails"], status="skipped", detail="SMTP no configurado")
         else:
             try:
-                send_email(contacts["emails"], f"[CallOnFail] {title} - {device.name}", text)
+                send_email(
+                    contacts["emails"],
+                    f"[CallOnFail] Alarma #{event.id} - {device.name}",
+                    notify_text,
+                    extra_headers={
+                        "Message-ID": f"<alarm-{event.id}-{ack_token}@callonfail.com.ar>",
+                    },
+                )
                 results["email"] = f"sent:{len(contacts['emails'])}"
                 append_alarm_step(event, channel="email", to=contacts["emails"], status="sent")
             except Exception as exc:
@@ -322,7 +371,7 @@ def dispatch_alarm(
             append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="skipped", detail="bot no configurado")
         else:
             try:
-                send_telegram(contacts["telegram_chat_ids"], text)
+                send_telegram(contacts["telegram_chat_ids"], notify_text)
                 results["telegram"] = f"sent:{len(contacts['telegram_chat_ids'])}"
                 append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="sent")
             except Exception as exc:
@@ -335,13 +384,13 @@ def dispatch_alarm(
 
     if channels["sms"]:
         sms_states = []
-        for index, phone in enumerate(phones):
+        for index, phone in enumerate(sms_phones):
             job = enqueue_modem_job(
                 device,
                 "test_sms",
                 {
                     "phone": phone,
-                    "text": spoken[:160],
+                    "text": sms_text,
                     "alarm_event_id": event.id,
                     "phone_index": index,
                 },
@@ -366,7 +415,7 @@ def dispatch_alarm(
             device,
             "test_call",
             {
-                "phone": phones[0],
+                "phone": call_phones[0],
                 "text": spoken,
                 "alarm_event_id": event.id,
                 "phone_index": 0,
@@ -378,16 +427,16 @@ def dispatch_alarm(
         append_alarm_step(
             event,
             channel="call",
-            to=phones[0],
+            to=call_phones[0],
             status=job.status,
             detail=job.result or "",
             command_id=job.command_id,
         )
-        if escalate_calls and len(phones) > 1:
-            results["call_cascade"] = f"escala {len(phones)} telefonos si no atienden"
+        if escalate_calls and len(call_phones) > 1:
+            results["call_cascade"] = f"escala {len(call_phones)} telefonos si no atienden (espera {escalate_delay}s)"
     elif "call" in wanted and not contacts["calling_enabled"]:
         results["call"] = "skipped: llamadas deshabilitadas en el dispositivo"
-        append_alarm_step(event, channel="call", to=phones, status="skipped", detail="llamadas deshabilitadas")
+        append_alarm_step(event, channel="call", to=call_phones, status="skipped", detail="llamadas deshabilitadas")
     elif "call" in wanted:
         results["call"] = "skipped: sin telefono del cliente"
         append_alarm_step(event, channel="call", to=[], status="skipped", detail="sin telefono del cliente")
@@ -406,7 +455,11 @@ def notify_alarm_cleared(device: Device, event: Event, telemetry: dict | None = 
     wanted = [item for item in (payload.get("clear_actions") or []) if item in {"email", "telegram", "sms"}]
     if not wanted:
         return
-    contacts = resolve_contacts(device)
+    stored = payload.get("contacts") or {}
+    contacts = resolve_contacts(device, selection=payload)
+    emails = stored.get("emails") or contacts["emails"]
+    chats = stored.get("telegram_chat_ids") or contacts["telegram_chat_ids"]
+    phones = stored.get("sms_phones") or stored.get("phones") or contacts["sms_phones"]
     detail = payload.get("detail") or event.message or "alarma"
     value = ""
     if telemetry is not None:
@@ -418,23 +471,23 @@ def notify_alarm_cleared(device: Device, event: Event, telemetry: dict | None = 
     )
     via = []
     errors = []
-    if "email" in wanted and contacts["emails"] and contacts["smtp_ready"]:
+    if "email" in wanted and emails and smtp_configured():
         try:
-            send_email(contacts["emails"], f"[CallOnFail] Normalizada - {device.name}", text)
+            send_email(emails, f"[CallOnFail] Normalizada - {device.name}", text)
             via.append("email")
         except Exception as exc:
             logger.exception("Clear email failed device=%s", device.device_uid)
             errors.append(str(exc))
-    if "telegram" in wanted and contacts["telegram_chat_ids"] and contacts["telegram_ready"]:
+    if "telegram" in wanted and chats and telegram_configured():
         try:
-            send_telegram(contacts["telegram_chat_ids"], text)
+            send_telegram(chats, text)
             via.append("telegram")
         except Exception as exc:
             logger.exception("Clear telegram failed device=%s", device.device_uid)
             errors.append(str(exc))
-    if "sms" in wanted and contacts["phones"]:
+    if "sms" in wanted and phones:
         spoken = " ".join(text.split())[:160]
-        for index, phone in enumerate(contacts["phones"]):
+        for index, phone in enumerate(phones):
             job = enqueue_modem_job(
                 device,
                 "test_sms",
@@ -461,11 +514,65 @@ def notify_alarm_cleared(device: Device, event: Event, telemetry: dict | None = 
 
 
 def _safe_duration(rule: dict) -> int:
+    return _safe_seconds(rule.get("duration_seconds"), 0)
+
+
+def _safe_seconds(value, default: int = 0) -> int:
     try:
-        value = int(rule.get("duration_seconds") or 0)
+        return max(0, min(86400, int(value)))
     except (TypeError, ValueError):
-        return 0
-    return max(0, value)
+        return default
+
+
+def _rearm_key(device_id: int, key: str) -> tuple[str, str]:
+    return f"{device_id}:{key}", f"cof:rearm:{device_id}:{key}"
+
+
+def set_rearm(device_id: int, key: str, until_ts: float | None) -> None:
+    mem_key, redis_key = _rearm_key(device_id, key)
+    client = _redis_client()
+    if until_ts is None:
+        _rearm_until.pop(mem_key, None)
+        if client is not None:
+            try:
+                client.delete(redis_key)
+            except Exception:
+                logger.exception("Redis rearm clear failed")
+        return
+    _rearm_until[mem_key] = until_ts
+    if client is not None:
+        try:
+            ttl = max(1, int(until_ts - time.time()) + 5)
+            client.set(redis_key, str(until_ts), ex=ttl)
+        except Exception:
+            logger.exception("Redis rearm set failed")
+
+
+def get_rearm(device_id: int, key: str) -> float | None:
+    mem_key, redis_key = _rearm_key(device_id, key)
+    client = _redis_client()
+    if client is not None:
+        try:
+            existing = client.get(redis_key)
+            if existing:
+                value = float(existing)
+                _rearm_until[mem_key] = value
+                return value
+        except Exception:
+            logger.exception("Redis rearm get failed")
+    return _rearm_until.get(mem_key)
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
@@ -476,25 +583,48 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
 
     fired: list[Event] = []
     now_ts = time.time()
+    now = datetime.now(timezone.utc)
     for rule in rules:
         if not isinstance(rule, dict):
             continue
         key = rule_key(rule)
         holds = condition_holds(rule, telemetry)
+        hysteresis = _safe_seconds(rule.get("hysteresis_seconds"), 0)
         if holds is None:
             continue
         if not holds:
             _condition_since(device.id, key, now_ts, False)
             open_event = open_alarm_event(device.id, key)
             if open_event is not None:
+                from .modem_queue import cancel_alarm_jobs
+
+                cancel_alarm_jobs(open_event.id)
                 clear_alarm(open_event, telemetry, device)
+                if hysteresis > 0:
+                    set_rearm(device.id, key, now_ts + hysteresis)
+            continue
+
+        open_event = open_alarm_event(device.id, key)
+        if open_event is not None:
+            payload = open_event.payload or {}
+            rearm_at = _parse_iso(payload.get("rearm_at")) if payload.get("acked") else None
+            if payload.get("acked") and rearm_at is not None and now >= rearm_at:
+                open_event.cleared_at = utcnow()
+                recycled = dict(payload)
+                recycled["cleared_at"] = open_event.cleared_at.isoformat()
+                recycled["recycle_reason"] = "hysteresis"
+                open_event.payload = recycled
+                flag_modified(open_event, "payload")
+            else:
+                continue
+
+        rearm = get_rearm(device.id, key)
+        if rearm is not None and now_ts < rearm:
             continue
 
         since = _condition_since(device.id, key, now_ts, True)
         duration = _safe_duration(rule)
         if since is None or (now_ts - since) < duration:
-            continue
-        if open_alarm_event(device.id, key) is not None:
             continue
 
         selected = list(rule.get("actions") or [])
@@ -515,9 +645,16 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
                 "threshold": rule.get("threshold"),
                 "value": sensor_value(telemetry, str(rule.get("sensor_id") or "")),
                 "escalate_calls": bool(rule.get("escalate_calls", True)),
+                "escalate_delay_seconds": _safe_seconds(rule.get("escalate_delay_seconds"), 0),
+                "hysteresis_seconds": hysteresis,
+                "email_contact_ids": _id_list(rule.get("email_contact_ids")),
+                "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
+                "telegram_contact_ids": _id_list(rule.get("telegram_contact_ids")),
+                "call_contact_ids": _id_list(rule.get("call_contact_ids")),
                 "clear_actions": [item for item in (rule.get("clear_actions") or ["email", "telegram"]) if item in {"email", "telegram", "sms"}],
             },
             config=config,
         )
+        set_rearm(device.id, key, None)
         fired.append(event)
     return fired

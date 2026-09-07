@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h1 class="mb-1">Clientes</h1>
-    <p class="text-muted mb-0">Empresas/clientes, sitios, dispositivos, email, Telegram y telefono de alerta.</p>
+    <p class="text-muted mb-0">Empresas/clientes, sitios, dispositivos y agenda de contactos.</p>
   </div>
   <div class="d-flex gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('site_new') }}">Nuevo sitio</a>
@@ -32,10 +32,19 @@
         <tr>
           <td>{{ tenant.name }}</td>
           <td><code>{{ tenant.slug }}</code></td>
-          <td class="small" style="white-space: pre-line;">
-            <div>{{ tenant.notify_email or 'sin email' }}</div>
-            <div class="text-muted">{{ tenant.telegram_chat_id or 'sin Telegram' }}</div>
-            <div class="text-muted">{{ tenant.phone or 'sin telefono' }}</div>
+          <td class="small">
+            {% set agenda = tenant|tenant_contacts %}
+            {% if agenda %}
+              {% for c in agenda %}
+              <div><strong>{{ c.name }}</strong>
+                {% if c.phone %} · {{ c.phone }}{% endif %}
+                {% if c.email %} · {{ c.email }}{% endif %}
+                {% if c.telegram_chat_id %} · TG{% endif %}
+              </div>
+              {% endfor %}
+            {% else %}
+              <span class="text-muted">sin contactos</span>
+            {% endif %}
           </td>
           <td>
             {% for site in tenant.sites %}

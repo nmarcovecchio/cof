@@ -27,6 +27,7 @@ constexpr eth_phy_type_t kEthPhyType = ETH_PHY_LAN8720;
 constexpr uint32_t kDisplayIntervalMs = 1000;
 constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
+constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kMqttKeepAliveSeconds = 20;
 constexpr uint32_t kMqttSocketTimeoutSeconds = 8;
@@ -120,6 +121,7 @@ RuntimeState state;
 uint32_t lastDisplayMs = 0;
 uint32_t lastSensorMs = 0;
 uint32_t lastModemMs = 0;
+uint32_t lastSmsPollMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastMqttOkMs = 0;
 uint32_t lastTelemetryPublishMs = 0;
@@ -143,6 +145,7 @@ String pendingTestCallAudioFormat = "";
 String pendingTestCallCommandId = "";
 bool reportTestCallProgress = false;
 String pendingCallUrcs;
+String pendingModemUrcs;
 String modemCallLog;
 constexpr uint16_t kModemCallLogMax = 1800;
 bool pendingTestSmsCommand = false;
@@ -741,6 +744,22 @@ void publishDeviceEvent(const char* type, const char* severity, const String& me
   publishMqttJson("event", doc, false, 1);
 }
 
+void publishInboundSms(const String& from, const String& text) {
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["type"] = "inbound_sms";
+  doc["severity"] = "info";
+  doc["from"] = from;
+  doc["text"] = text;
+  String message = from + ": " + text;
+  if (message.length() > 200) {
+    message = message.substring(0, 200);
+  }
+  doc["message"] = message;
+  publishMqttJson("event", doc, false, 1);
+}
+
 String withFirmware(const String& message) {
   return message + " [" + COF_FIRMWARE_VERSION + "]";
 }
@@ -984,6 +1003,11 @@ void flushModemInput() {
     const char c = static_cast<char>(ModemSerial.read());
     if (state.callInProgress) {
       pendingCallUrcs += c;
+    } else {
+      pendingModemUrcs += c;
+      if (pendingModemUrcs.length() > 2048) {
+        pendingModemUrcs.remove(0, pendingModemUrcs.length() - 1024);
+      }
     }
   }
 }
@@ -1421,6 +1445,8 @@ void configureCellularApn() {
   sendAT("AT+CGATT=1", "OK", 15000);
   sendAT("AT+CGSMS=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
+  sendAT("AT+CMGF=1", "OK", 3000);
+  sendAT("AT+CNMI=2,1,0,0,0", "OK", 3000);
   sendAT("AT+CEMODE=1", "OK", 3000);
   sendAT("AT+CEVDP=3", "OK", 3000);
   sendAT("AT+CAVIMS=1", "OK", 3000);
@@ -1492,6 +1518,104 @@ bool initModem() {
     setStatus("Modem OK no SIM");
   }
   return true;
+}
+
+String nthQuoted(const String& line, int want) {
+  int seen = 0;
+  int start = -1;
+  for (int i = 0; i < line.length(); i++) {
+    if (line[i] != '"') {
+      continue;
+    }
+    if (start < 0) {
+      start = i + 1;
+    } else {
+      seen++;
+      if (seen == want) {
+        return line.substring(start, i);
+      }
+      start = -1;
+    }
+  }
+  return "";
+}
+
+void publishSmsRecords(const String& response, const char* tag) {
+  int search = 0;
+  while (search < static_cast<int>(response.length())) {
+    const int pos = response.indexOf(tag, search);
+    if (pos < 0) {
+      break;
+    }
+    const int lineEnd = response.indexOf('\n', pos);
+    if (lineEnd < 0) {
+      break;
+    }
+    const String header = response.substring(pos, lineEnd);
+    int next = response.indexOf(tag, lineEnd);
+    int okAt = response.indexOf("\nOK", lineEnd);
+    int bodyEnd = response.length();
+    if (next >= 0 && next < bodyEnd) {
+      bodyEnd = next;
+    }
+    if (okAt >= 0 && okAt < bodyEnd) {
+      bodyEnd = okAt;
+    }
+    String body = response.substring(lineEnd + 1, bodyEnd);
+    body.replace("\r", "");
+    body.trim();
+    const String from = nthQuoted(header, 2);
+    if (from.length() > 0 || body.length() > 0) {
+      Serial.println("[sms] inbound from " + from + " body=" + body);
+      publishInboundSms(from, body);
+    }
+    if (strcmp(tag, "+CMGL:") == 0) {
+      const int colon = header.indexOf(':');
+      const int index = colon >= 0 ? header.substring(colon + 1).toInt() : -1;
+      if (index >= 0) {
+        sendAT("AT+CMGD=" + String(index), "OK", 3000);
+      }
+    }
+    search = bodyEnd;
+  }
+}
+
+void processPendingSmsUrcs() {
+  flushModemInput();
+  int guard = 0;
+  while (pendingModemUrcs.indexOf("+CMTI:") >= 0 && guard++ < 8) {
+    const int idx = pendingModemUrcs.indexOf("+CMTI:");
+    const int comma = pendingModemUrcs.indexOf(',', idx);
+    const int end = pendingModemUrcs.indexOf('\n', idx);
+    const int index = comma >= 0 ? pendingModemUrcs.substring(comma + 1).toInt() : -1;
+    if (end >= 0) {
+      pendingModemUrcs.remove(idx, end - idx + 1);
+    } else {
+      pendingModemUrcs = "";
+    }
+    if (index < 0) {
+      continue;
+    }
+    String response;
+    if (sendAT("AT+CMGR=" + String(index), "OK", 8000, &response)) {
+      publishSmsRecords(response, "+CMGR:");
+      sendAT("AT+CMGD=" + String(index), "OK", 3000);
+    }
+  }
+}
+
+void pollIncomingSms() {
+  if (!state.modemReady || !state.simReady || state.callInProgress || !state.mqttConnected) {
+    return;
+  }
+  if (pendingTestSmsCommand || pendingTestCallCommand) {
+    return;
+  }
+  processPendingSmsUrcs();
+  String response;
+  if (sendAT("AT+CMGL=\"REC UNREAD\"", "OK", 8000, &response)) {
+    publishSmsRecords(response, "+CMGL:");
+  }
 }
 
 void pollModem() {
@@ -2107,6 +2231,7 @@ void restorePacketServices() {
   sendAT("AT+CGSMS=1", "OK", 3000);
   sendAT("AT+CMGF=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
+  sendAT("AT+CNMI=2,1,0,0,0", "OK", 3000);
   waitUntilModemReady(false, 20000);
 }
 
@@ -2906,6 +3031,12 @@ void loop() {
   if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress) {
     lastModemMs = now;
     pollModem();
+  }
+
+  if (now - lastSmsPollMs >= kSmsPollIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
+      !pendingTestSmsCommand && !pendingTestCallCommand) {
+    lastSmsPollMs = now;
+    pollIncomingSms();
   }
 
   if (state.pcfReady && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {

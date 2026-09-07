@@ -14,7 +14,9 @@
         <h1 class="h3 mb-1">{{ alarm.title }}</h1>
         <p class="text-muted mb-0">{{ alarm.detail }}</p>
       </div>
-      {% if alarm.open %}
+            {% if alarm.acked and alarm.open %}
+        <span class="badge text-bg-warning">reconocida</span>
+      {% elif alarm.open %}
         <span class="badge text-bg-danger">abierta</span>
       {% else %}
         <span class="badge text-bg-success">cerrada</span>
@@ -41,7 +43,8 @@
       </div>
     </div>
     <p class="small text-muted mb-0 mt-3">
-      Escalamiento de llamadas: {{ 'si no atienden, siguiente telefono' if alarm.escalate else 'solo el primero' }}.
+      Escalamiento: {{ 'si no atienden, siguiente telefono' if alarm.escalate else 'solo el primero' }}{% if alarm.escalate and alarm.escalate_delay %}, espera {{ alarm.escalate_delay }}s{% endif %}.
+      Rearme: {{ alarm.hysteresis ~ 's si sigue prendida' if alarm.hysteresis else 'solo cuando se normaliza' }}.
       Al normalizarse: {{ alarm.clear_actions|join(', ') if alarm.clear_actions else 'sin aviso' }}.
     </p>
   </div>

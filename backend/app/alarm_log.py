@@ -98,4 +98,10 @@ def friendly_step(step: dict) -> str:
             return f"No se pudo avisar la normalización: {detail or status}"
         via = targets or "los canales configurados"
         return f"La alarma se normalizó. Avisamos por {via}"
+    if channel == "ack":
+        if status == "notified":
+            return f"Avisamos que se detuvo el escalamiento por {targets or 'los canales configurados'}"
+        return f"Se detuvo el escalamiento ({detail or 'OK'})"
+    if status == "cancelled":
+        return f"Cancelamos {channel} a {targets}: {detail or status}"
     return detail or f"{channel} {status}"

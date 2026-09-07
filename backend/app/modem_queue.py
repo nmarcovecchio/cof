@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -58,6 +58,76 @@ def active_modem_jobs(device: Device) -> list[DeviceModemJob]:
         .order_by(DeviceModemJob.id.asc())
         .all()
     )
+
+
+def cancel_alarm_jobs(event_id: int) -> int:
+    cancelled = 0
+    jobs = DeviceModemJob.query.filter_by(status="queued").all()
+    now = utcnow()
+    for job in jobs:
+        payload = job.payload or {}
+        if payload.get("alarm_event_id") != event_id:
+            continue
+        if payload.get("ack_notice") or payload.get("clear_notice"):
+            continue
+        job.status = "cancelled"
+        job.result = "acked"
+        job.finished_at = now
+        cancelled += 1
+        event = Event.query.filter_by(id=event_id).first()
+        if event is not None:
+            append_alarm_step(
+                event,
+                channel="call" if job.command == "test_call" else "sms",
+                to=payload.get("phone"),
+                status="cancelled",
+                detail="cancelado por OK",
+                command_id=job.command_id,
+            )
+    return cancelled
+
+
+def pump_due_modem_jobs() -> int:
+    device_ids = {
+        job.device_id
+        for job in DeviceModemJob.query.filter(DeviceModemJob.status.in_(("queued", "sent"))).all()
+    }
+    pumped = 0
+    for device_id in device_ids:
+        device = Device.query.get(device_id)
+        if device is None:
+            continue
+        if pump_modem_queue(device) is not None:
+            pumped += 1
+    return pumped
+
+
+def _job_ready(job: DeviceModemJob, now) -> bool:
+    raw = (job.payload or {}).get("not_before")
+    if not raw:
+        return True
+    ready_at = _parse_utc(raw)
+    return ready_at is None or ready_at <= now
+
+
+def _parse_utc(value):
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _safe_delay(value) -> int:
+    try:
+        return max(0, min(3600, int(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def enqueue_modem_job(device: Device, command: str, extra: dict, source: str = "alarm") -> DeviceModemJob:
@@ -124,6 +194,8 @@ def pump_modem_queue(device: Device) -> DeviceModemJob | None:
     next_job = next((job for job in jobs if job.status == "queued"), None)
     if next_job is None:
         return None
+    if not _job_ready(next_job, now):
+        return None
 
     extra = dict(next_job.payload or {})
     extra.pop("source", None)
@@ -131,6 +203,8 @@ def pump_modem_queue(device: Device) -> DeviceModemJob | None:
     extra.pop("phone_index", None)
     extra.pop("escalate_calls", None)
     extra.pop("clear_notice", None)
+    extra.pop("ack_notice", None)
+    extra.pop("not_before", None)
     mqtt_payload = {
         "command_id": next_job.command_id,
         "command": next_job.command,
@@ -244,24 +318,27 @@ def _maybe_escalate_call(device: Device, job: DeviceModemJob) -> None:
     event = Event.query.filter_by(id=event_id).first() if event_id else None
     if event is None:
         return
-    phones = ((event.payload or {}).get("contacts") or {}).get("phones") or []
+    event_payload = event.payload or {}
+    if event_payload.get("acked"):
+        append_alarm_step(event, channel="ack", to=[], status="acked", detail="escalamiento ya detenido")
+        return
+    phones = (event_payload.get("contacts") or {}).get("call_phones") or (event_payload.get("contacts") or {}).get("phones") or []
     next_index = int(payload.get("phone_index") or 0) + 1
     if next_index >= len(phones):
         append_alarm_step(event, channel="call", to=[], status="exhausted", detail="nadie atendio")
         return
     next_phone = phones[next_index]
-    next_job = enqueue_modem_job(
-        device,
-        "test_call",
-        {
-            "phone": next_phone,
-            "text": payload.get("text") or (event.payload or {}).get("text") or "CallOnFail alarma",
-            "alarm_event_id": event.id,
-            "phone_index": next_index,
-            "escalate_calls": True,
-        },
-        source="alarm",
-    )
+    extra = {
+        "phone": next_phone,
+        "text": payload.get("text") or event_payload.get("text") or "CallOnFail alarma",
+        "alarm_event_id": event.id,
+        "phone_index": next_index,
+        "escalate_calls": True,
+    }
+    delay = _safe_delay(event_payload.get("escalate_delay_seconds"))
+    if delay > 0:
+        extra["not_before"] = (utcnow() + timedelta(seconds=delay)).isoformat()
+    next_job = enqueue_modem_job(device, "test_call", extra, source="alarm")
     append_alarm_step(
         event,
         channel="call",

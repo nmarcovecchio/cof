@@ -36,7 +36,9 @@
         {% for alarm in alarms %}
         <tr>
           <td>
-            {% if alarm.open %}
+            {% if alarm.acked and alarm.open %}
+              <span class="badge text-bg-warning">reconocida</span>
+            {% elif alarm.open %}
               <span class="badge text-bg-danger">abierta</span>
             {% else %}
               <span class="badge text-bg-success">cerrada</span>

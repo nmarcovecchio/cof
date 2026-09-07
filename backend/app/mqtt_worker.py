@@ -10,8 +10,9 @@ import paho.mqtt.client as mqtt
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from .alarm_ack import handle_inbound_sms, poll_imap_acks, poll_telegram_acks
 from .alarms import evaluate_device_rules
-from .modem_queue import complete_modem_job, pump_modem_queue
+from .modem_queue import complete_modem_job, pump_due_modem_jobs, pump_modem_queue
 from .extensions import db
 from .main import create_app, event_display_severity
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant, utcnow
@@ -156,6 +157,9 @@ def persist_message(topic, payload):
                 if event_type in {"test_call", "test_sms"}:
                     complete_modem_job(device, event_type, message or "", payload.get("command_id"))
                     pump_modem_queue(device)
+                elif event_type == "inbound_sms":
+                    handle_inbound_sms(device, payload)
+                    pump_modem_queue(device)
             elif message_type == "status":
                 device.status = str(payload.get("status", "online"))
                 device.hardware_profile = payload.get("hardware_profile") or device.hardware_profile
@@ -297,8 +301,29 @@ def main():
             logger.info("Connecting to MQTT host=%s port=%s", MQTT_HOST, MQTT_PORT)
             client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
             client.loop_start()
+            last_pump = 0.0
+            last_telegram = 0.0
+            last_imap = 0.0
             while running:
                 time.sleep(1)
+                now = time.time()
+                with flask_app.app_context():
+                    try:
+                        if now - last_pump >= 2:
+                            pump_due_modem_jobs()
+                            last_pump = now
+                        if now - last_telegram >= 3:
+                            poll_telegram_acks()
+                            last_telegram = now
+                        if now - last_imap >= 20:
+                            poll_imap_acks()
+                            last_imap = now
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+                        logger.exception("Ack/queue poll failed")
+                    finally:
+                        db.session.remove()
             client.loop_stop()
             client.disconnect()
         except Exception:

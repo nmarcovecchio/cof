@@ -24,10 +24,12 @@ def ensure_schema_columns():
         statements.append("ALTER TABLE tenants ADD COLUMN telegram_chat_id VARCHAR(255)")
     if "phone" not in tenant_columns:
         statements.append("ALTER TABLE tenants ADD COLUMN phone VARCHAR(512)")
+    if "contacts" not in tenant_columns:
+        statements.append("ALTER TABLE tenants ADD COLUMN contacts JSONB")
 
     widen = [
         "ALTER TABLE tenants ALTER COLUMN notify_email TYPE TEXT",
-        "ALTER TABLE tenants ALTER COLUMN telegram_chat_id TYPE VARCHAR(255)",
+        "ALTER TABLE tenants ALTER COLUMN telegram_chat_id TYPE TEXT",
         "ALTER TABLE tenants ALTER COLUMN phone TYPE VARCHAR(512)",
     ]
 
