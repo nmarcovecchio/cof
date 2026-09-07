@@ -106,12 +106,7 @@
       <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRule()">+ Agregar regla</button>
     </div>
     <div class="card-body" id="rules-container">
-      {% if cfg.rules %}
-        {% for rule in cfg.rules %}
-        <div class="rule-row border rounded p-3 mb-2 bg-light" data-rule='{{ rule | tojson }}'>
-        </div>
-        {% endfor %}
-      {% else %}
+      {% if not cfg.rules %}
         <p class="text-muted mb-0" id="no-rules-msg">No hay reglas configuradas. Agregá una.</p>
       {% endif %}
     </div>
@@ -152,31 +147,6 @@
         <label class="form-label small mb-1">Durante (seg)</label>
         <input type="number" class="form-control form-control-sm rule-duration" min="0" value="0" placeholder="0 = inmediato">
       </div>
-      <div class="col-md-3">
-        <label class="form-label small mb-1">Acciones</label>
-        <div class="d-flex flex-wrap gap-2">
-          <div class="form-check">
-            <input class="form-check-input rule-action" type="checkbox" value="call" id="">
-            <label class="form-check-label small">📞 Llamada</label>
-          </div>
-          <div class="form-check">
-            <input class="form-check-input rule-action" type="checkbox" value="sms">
-            <label class="form-check-label small">📱 SMS</label>
-          </div>
-          <div class="form-check">
-            <input class="form-check-input rule-action" type="checkbox" value="email">
-            <label class="form-check-label small">📧 Email</label>
-          </div>
-          <div class="form-check">
-            <input class="form-check-input rule-action" type="checkbox" value="telegram">
-            <label class="form-check-label small">💬 Telegram (grupo)</label>
-          </div>
-          <div class="form-check">
-            <input class="form-check-input rule-action" type="checkbox" value="log_only">
-            <label class="form-check-label small">📝 Solo log</label>
-          </div>
-        </div>
-      </div>
       <div class="col-md-1 text-end">
         <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRule(this)">🗑</button>
       </div>
@@ -185,6 +155,40 @@
       <div class="col-12">
         <label class="form-label small mb-1">Descripción (opcional)</label>
         <input type="text" class="form-control form-control-sm rule-description" placeholder="Ej: Temperatura alta en sala de servidores">
+      </div>
+      <div class="col-12">
+        <label class="form-label small mb-1">Acciones</label>
+        <div class="d-flex flex-column gap-2">
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="telegram">
+            <label class="form-check-label small">Telegram al grupo del cliente</label>
+          </div>
+          <div class="rule-channel" data-channel="sms">
+            <div class="form-check">
+              <input class="form-check-input rule-action" type="checkbox" value="sms">
+              <label class="form-check-label small">SMS a</label>
+            </div>
+            <div class="rule-sms-contacts small ms-4"></div>
+          </div>
+          <div class="rule-channel" data-channel="email">
+            <div class="form-check">
+              <input class="form-check-input rule-action" type="checkbox" value="email">
+              <label class="form-check-label small">Email a</label>
+            </div>
+            <div class="rule-email-contacts small ms-4"></div>
+          </div>
+          <div class="rule-channel" data-channel="call">
+            <div class="form-check">
+              <input class="form-check-input rule-action" type="checkbox" value="call">
+              <label class="form-check-label small">Llamadas (orden de la agenda)</label>
+            </div>
+            <div class="rule-call-contacts small ms-4"></div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input rule-action" type="checkbox" value="log_only">
+            <label class="form-check-label small">Solo log</label>
+          </div>
+        </div>
       </div>
       <div class="col-md-3">
         <label class="form-label small mb-1">Espera entre llamadas (seg)</label>
@@ -199,22 +203,6 @@
         <div class="form-check mt-2">
           <input class="form-check-input rule-escalate" type="checkbox" checked>
           <label class="form-check-label small">Despues de cada llamada, llamar al siguiente (atender no corta; solo un OK)</label>
-        </div>
-      </div>
-      <div class="col-12">
-        <div class="row g-2">
-          <div class="col-md-3">
-            <label class="form-label small mb-1">SMS a</label>
-            <div class="rule-sms-contacts small"></div>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label small mb-1">Email a</label>
-            <div class="rule-email-contacts small"></div>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label small mb-1">Llamadas (orden)</label>
-            <div class="rule-call-contacts small"></div>
-          </div>
         </div>
       </div>
       <div class="col-md-6">
@@ -281,6 +269,15 @@ function getSensorOptions(selectedId) {
   ).join('');
 }
 
+function syncActionContacts(row) {
+  const checked = new Set([...row.querySelectorAll('.rule-action:checked')].map(cb => cb.value));
+  row.querySelectorAll('.rule-channel').forEach(block => {
+    const on = checked.has(block.dataset.channel);
+    const people = block.querySelector('[class*="-contacts"]');
+    if (people) people.classList.toggle('d-none', !on);
+  });
+}
+
 function addRule(rule) {
   const tmpl = document.getElementById('rule-template');
   const clone = tmpl.content.cloneNode(true);
@@ -313,6 +310,10 @@ function addRule(rule) {
   row.querySelector('.rule-sms-contacts').innerHTML = contactBoxes('sms', 'phone', selectedOrAll(rule, 'sms_contact_ids', 'phone'));
   row.querySelector('.rule-email-contacts').innerHTML = contactBoxes('email', 'email', selectedOrAll(rule, 'email_contact_ids', 'email'));
   row.querySelector('.rule-call-contacts').innerHTML = contactBoxes('call', 'phone', selectedOrAll(rule, 'call_contact_ids', 'phone'));
+  row.querySelectorAll('.rule-action').forEach(cb => {
+    cb.addEventListener('change', () => syncActionContacts(row));
+  });
+  syncActionContacts(row);
 
   document.getElementById('rules-container').appendChild(clone);
 
@@ -328,11 +329,7 @@ function removeRule(btn) {
   }
 }
 
-// Load existing rules
 EXISTING_RULES.forEach(r => addRule(r));
-
-// Remove placeholder rule-row divs from Jinja (replaced by addRule)
-document.querySelectorAll('.rule-row[data-rule]').forEach(el => el.remove());
 
 // Build JSON and submit
 document.getElementById('config-form').addEventListener('submit', function(e) {
