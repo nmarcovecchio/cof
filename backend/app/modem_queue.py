@@ -60,7 +60,7 @@ def active_modem_jobs(device: Device) -> list[DeviceModemJob]:
     )
 
 
-def cancel_alarm_jobs(event_id: int) -> int:
+def cancel_alarm_jobs(event_id: int, reason: str = "acked") -> int:
     cancelled = 0
     jobs = DeviceModemJob.query.filter_by(status="queued").all()
     now = utcnow()
@@ -81,10 +81,26 @@ def cancel_alarm_jobs(event_id: int) -> int:
                 channel="call" if job.command == "test_call" else "sms",
                 to=payload.get("phone"),
                 status="cancelled",
-                detail="cancelado por OK",
+                detail="cancelado por OK" if reason == "acked" else "cancelado: alarma normalizada",
                 command_id=job.command_id,
             )
     return cancelled
+
+
+def schedule_alarm_rearm(event: Event) -> None:
+    payload = dict(event.payload or {})
+    if payload.get("acked") or event.cleared_at is not None:
+        return
+    try:
+        delay = max(0, min(86400, int(payload.get("hysteresis_seconds") or 0)))
+    except (TypeError, ValueError):
+        delay = 0
+    if delay <= 0:
+        return
+    payload["rearm_at"] = (utcnow() + timedelta(seconds=delay)).isoformat()
+    event.payload = payload
+    flag_modified(event, "payload")
+    append_alarm_step(event, channel="cycle", to=[], status="rearm", detail=f"se reintenta en {delay}s si sigue mal")
 
 
 def pump_due_modem_jobs() -> int:
@@ -310,22 +326,21 @@ def _maybe_escalate_call(device: Device, job: DeviceModemJob) -> None:
     if job.command != "test_call":
         return
     payload = job.payload or {}
-    if not payload.get("escalate_calls", True):
-        return
-    if call_outcome(job.result or "") != "no_answer":
-        return
     event_id = payload.get("alarm_event_id")
     event = Event.query.filter_by(id=event_id).first() if event_id else None
     if event is None:
         return
     event_payload = event.payload or {}
+    if event.cleared_at is not None:
+        return
     if event_payload.get("acked"):
         append_alarm_step(event, channel="ack", to=[], status="acked", detail="escalamiento ya detenido")
         return
     phones = (event_payload.get("contacts") or {}).get("call_phones") or (event_payload.get("contacts") or {}).get("phones") or []
     next_index = int(payload.get("phone_index") or 0) + 1
-    if next_index >= len(phones):
-        append_alarm_step(event, channel="call", to=[], status="exhausted", detail="nadie atendio")
+    if not payload.get("escalate_calls", True) or next_index >= len(phones):
+        append_alarm_step(event, channel="call", to=[], status="cycle_done", detail="fin de ciclo de llamadas")
+        schedule_alarm_rearm(event)
         return
     next_phone = phones[next_index]
     extra = {

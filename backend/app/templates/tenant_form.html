@@ -11,8 +11,8 @@
   <div class="card-body">
     <h1 class="h3">{% if tenant %}Editar cliente{% else %}Nuevo cliente{% endif %}</h1>
     <p class="text-muted">
-      Agenda del cliente. Cada contacto puede tener telefono, email y/o Telegram.
-      Las reglas del equipo eligen a quien avisar y en que orden llamar.
+      Agenda de personas (telefono y email) y un grupo de Telegram del cliente.
+      Las reglas eligen a quien mandar SMS, email y llamadas. Telegram va al grupo.
     </p>
     {% if error %}
     <div class="alert alert-danger">{{ error }}</div>
@@ -27,6 +27,11 @@
         <label class="form-label" for="slug">Slug</label>
         <input class="form-control" id="slug" name="slug" placeholder="opcional, se genera desde el nombre" value="{{ tenant.slug if tenant else '' }}">
       </div>
+      <div class="mb-3">
+        <label class="form-label" for="telegram_chat_id">Grupo de Telegram</label>
+        <input class="form-control" id="telegram_chat_id" name="telegram_chat_id" placeholder="-1001234567890" value="{{ telegram_chat_id }}">
+        <div class="form-text">Un grupo del cliente, con todos adentro. Es el chat ID, no el token del bot.</div>
+      </div>
 
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h2 class="h5 mb-0">Contactos</h2>
@@ -40,7 +45,6 @@
               <th>Nombre</th>
               <th>Telefono</th>
               <th>Email</th>
-              <th>Telegram chat ID</th>
               <th></th>
             </tr>
           </thead>
@@ -48,7 +52,7 @@
           </tbody>
         </table>
       </div>
-      <p class="form-text">Telefono en formato internacional (+54911...). Telegram es el chat ID del grupo o persona, no el token del bot.</p>
+      <p class="form-text">Telefono en formato internacional (+54911...). El email es de esa persona; el Telegram es el grupo de arriba.</p>
       <button class="btn btn-primary" type="submit">{% if tenant %}Guardar cliente{% else %}Crear cliente{% endif %}</button>
     </form>
     {% if tenant %}
@@ -63,7 +67,7 @@
       </form>
       <form method="post" action="{{ url_for('tenant_test_telegram', tenant_id=tenant.id) }}">
         {{ csrf_field() }}
-        <button class="btn btn-outline-primary" type="submit" {% if not contacts|map(attribute='telegram_chat_id')|select|list %}disabled{% endif %}>
+        <button class="btn btn-outline-primary" type="submit" {% if not telegram_chat_id %}disabled{% endif %}>
           Probar Telegram
         </button>
       </form>
@@ -86,7 +90,6 @@
     </td>
     <td><input class="form-control form-control-sm" name="contact_phone" placeholder="+54911..."></td>
     <td><input class="form-control form-control-sm" name="contact_email" placeholder="dueño@cliente.com"></td>
-    <td><input class="form-control form-control-sm" name="contact_telegram" placeholder="-1001234567890"></td>
     <td class="text-end">
       <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">🗑</button>
     </td>
@@ -104,7 +107,6 @@ function addContact(contact) {
     row.querySelector('[name=contact_name]').value = contact.name || '';
     row.querySelector('[name=contact_phone]').value = contact.phone || '';
     row.querySelector('[name=contact_email]').value = contact.email || '';
-    row.querySelector('[name=contact_telegram]').value = contact.telegram_chat_id || '';
   }
   document.getElementById('contacts-body').appendChild(row);
 }

@@ -43,10 +43,17 @@
       </div>
     </div>
     <p class="small text-muted mb-0 mt-3">
-      Escalamiento: {{ 'si no atienden, siguiente telefono' if alarm.escalate else 'solo el primero' }}{% if alarm.escalate and alarm.escalate_delay %}, espera {{ alarm.escalate_delay }}s{% endif %}.
-      Rearme: {{ alarm.hysteresis ~ 's si sigue prendida' if alarm.hysteresis else 'solo cuando se normaliza' }}.
+      Escalamiento: {{ 'despues de cada llamada, siguiente telefono' if alarm.escalate else 'solo el primero' }}{% if alarm.escalate and alarm.escalate_delay %}, espera {{ alarm.escalate_delay }}s{% endif %}.
+      Rearme: {{ alarm.hysteresis ~ 's si sigue prendida' if alarm.hysteresis else 'no se repite hasta que se normalice' }}.
       Al normalizarse: {{ alarm.clear_actions|join(', ') if alarm.clear_actions else 'sin aviso' }}.
     </p>
+    {% if alarm.can_silence %}
+    <form class="mt-3" method="post" action="{{ url_for('alarm_silence', event_id=alarm.event.id) }}">
+      {{ csrf_field() }}
+      <button class="btn btn-outline-danger" type="submit">Silenciar alarmas del cliente</button>
+      <span class="small text-muted ms-2">Corta llamadas y SMS pendientes. Si el sensor sigue mal, vuelve a sonar despues del rearme.</span>
+    </form>
+    {% endif %}
   </div>
 </div>
 

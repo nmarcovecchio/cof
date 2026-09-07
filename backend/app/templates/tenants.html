@@ -34,12 +34,15 @@
           <td><code>{{ tenant.slug }}</code></td>
           <td class="small">
             {% set agenda = tenant|tenant_contacts %}
+            {% set chats = tenant|tenant_telegram %}
+            {% if chats %}
+              <div class="text-muted">TG {{ chats|join(', ') }}</div>
+            {% endif %}
             {% if agenda %}
               {% for c in agenda %}
               <div><strong>{{ c.name }}</strong>
                 {% if c.phone %} · {{ c.phone }}{% endif %}
                 {% if c.email %} · {{ c.email }}{% endif %}
-                {% if c.telegram_chat_id %} · TG{% endif %}
               </div>
               {% endfor %}
             {% else %}

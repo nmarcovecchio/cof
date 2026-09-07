@@ -48,13 +48,12 @@ def normalize_contact_list(raw) -> list[dict]:
 
 
 def contacts_from_legacy(tenant) -> list[dict]:
-    from .phones import parse_emails, parse_phones, parse_telegram_chats
+    from .phones import parse_emails, parse_phones
 
     emails, _ = parse_emails(getattr(tenant, "notify_email", "") or "")
     phones, _ = parse_phones(getattr(tenant, "phone", "") or "")
-    chats, _ = parse_telegram_chats(getattr(tenant, "telegram_chat_id", "") or "")
     contacts = []
-    count = max(len(emails), len(phones), len(chats), 1 if emails or phones or chats else 0)
+    count = max(len(emails), len(phones), 1 if emails or phones else 0)
     for index in range(count):
         contacts.append(
             {
@@ -62,7 +61,7 @@ def contacts_from_legacy(tenant) -> list[dict]:
                 "name": f"Contacto {index + 1}",
                 "phone": phones[index] if index < len(phones) else "",
                 "email": emails[index] if index < len(emails) else "",
-                "telegram_chat_id": chats[index] if index < len(chats) else "",
+                "telegram_chat_id": "",
             }
         )
     return [item for item in (normalize_contact(c) for c in contacts) if item]
@@ -81,7 +80,20 @@ def sync_legacy_fields(tenant, contacts: list[dict]) -> None:
     tenant.contacts = contacts
     tenant.notify_email = "\n".join(item["email"] for item in contacts if item.get("email")) or None
     tenant.phone = "\n".join(item["phone"] for item in contacts if item.get("phone")) or None
-    tenant.telegram_chat_id = "\n".join(item["telegram_chat_id"] for item in contacts if item.get("telegram_chat_id")) or None
+
+
+def tenant_telegram_chats(tenant) -> list[str]:
+    from .phones import parse_telegram_chats
+
+    chats, _ = parse_telegram_chats(getattr(tenant, "telegram_chat_id", "") or "")
+    if chats:
+        return chats
+    found = []
+    for item in normalize_contact_list(getattr(tenant, "contacts", None)):
+        chat = item.get("telegram_chat_id") or ""
+        if chat and chat not in found:
+            found.append(chat)
+    return found
 
 
 def contacts_by_id(contacts: list[dict]) -> dict[str, dict]:

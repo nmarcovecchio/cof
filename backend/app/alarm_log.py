@@ -100,8 +100,10 @@ def friendly_step(step: dict) -> str:
         return f"La alarma se normalizó. Avisamos por {via}"
     if channel == "ack":
         if status == "notified":
-            return f"Avisamos que se detuvo el escalamiento por {targets or 'los canales configurados'}"
-        return f"Se detuvo el escalamiento ({detail or 'OK'})"
+            return f"Avisamos al grupo de Telegram que se detuvo el escalamiento"
+        return f"Se silenciaron las alarmas del cliente ({detail or 'OK'})"
+    if channel == "cycle":
+        return detail or "Fin de ciclo; se reintenta si sigue mal"
     if status == "cancelled":
         return f"Cancelamos {channel} a {targets}: {detail or status}"
     return detail or f"{channel} {status}"

@@ -13,16 +13,16 @@ from email.utils import parseaddr
 from sqlalchemy.orm.attributes import flag_modified
 
 from .alarm_log import append_alarm_step
-from .contacts import tenant_contacts
+from .contacts import tenant_contacts, tenant_telegram_chats
 from .extensions import db
 from .models import Device, Event, utcnow
-from .modem_queue import cancel_alarm_jobs, pump_modem_queue
-from .notify import send_email, send_telegram, smtp_configured, telegram_configured
+from .modem_queue import cancel_alarm_jobs
+from .notify import send_telegram, telegram_configured
 from .phones import normalize_email, normalize_phone, phones_match
 
 logger = logging.getLogger("callonfail.alarm_ack")
 
-ACK_LINE = re.compile(r"^ok[.!]?$", re.IGNORECASE)
+ACK_WORD = re.compile(r"\bok\b", re.IGNORECASE)
 EVENT_IN_SUBJECT = re.compile(r"alarma\s*#\s*(\d+)", re.IGNORECASE)
 TOKEN_IN_TEXT = re.compile(r"/alarms/(\d+)/ack/([A-Za-z0-9_\-]+)")
 
@@ -33,11 +33,13 @@ _telegram_offset_loaded = False
 def is_ack_text(text: str, *, email_body: bool = False) -> bool:
     if not text:
         return False
-    for raw in str(text).replace("\r", "").split("\n"):
-        line = raw.strip()
-        if not line:
-            continue
-        if email_body:
+    body = str(text)
+    if email_body:
+        kept = []
+        for raw in body.replace("\r", "").split("\n"):
+            line = raw.strip()
+            if not line:
+                continue
             lowered = line.lower()
             if line.startswith(">") or lowered.startswith("on ") or lowered.startswith("el "):
                 continue
@@ -45,8 +47,9 @@ def is_ack_text(text: str, *, email_body: bool = False) -> bool:
                 continue
             if "wrote:" in lowered or "escribió:" in lowered or "escribio:" in lowered:
                 continue
-        return bool(ACK_LINE.match(line))
-    return False
+            kept.append(line)
+        body = "\n".join(kept)
+    return bool(ACK_WORD.search(body))
 
 
 def public_ack_url(event_id: int, token: str) -> str:
@@ -58,7 +61,7 @@ def public_ack_url(event_id: int, token: str) -> str:
 
 def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: bool = True) -> bool:
     payload = dict(event.payload or {})
-    if payload.get("acked"):
+    if event.cleared_at is not None or payload.get("acked"):
         return False
 
     payload["acked"] = True
@@ -70,7 +73,13 @@ def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: b
     event.payload = payload
     flag_modified(event, "payload")
 
-    cancelled = cancel_alarm_jobs(event.id)
+    if payload.get("source") == "manual":
+        event.cleared_at = utcnow()
+        payload["cleared_at"] = event.cleared_at.isoformat()
+        payload["clear_reason"] = "acked_manual"
+        event.payload = payload
+        flag_modified(event, "payload")
+    cancelled = cancel_alarm_jobs(event.id, reason="acked")
     append_alarm_step(
         event,
         channel="ack",
@@ -83,14 +92,50 @@ def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: b
     return True
 
 
-def acknowledge_by_token(event_id: int, token: str, *, channel: str = "link", sender: str = "") -> Event | None:
+def event_for_ack_token(event_id: int, token: str) -> Event | None:
     event = Event.query.filter_by(id=event_id, type="alarm").first()
     if event is None:
         return None
     expected = str((event.payload or {}).get("ack_token") or "")
     if not expected or expected != token:
         return None
-    acknowledge_event(event, channel=channel, sender=sender or "enlace")
+    return event
+
+
+def open_tenant_alarms(event: Event) -> list[Event]:
+    device = Device.query.get(event.device_id)
+    if device is None:
+        return [event] if event.cleared_at is None else []
+    device_ids = [row.id for row in Device.query.filter_by(tenant_id=device.tenant_id).all()]
+    if not device_ids:
+        return []
+    return (
+        Event.query.filter(
+            Event.device_id.in_(device_ids),
+            Event.type == "alarm",
+            Event.cleared_at.is_(None),
+        )
+        .order_by(Event.started_at.desc())
+        .all()
+    )
+
+
+def acknowledge_tenant_from_event(event: Event, *, channel: str, sender: str = "") -> list[Event]:
+    targets = open_tenant_alarms(event)
+    changed = []
+    for item in targets:
+        if acknowledge_event(item, channel=channel, sender=sender, notify=False):
+            changed.append(item)
+    if changed:
+        _announce_stopped(changed[0], channel, sender, silenced=len(changed))
+    return changed
+
+
+def acknowledge_by_token(event_id: int, token: str, *, channel: str = "link", sender: str = "") -> Event | None:
+    event = event_for_ack_token(event_id, token)
+    if event is None:
+        return None
+    acknowledge_tenant_from_event(event, channel=channel, sender=sender or "enlace")
     return event
 
 
@@ -101,8 +146,10 @@ def handle_inbound_sms(device: Device, payload: dict) -> None:
         return
     event = _open_alarm_for(phone=sender, device=device)
     if event is None:
+        event = _open_alarm_for(phone=sender)
+    if event is None:
         return
-    acknowledge_event(event, channel="sms", sender=sender or "sms")
+    acknowledge_tenant_from_event(event, channel="sms", sender=sender or "sms")
 
 
 def poll_telegram_acks() -> int:
@@ -135,7 +182,7 @@ def poll_telegram_acks() -> int:
         event = _open_alarm_for(chat_id=chat_id)
         if event is None:
             continue
-        if acknowledge_event(event, channel="telegram", sender=chat_id):
+        if acknowledge_tenant_from_event(event, channel="telegram", sender=chat_id):
             handled += 1
     _store_telegram_offset(last_id)
     return handled
@@ -190,19 +237,19 @@ def _ack_from_email(message) -> bool:
     if subject_match:
         event = Event.query.filter_by(id=int(subject_match.group(1)), type="alarm").first()
         if event is not None and _sender_matches(event, email=sender):
-            return acknowledge_event(event, channel="email", sender=sender)
+            return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
 
     refs = " ".join(filter(None, [message.get("In-Reply-To", ""), message.get("References", "")]))
     ref_match = re.search(r"alarm-(\d+)-", refs)
     if ref_match:
         event = Event.query.filter_by(id=int(ref_match.group(1)), type="alarm").first()
         if event is not None:
-            return acknowledge_event(event, channel="email", sender=sender)
+            return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
 
     event = _open_alarm_for(email=sender)
     if event is None:
         return False
-    return acknowledge_event(event, channel="email", sender=sender)
+    return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
 
 
 def _open_alarm_for(*, phone: str = "", email: str = "", chat_id: str = "", device: Device | None = None) -> Event | None:
@@ -211,7 +258,7 @@ def _open_alarm_for(*, phone: str = "", email: str = "", chat_id: str = "", devi
         query = query.filter_by(device_id=device.id)
     for event in query.limit(40).all():
         payload = event.payload or {}
-        if payload.get("acked") or payload.get("source") == "manual":
+        if payload.get("acked"):
             continue
         if phone and _sender_matches(event, phone=phone):
             return event
@@ -237,64 +284,39 @@ def _sender_matches(event: Event, *, phone: str = "", email: str = "", chat_id: 
     device = Device.query.get(event.device_id)
     if device is None:
         return False
+    if chat_id and str(chat_id).strip() in {str(item).strip() for item in tenant_telegram_chats(device.tenant)}:
+        return True
     for contact in tenant_contacts(device.tenant):
         if phone and phones_match(phone, contact.get("phone") or ""):
             return True
         if email and normalize_email(contact.get("email") or "").lower() == normalize_email(email).lower():
             return True
-        if chat_id and str(contact.get("telegram_chat_id") or "").strip() == str(chat_id).strip():
-            return True
     return False
 
 
-def _announce_stopped(event: Event, channel: str, sender: str) -> None:
+def _announce_stopped(event: Event, channel: str, sender: str, silenced: int = 1) -> None:
     device = Device.query.get(event.device_id)
     if device is None:
         return
     from .alarms import build_alarm_text
-    from .modem_queue import enqueue_modem_job
 
-    contacts = (event.payload or {}).get("contacts") or {}
+    chats = tenant_telegram_chats(device.tenant) or ((event.payload or {}).get("contacts") or {}).get("telegram_chat_ids") or []
     text = build_alarm_text(
         device,
         "Escalamiento detenido",
-        f"Recibimos OK por {channel}" + (f" de {sender}" if sender else "") + ". No se llaman mas contactos.",
+        f"Recibimos OK por {channel}"
+        + (f" de {sender}" if sender else "")
+        + f". Se silenciaron {silenced} alarma(s). Entra a la web para ver que paso.",
     )
-    emails = contacts.get("emails") or []
-    chats = contacts.get("telegram_chat_ids") or []
-    phones = contacts.get("sms_phones") or contacts.get("phones") or []
-    via = []
-    if emails and smtp_configured():
-        try:
-            send_email(emails, f"[CallOnFail] Escalamiento detenido - {device.name}", text)
-            via.append("email")
-        except Exception:
-            logger.exception("Ack email notice failed")
     if chats and telegram_configured():
         try:
             send_telegram(chats, text)
-            via.append("telegram")
+            append_alarm_step(event, channel="ack", to=chats, status="notified", detail="aviso al grupo de Telegram")
         except Exception:
             logger.exception("Ack telegram notice failed")
-    if phones:
-        spoken = " ".join(text.split())[:160]
-        for index, phone in enumerate(phones):
-            job = enqueue_modem_job(
-                device,
-                "test_sms",
-                {
-                    "phone": phone,
-                    "text": spoken,
-                    "alarm_event_id": event.id,
-                    "phone_index": index,
-                    "ack_notice": True,
-                },
-                source="alarm_ack",
-            )
-            append_alarm_step(event, channel="sms", to=phone, status=job.status, detail="aviso detencion", command_id=job.command_id)
-        via.append("sms")
-        pump_modem_queue(device)
-    append_alarm_step(event, channel="ack", to=via, status="notified", detail="se aviso que se detuvo el escalamiento")
+            append_alarm_step(event, channel="ack", to=chats, status="error", detail="no se pudo avisar al grupo")
+    else:
+        append_alarm_step(event, channel="ack", to=[], status="notified", detail="queda en la web; sin grupo de Telegram")
 
 
 def _safe_seconds(value, default: int = 0) -> int:

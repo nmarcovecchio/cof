@@ -9,10 +9,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from .alarm_ack import public_ack_url
 from .alarm_log import append_alarm_step
-from .contacts import pick_contacts, tenant_contacts
+from .contacts import pick_contacts, tenant_contacts, tenant_telegram_chats
 from .extensions import db
 from .models import Device, DeviceConfig, Event, utcnow
-from .modem_queue import enqueue_modem_job, pump_modem_queue
+from .modem_queue import enqueue_modem_job, pump_modem_queue, schedule_alarm_rearm
 from .notify import send_email, send_telegram, smtp_configured, telegram_configured
 from .tts import MAX_TEXT_CHARS
 
@@ -73,15 +73,13 @@ def resolve_contacts(device: Device, config: dict | None = None, selection: dict
     selection = selection or {}
     email_ids = _id_list(selection.get("email_contact_ids"))
     sms_ids = _id_list(selection.get("sms_contact_ids"))
-    telegram_ids = _id_list(selection.get("telegram_contact_ids"))
     call_ids = _id_list(selection.get("call_contact_ids"))
     email_contacts = pick_contacts(agenda, email_ids, "email")
     sms_contacts = pick_contacts(agenda, sms_ids, "phone")
-    telegram_contacts = pick_contacts(agenda, telegram_ids, "telegram_chat_id")
     call_contacts = pick_contacts(agenda, call_ids, "phone")
     emails = [item["email"] for item in email_contacts]
     sms_phones = [item["phone"] for item in sms_contacts]
-    chats = [item["telegram_chat_id"] for item in telegram_contacts]
+    chats = tenant_telegram_chats(device.tenant)
     call_phones = [item["phone"] for item in call_contacts]
     return {
         "agenda": agenda,
@@ -445,8 +443,8 @@ def dispatch_alarm(
 
     event.payload = {**(event.payload or {}), "results": results}
     flag_modified(event, "payload")
-    if source == "manual":
-        event.cleared_at = utcnow()
+    if not channels["call"]:
+        schedule_alarm_rearm(event)
     return event
 
 
@@ -598,7 +596,7 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
             if open_event is not None:
                 from .modem_queue import cancel_alarm_jobs
 
-                cancel_alarm_jobs(open_event.id)
+                cancel_alarm_jobs(open_event.id, reason="cleared")
                 clear_alarm(open_event, telemetry, device)
                 if hysteresis > 0:
                     set_rearm(device.id, key, now_ts + hysteresis)
@@ -607,8 +605,8 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
         open_event = open_alarm_event(device.id, key)
         if open_event is not None:
             payload = open_event.payload or {}
-            rearm_at = _parse_iso(payload.get("rearm_at")) if payload.get("acked") else None
-            if payload.get("acked") and rearm_at is not None and now >= rearm_at:
+            rearm_at = _parse_iso(payload.get("rearm_at"))
+            if rearm_at is not None and now >= rearm_at:
                 open_event.cleared_at = utcnow()
                 recycled = dict(payload)
                 recycled["cleared_at"] = open_event.cleared_at.isoformat()
@@ -649,7 +647,6 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
                 "hysteresis_seconds": hysteresis,
                 "email_contact_ids": _id_list(rule.get("email_contact_ids")),
                 "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
-                "telegram_contact_ids": _id_list(rule.get("telegram_contact_ids")),
                 "call_contact_ids": _id_list(rule.get("call_contact_ids")),
                 "clear_actions": [item for item in (rule.get("clear_actions") or ["email", "telegram"]) if item in {"email", "telegram", "sms"}],
             },

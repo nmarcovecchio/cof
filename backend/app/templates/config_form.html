@@ -81,14 +81,14 @@
   <div class="card shadow-sm mb-3">
     <div class="card-header fw-semibold">Notificaciones</div>
     <div class="card-body">
-      <p class="mb-2">La agenda vive en el cliente. Esta regla elige a quien avisar.</p>
+      <p class="mb-2">La agenda vive en el cliente. Esta regla elige a quien avisar por SMS, email y llamada. Telegram va al grupo del cliente.</p>
+      <p class="small mb-2">Grupo Telegram: <code>{{ telegram_chats|join(', ') if telegram_chats else 'sin configurar' }}</code></p>
       {% if contacts %}
       <ul class="small mb-2">
         {% for c in contacts %}
         <li><strong>{{ c.name }}</strong>
           {% if c.phone %} · {{ c.phone }}{% endif %}
           {% if c.email %} · {{ c.email }}{% endif %}
-          {% if c.telegram_chat_id %} · TG {{ c.telegram_chat_id }}{% endif %}
         </li>
         {% endfor %}
       </ul>
@@ -169,7 +169,7 @@
           </div>
           <div class="form-check">
             <input class="form-check-input rule-action" type="checkbox" value="telegram">
-            <label class="form-check-label small">💬 Telegram</label>
+            <label class="form-check-label small">💬 Telegram (grupo)</label>
           </div>
           <div class="form-check">
             <input class="form-check-input rule-action" type="checkbox" value="log_only">
@@ -193,12 +193,12 @@
       <div class="col-md-3">
         <label class="form-label small mb-1">Rearmar si sigue prendida (seg)</label>
         <input type="number" class="form-control form-control-sm rule-hysteresis" min="0" max="86400" value="300">
-        <div class="form-text">0 = no vuelve a sonar hasta que se normalice. Si alguien respondio OK y el sensor sigue mal, espera esto y arranca otro ciclo.</div>
+        <div class="form-text">Cada tantos segundos, si sigue mal, se repite el ciclo. Tambien es la espera despues de un OK. 0 = no se repite hasta que se normalice.</div>
       </div>
       <div class="col-md-6">
         <div class="form-check mt-2">
           <input class="form-check-input rule-escalate" type="checkbox" checked>
-          <label class="form-check-label small">Si no atienden, llamar al siguiente (despues de la espera)</label>
+          <label class="form-check-label small">Despues de cada llamada, llamar al siguiente (atender no corta; solo un OK)</label>
         </div>
       </div>
       <div class="col-12">
@@ -210,10 +210,6 @@
           <div class="col-md-3">
             <label class="form-label small mb-1">Email a</label>
             <div class="rule-email-contacts small"></div>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label small mb-1">Telegram a</label>
-            <div class="rule-telegram-contacts small"></div>
           </div>
           <div class="col-md-3">
             <label class="form-label small mb-1">Llamadas (orden)</label>
@@ -316,7 +312,6 @@ function addRule(rule) {
 
   row.querySelector('.rule-sms-contacts').innerHTML = contactBoxes('sms', 'phone', selectedOrAll(rule, 'sms_contact_ids', 'phone'));
   row.querySelector('.rule-email-contacts').innerHTML = contactBoxes('email', 'email', selectedOrAll(rule, 'email_contact_ids', 'email'));
-  row.querySelector('.rule-telegram-contacts').innerHTML = contactBoxes('telegram', 'telegram_chat_id', selectedOrAll(rule, 'telegram_contact_ids', 'telegram_chat_id'));
   row.querySelector('.rule-call-contacts').innerHTML = contactBoxes('call', 'phone', selectedOrAll(rule, 'call_contact_ids', 'phone'));
 
   document.getElementById('rules-container').appendChild(clone);
@@ -374,7 +369,6 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
       hysteresis_seconds: parseInt(row.querySelector('.rule-hysteresis').value) || 0,
       sms_contact_ids: [...row.querySelectorAll('.rule-contact-sms:checked')].map(cb => cb.value),
       email_contact_ids: [...row.querySelectorAll('.rule-contact-email:checked')].map(cb => cb.value),
-      telegram_contact_ids: [...row.querySelectorAll('.rule-contact-telegram:checked')].map(cb => cb.value),
       call_contact_ids: [...row.querySelectorAll('.rule-contact-call:checked')].map(cb => cb.value),
       clear_actions: [...row.querySelectorAll('.rule-clear:checked')].map(cb => cb.value),
     });

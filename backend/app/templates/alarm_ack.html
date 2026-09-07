@@ -10,9 +10,18 @@
   <div class="container py-5" style="max-width: 32rem;">
     <div class="card shadow-sm">
       <div class="card-body text-center py-5">
-        {% if ok %}
+        {% if state == "done" %}
         <h1 class="h4 mb-3">Escalamiento detenido</h1>
-        <p class="text-muted mb-0">Recibimos OK. No se llaman más contactos de esta alarma.</p>
+        <p class="text-muted mb-0">Se silenciaron las alarmas de {{ tenant_name or 'este cliente' }}. Entrá a la web para ver qué pasó.</p>
+        {% elif state == "confirm" %}
+        <h1 class="h4 mb-3">Confirmar</h1>
+        <p class="text-muted mb-4">
+          Esto silencia {{ open_count }} alarma(s) abierta(s) de {{ tenant_name or 'este cliente' }}.
+          Dejan de llamarse contactos. Si el sensor sigue mal, puede volver a sonar después.
+        </p>
+        <form method="post">
+          <button class="btn btn-danger" type="submit">Confirmar y silenciar</button>
+        </form>
         {% else %}
         <h1 class="h4 mb-3">Enlace invalido</h1>
         <p class="text-muted mb-0">Este acuse no existe o ya no es valido.</p>

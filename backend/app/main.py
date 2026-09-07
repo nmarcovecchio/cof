@@ -17,16 +17,16 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .alarm_ack import acknowledge_by_token
+from .alarm_ack import acknowledge_by_token, acknowledge_tenant_from_event, event_for_ack_token, open_tenant_alarms
 from .alarm_log import friendly_step
 from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
-from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts
+from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
 from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
 from .mqtt_util import publish_mqtt, publish_mqtt_raw
 from .notify import send_email, send_telegram
-from .phones import is_e164_phone, normalize_phone
+from .phones import is_e164_phone, join_values, normalize_phone, parse_telegram_chats
 from .tts import MAX_TEXT_CHARS
 
 
@@ -198,9 +198,15 @@ def create_app() -> Flask:
     def tenant_contacts_filter(tenant):
         return tenant_contacts(tenant)
 
+    @app.template_filter("tenant_telegram")
+    def tenant_telegram_filter(tenant):
+        return tenant_telegram_chats(tenant)
+
     @app.before_request
     def csrf_protect():
         if request.method != "POST":
+            return
+        if "/ack/" in (request.path or ""):
             return
 
         expected = session.get("_csrf_token")
@@ -277,11 +283,42 @@ def create_app() -> Flask:
 
     @app.get("/alarms/<int:event_id>/ack/<token>")
     def alarm_ack_public(event_id, token):
+        event = event_for_ack_token(event_id, token)
+        if event is None:
+            return render_template("alarm_ack.html", state="invalid", event=None), 404
+        return render_template(
+            "alarm_ack.html",
+            state="confirm",
+            event=event,
+            open_count=len(open_tenant_alarms(event)),
+            tenant_name=event.device.tenant.name if event.device and event.device.tenant else "",
+        )
+
+    @app.post("/alarms/<int:event_id>/ack/<token>")
+    def alarm_ack_confirm(event_id, token):
         event = acknowledge_by_token(event_id, token, channel="link", sender="enlace")
         if event is None:
-            return render_template("alarm_ack.html", ok=False, event=None), 404
+            return render_template("alarm_ack.html", state="invalid", event=None), 404
         db.session.commit()
-        return render_template("alarm_ack.html", ok=True, event=event)
+        return render_template(
+            "alarm_ack.html",
+            state="done",
+            event=event,
+            open_count=0,
+            tenant_name=event.device.tenant.name if event.device and event.device.tenant else "",
+        )
+
+    @app.post("/alarms/<int:event_id>/silence")
+    @login_required
+    def alarm_silence(event_id):
+        event = Event.query.filter_by(id=event_id, type="alarm").first_or_404()
+        changed = acknowledge_tenant_from_event(event, channel="web", sender="web")
+        db.session.commit()
+        if changed:
+            flash(f"Se silenciaron {len(changed)} alarma(s) del cliente. Revisá el detalle.", "success")
+        else:
+            flash("No habia alarmas abiertas para silenciar", "warning")
+        return redirect(url_for("alarm_detail", event_id=event.id))
 
     @app.route("/tenants")
     @login_required
@@ -305,7 +342,13 @@ def create_app() -> Flask:
                 except IntegrityError:
                     db.session.rollback()
                     error = "Ya existe un cliente con ese slug"
-        return render_template("tenant_form.html", tenant=None, error=error, contacts=[])
+        return render_template(
+            "tenant_form.html",
+            tenant=None,
+            error=error,
+            contacts=[],
+            telegram_chat_id="",
+        )
 
     @app.route("/tenants/<int:tenant_id>/edit", methods=["GET", "POST"])
     @login_required
@@ -327,6 +370,7 @@ def create_app() -> Flask:
             tenant=tenant,
             error=error,
             contacts=tenant_contacts(tenant),
+            telegram_chat_id=join_values(tenant_telegram_chats(tenant)),
         )
 
     @app.post("/tenants/<int:tenant_id>/test-email")
@@ -352,7 +396,7 @@ def create_app() -> Flask:
     @login_required
     def tenant_test_telegram(tenant_id):
         tenant = Tenant.query.get_or_404(tenant_id)
-        chats = [item["telegram_chat_id"] for item in tenant_contacts(tenant) if item.get("telegram_chat_id")]
+        chats = tenant_telegram_chats(tenant)
         if not chats:
             flash("Configura el chat ID de Telegram del cliente", "danger")
             return redirect(url_for("tenant_edit", tenant_id=tenant.id))
@@ -809,12 +853,15 @@ def apply_tenant_form(tenant: Tenant) -> str | None:
     if not name or not slug:
         return "Nombre y slug son requeridos"
 
+    chats, bad_chats = parse_telegram_chats(request.form.get("telegram_chat_id", ""))
+    if bad_chats:
+        return "Telegram chat ID invalido: " + ", ".join(bad_chats)
+
     names = request.form.getlist("contact_name")
     phones = request.form.getlist("contact_phone")
     emails = request.form.getlist("contact_email")
-    chats = request.form.getlist("contact_telegram")
     ids = request.form.getlist("contact_id")
-    count = max(len(names), len(phones), len(emails), len(chats), len(ids))
+    count = max(len(names), len(phones), len(emails), len(ids))
     contacts = []
     for index in range(count):
         raw = {
@@ -822,21 +869,22 @@ def apply_tenant_form(tenant: Tenant) -> str | None:
             "name": names[index] if index < len(names) else "",
             "phone": phones[index] if index < len(phones) else "",
             "email": emails[index] if index < len(emails) else "",
-            "telegram_chat_id": chats[index] if index < len(chats) else "",
+            "telegram_chat_id": "",
         }
-        if not any(str(raw.get(key) or "").strip() for key in ("name", "phone", "email", "telegram_chat_id")):
+        if not any(str(raw.get(key) or "").strip() for key in ("name", "phone", "email")):
             continue
         if not raw["id"]:
             raw["id"] = new_contact_id()
         contact = normalize_contact(raw)
         if contact is None:
             label = raw["name"] or raw["phone"] or raw["email"] or f"fila {index + 1}"
-            return f"Contacto invalido ({label}). Telefono +549..., email valido, Telegram solo numeros."
+            return f"Contacto invalido ({label}). Telefono +549... o email valido."
         contacts.append(contact)
 
     tenant.name = name
     tenant.slug = slug
     sync_legacy_fields(tenant, contacts)
+    tenant.telegram_chat_id = join_values(chats) or None
     return None
 
 
@@ -846,7 +894,7 @@ def _step_tone(step: dict) -> str:
     detail = step.get("detail") or ""
     if channel == "clear":
         return "clear" if not status.startswith("error") else "bad"
-    if status in {"acked", "notified"} or status == "answered" or detail.startswith("Call done") or detail.startswith("SMS sent"):
+    if status in {"acked", "notified", "rearm", "cycle_done"} or status == "answered" or detail.startswith("Call done") or detail.startswith("SMS sent"):
         return "ok"
     if status == "sent" and channel != "call":
         return "ok"
@@ -864,7 +912,7 @@ def alarm_view(event: Event) -> dict:
         steps.append({**step, "label": friendly_step(step), "tone": _step_tone(step)})
     return {
         "event": event,
-        "open": event.cleared_at is None and (payload.get("source") != "manual"),
+        "open": event.cleared_at is None,
         "title": payload.get("title") or "Alarma",
         "detail": payload.get("detail") or event.message or "",
         "steps": steps,
@@ -873,6 +921,7 @@ def alarm_view(event: Event) -> dict:
         "escalate_delay": payload.get("escalate_delay_seconds") or 0,
         "hysteresis": payload.get("hysteresis_seconds") or 0,
         "acked": bool(payload.get("acked")),
+        "can_silence": event.cleared_at is None or bool(open_tenant_alarms(event)),
         "clear_actions": payload.get("clear_actions") or [],
     }
 
@@ -993,6 +1042,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         cfg=cfg,
         error=error,
         contacts=tenant_contacts(device.tenant),
+        telegram_chats=tenant_telegram_chats(device.tenant),
     )
 
 

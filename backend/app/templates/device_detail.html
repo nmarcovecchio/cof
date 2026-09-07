@@ -67,7 +67,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
         <h2 class="h5 mb-1">Avisos del cliente</h2>
-        <div class="text-muted small">Agenda de {{ device.tenant.name }}. Cada regla elige a quien avisar. La llamada solo si este equipo las tiene habilitadas.</div>
+        <div class="text-muted small">Agenda de {{ device.tenant.name }}. SMS, email y llamadas por contacto. Telegram al grupo del cliente. La llamada solo si este equipo las tiene habilitadas.</div>
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
@@ -75,6 +75,10 @@
       </div>
     </div>
     <div class="row g-3">
+      <div class="col-12">
+        <div class="meta-label">Grupo Telegram</div>
+        <div class="meta-value">{{ (contacts.telegram_chat_ids or [])|join(', ') or 'sin configurar' }}</div>
+      </div>
       <div class="col-12">
         <div class="meta-label">Agenda</div>
         <div class="meta-value">
@@ -84,7 +88,6 @@
               <strong>{{ c.name }}</strong>
               {% if c.phone %} · {{ c.phone }}{% endif %}
               {% if c.email %} · {{ c.email }}{% endif %}
-              {% if c.telegram_chat_id %} · TG {{ c.telegram_chat_id }}{% endif %}
             </div>
             {% endfor %}
           {% else %}
@@ -165,7 +168,7 @@
           <i class="bi bi-activity"></i> Estado
         </button>
       </form>
-      <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar alarma de este equipo? Envia email, Telegram, SMS y llamada si estan configurados.');">
+      <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar una alarma real de prueba? Queda abierta, escala llamadas y se puede silenciar con OK o desde la web.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
           <i class="bi bi-exclamation-triangle"></i> Disparar alarma

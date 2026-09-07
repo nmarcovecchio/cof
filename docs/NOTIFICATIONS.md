@@ -1,9 +1,10 @@
 # Avisos por cliente (agenda, canales, OK e histeresis)
 
 Un bot y un SMTP para todo CallOnFail. Cada **cliente** tiene una **agenda de
-contactos** (nombre + telefono y/o email y/o Telegram). Cada **regla** elige a
-quien avisar por cada canal y el orden de las llamadas. La llamada de un
-freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
+contactos** (nombre + telefono y/o email) y **un grupo de Telegram**. Cada
+**regla** elige a quien avisar por SMS, email y llamadas. Telegram, si la
+regla lo tiene tildado, va al grupo del cliente. La llamada de un freezer
+solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 
 ## Que configura quien
 
@@ -11,7 +12,8 @@ freezer solo sale si ese dispositivo tiene `Llamadas habilitadas`.
 | --- | --- | --- |
 | Token del bot de Telegram | `.env` del VPS `TELEGRAM_BOT_TOKEN` | Una vez, CallOnFail |
 | Gmail SMTP + IMAP | `.env` del VPS `SMTP_*` / `IMAP_*` | Una vez, CallOnFail |
-| Agenda (Juan, Maria, grupo) | Web → Clientes → Editar | Contactos con nombre |
+| Agenda (Juan, Maria) | Web → Clientes → Editar | Telefono y/o email |
+| Grupo de Telegram | Web → Clientes → Editar | Un chat ID del cliente |
 | Quien recibe SMS/email/Telegram | Web → dispositivo → regla | Checkboxes de la agenda |
 | Orden de llamadas | Misma regla, contactos con telefono | El orden es el de la agenda |
 | Espera entre llamadas | Misma regla, segundos | Tiempo antes de llamar al siguiente |
@@ -25,9 +27,13 @@ siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 16 jobs.
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
 regla). El ciclo se ve en **Alarmas**.
 
-Responder **OK** (da igual mayusculas) por SMS, Telegram o email detiene el
-escalamiento de llamadas y avisa que se detuvo. El email tambien trae un
-enlace de acuse.
+Responder un mensaje que **contenga ok** (da igual mayusculas) por SMS,
+Telegram o email silencia **todas** las alarmas abiertas de ese cliente.
+Atender una llamada no corta: sigue el siguiente contacto. El email pide
+confirmar en una pagina. En la web hay **Silenciar alarmas del cliente**.
+El aviso de detencion va al grupo de Telegram y queda en el ciclo (auditoria).
+Si el sensor sigue mal, se repite el ciclo cada N segundos (mismo N que
+despues de un OK). 0 = no se repite hasta que se normalice.
 
 No hace falta un bot por cliente. Si un token se filtra, un solo bot ve todos
 los grupos; por eso el token vive en el VPS, no en la web.
@@ -127,7 +133,7 @@ el cliente de nuevo.
 
 1. Login admin.
 2. **Clientes** → crear o **Editar** el cliente (ej. Demo).
-3. Cargar contactos con nombre: telefono `+549...`, email y/o chat ID.
+3. Cargar el grupo de Telegram del cliente y contactos con telefono/email.
 4. **Probar email** y **Probar Telegram**.
 5. En el dispositivo: **Publicar config** → habilitar llamadas si ese equipo
    debe llamar → en cada regla elegir contactos, espera entre llamadas y
