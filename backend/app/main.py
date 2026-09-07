@@ -262,6 +262,7 @@ def create_app() -> Flask:
             devices=devices,
             recent_events=recent_events,
             recent_telemetry=recent_telemetry,
+            alarm_states=alarm_states_map(devices),
         )
 
     @app.get("/alarms")
@@ -337,6 +338,27 @@ def create_app() -> Flask:
         else:
             flash("No habia alarmas abiertas para silenciar", "warning")
         return redirect(url_for("alarm_detail", event_id=event.id))
+
+    @app.post("/devices/<device_uid>/alarms/silence")
+    @login_required
+    def device_silence_alarms(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        open_events = (
+            Event.query.filter_by(device_id=device.id, type="alarm")
+            .filter(Event.cleared_at.is_(None))
+            .order_by(Event.started_at.desc())
+            .all()
+        )
+        if not open_events:
+            flash("No habia alarmas abiertas para silenciar", "warning")
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
+        changed = acknowledge_device_from_event(open_events[0], channel="web", sender="web")
+        db.session.commit()
+        if changed:
+            flash(f"Se silenciaron {len(changed)} alarma(s) de este equipo.", "success")
+        else:
+            flash("No habia alarmas abiertas para silenciar", "warning")
+        return redirect(url_for("device_detail", device_uid=device.device_uid))
 
     @app.route("/tenants")
     @login_required
@@ -474,7 +496,12 @@ def create_app() -> Flask:
         rows = query.order_by(Device.created_at.desc()).all()
         if wants_json():
             return jsonify([serialize_device(device) for device in rows])
-        return render_template("devices.html", devices=rows, include_archived=include_archived)
+        return render_template(
+            "devices.html",
+            devices=rows,
+            include_archived=include_archived,
+            alarm_states=alarm_states_map(rows),
+        )
 
     @app.route("/devices/new", methods=["GET", "POST"])
     @login_required
@@ -592,6 +619,7 @@ def create_app() -> Flask:
             ),
             None,
         )
+        alarm_state = alarm_states_map([device]).get(device.id)
         return render_template(
             "device_detail.html",
             device=device,
@@ -602,6 +630,7 @@ def create_app() -> Flask:
             modem_trace_event=modem_trace_event,
             contacts=resolve_contacts(device, latest_config_payload(device)),
             modem_jobs=active_modem_jobs(device),
+            alarm_state=alarm_state,
         )
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
@@ -942,6 +971,44 @@ def alarm_view(event: Event) -> dict:
         "can_silence": event.cleared_at is None or bool(open_device_alarms(event)),
         "clear_actions": payload.get("clear_actions") or [],
     }
+
+
+def open_alarm_events_for_devices(device_ids: list[int]) -> dict[int, list[Event]]:
+    if not device_ids:
+        return {}
+    rows = (
+        Event.query.filter(Event.device_id.in_(device_ids), Event.type == "alarm", Event.cleared_at.is_(None))
+        .order_by(Event.started_at.desc())
+        .all()
+    )
+    grouped: dict[int, list[Event]] = {}
+    for event in rows:
+        grouped.setdefault(event.device_id, []).append(event)
+    return grouped
+
+
+def alarm_state_from_events(events: list[Event]) -> dict | None:
+    if not events:
+        return None
+    views = [alarm_view(event) for event in events]
+    active = [item for item in views if not item["acked"]]
+    acked = [item for item in views if item["acked"]]
+    if active:
+        tone, label = "danger", "alarma"
+    else:
+        tone, label = "warning", "reconocida"
+    return {
+        "tone": tone,
+        "label": label,
+        "count": len(views),
+        "alarms": active + acked,
+        "can_silence": bool(active),
+    }
+
+
+def alarm_states_map(devices) -> dict[int, dict]:
+    grouped = open_alarm_events_for_devices([device.id for device in devices])
+    return {device_id: alarm_state_from_events(events) for device_id, events in grouped.items()}
 
 
 def publish_config_desired(device: Device, payload: dict):

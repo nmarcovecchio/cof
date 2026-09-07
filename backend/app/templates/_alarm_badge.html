@@ -1,0 +1,5 @@
+{% macro alarm_badge(state) -%}
+  {% if state %}
+    <span class="badge text-bg-{{ state.tone }}">{{ state.label }}{% if state.count > 1 %} · {{ state.count }}{% endif %}</span>
+  {% endif %}
+{%- endmacro %}

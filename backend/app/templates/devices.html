@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_alarm_badge.html" import alarm_badge %}
 
 {% block title %}Dispositivos - CallOnFail{% endblock %}
 
@@ -36,7 +37,8 @@
       </thead>
       <tbody>
         {% for device in devices %}
-        <tr>
+        {% set state = alarm_states.get(device.id) %}
+        <tr{% if state and state.tone == 'danger' %} class="table-danger"{% elif state %} class="table-warning"{% endif %}>
           <td><a href="{{ url_for('device_detail', device_uid=device.device_uid) }}">{{ device.device_uid }}</a></td>
           <td>{{ device.name }}</td>
           <td>{{ device.tenant.name }}</td>
@@ -46,6 +48,7 @@
               <span class="badge text-bg-dark">archivado</span>
             {% else %}
               <span class="badge text-bg-{{ 'success' if device|device_live else 'secondary' }}">{{ 'online' if device|device_live else 'offline' }}</span>
+              {{ alarm_badge(state) }}
             {% endif %}
           </td>
           <td>{{ device.hardware_profile or '-' }}</td>
