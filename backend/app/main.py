@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .alarm_ack import acknowledge_by_token, acknowledge_tenant_from_event, event_for_ack_token, open_tenant_alarms
+from .alarm_ack import acknowledge_by_token, acknowledge_device_from_event, event_for_ack_token, open_device_alarms
 from .alarm_log import friendly_step
 from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
@@ -290,8 +290,8 @@ def create_app() -> Flask:
             "alarm_ack.html",
             state="confirm",
             event=event,
-            open_count=len(open_tenant_alarms(event)),
-            tenant_name=event.device.tenant.name if event.device and event.device.tenant else "",
+            open_count=len(open_device_alarms(event)),
+            device_name=event.device.name if event.device else "",
         )
 
     @app.post("/alarms/<int:event_id>/ack/<token>")
@@ -305,17 +305,17 @@ def create_app() -> Flask:
             state="done",
             event=event,
             open_count=0,
-            tenant_name=event.device.tenant.name if event.device and event.device.tenant else "",
+            device_name=event.device.name if event.device else "",
         )
 
     @app.post("/alarms/<int:event_id>/silence")
     @login_required
     def alarm_silence(event_id):
         event = Event.query.filter_by(id=event_id, type="alarm").first_or_404()
-        changed = acknowledge_tenant_from_event(event, channel="web", sender="web")
+        changed = acknowledge_device_from_event(event, channel="web", sender="web")
         db.session.commit()
         if changed:
-            flash(f"Se silenciaron {len(changed)} alarma(s) del cliente. Revisá el detalle.", "success")
+            flash(f"Se silenciaron {len(changed)} alarma(s) de este equipo. Revisá el detalle.", "success")
         else:
             flash("No habia alarmas abiertas para silenciar", "warning")
         return redirect(url_for("alarm_detail", event_id=event.id))
@@ -921,7 +921,7 @@ def alarm_view(event: Event) -> dict:
         "escalate_delay": payload.get("escalate_delay_seconds") or 0,
         "hysteresis": payload.get("hysteresis_seconds") or 0,
         "acked": bool(payload.get("acked")),
-        "can_silence": event.cleared_at is None or bool(open_tenant_alarms(event)),
+        "can_silence": event.cleared_at is None or bool(open_device_alarms(event)),
         "clear_actions": payload.get("clear_actions") or [],
     }
 

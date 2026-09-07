@@ -28,9 +28,9 @@ Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
 regla). El ciclo se ve en **Alarmas**.
 
 Responder un mensaje que **contenga ok** (da igual mayusculas) por SMS,
-Telegram o email silencia **todas** las alarmas abiertas de ese cliente.
+Telegram o email silencia **todas** las alarmas abiertas de ese equipo.
 Atender una llamada no corta: sigue el siguiente contacto. El email pide
-confirmar en una pagina. En la web hay **Silenciar alarmas del cliente**.
+confirmar en una pagina. En la web hay **Silenciar alarmas de este equipo**.
 El aviso de detencion va al grupo de Telegram y queda en el ciclo (auditoria).
 Si el sensor sigue mal, se repite el ciclo cada N segundos (mismo N que
 despues de un OK). 0 = no se repite hasta que se normalice.

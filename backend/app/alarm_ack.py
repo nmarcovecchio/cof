@@ -102,26 +102,17 @@ def event_for_ack_token(event_id: int, token: str) -> Event | None:
     return event
 
 
-def open_tenant_alarms(event: Event) -> list[Event]:
-    device = Device.query.get(event.device_id)
-    if device is None:
-        return [event] if event.cleared_at is None else []
-    device_ids = [row.id for row in Device.query.filter_by(tenant_id=device.tenant_id).all()]
-    if not device_ids:
-        return []
+def open_device_alarms(event: Event) -> list[Event]:
     return (
-        Event.query.filter(
-            Event.device_id.in_(device_ids),
-            Event.type == "alarm",
-            Event.cleared_at.is_(None),
-        )
+        Event.query.filter_by(device_id=event.device_id, type="alarm")
+        .filter(Event.cleared_at.is_(None))
         .order_by(Event.started_at.desc())
         .all()
     )
 
 
-def acknowledge_tenant_from_event(event: Event, *, channel: str, sender: str = "") -> list[Event]:
-    targets = open_tenant_alarms(event)
+def acknowledge_device_from_event(event: Event, *, channel: str, sender: str = "") -> list[Event]:
+    targets = open_device_alarms(event)
     changed = []
     for item in targets:
         if acknowledge_event(item, channel=channel, sender=sender, notify=False):
@@ -135,7 +126,7 @@ def acknowledge_by_token(event_id: int, token: str, *, channel: str = "link", se
     event = event_for_ack_token(event_id, token)
     if event is None:
         return None
-    acknowledge_tenant_from_event(event, channel=channel, sender=sender or "enlace")
+    acknowledge_device_from_event(event, channel=channel, sender=sender or "enlace")
     return event
 
 
@@ -146,10 +137,8 @@ def handle_inbound_sms(device: Device, payload: dict) -> None:
         return
     event = _open_alarm_for(phone=sender, device=device)
     if event is None:
-        event = _open_alarm_for(phone=sender)
-    if event is None:
         return
-    acknowledge_tenant_from_event(event, channel="sms", sender=sender or "sms")
+    acknowledge_device_from_event(event, channel="sms", sender=sender or "sms")
 
 
 def poll_telegram_acks() -> int:
@@ -182,7 +171,7 @@ def poll_telegram_acks() -> int:
         event = _open_alarm_for(chat_id=chat_id)
         if event is None:
             continue
-        if acknowledge_tenant_from_event(event, channel="telegram", sender=chat_id):
+        if acknowledge_device_from_event(event, channel="telegram", sender=chat_id):
             handled += 1
     _store_telegram_offset(last_id)
     return handled
@@ -237,19 +226,19 @@ def _ack_from_email(message) -> bool:
     if subject_match:
         event = Event.query.filter_by(id=int(subject_match.group(1)), type="alarm").first()
         if event is not None and _sender_matches(event, email=sender):
-            return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
+            return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
 
     refs = " ".join(filter(None, [message.get("In-Reply-To", ""), message.get("References", "")]))
     ref_match = re.search(r"alarm-(\d+)-", refs)
     if ref_match:
         event = Event.query.filter_by(id=int(ref_match.group(1)), type="alarm").first()
         if event is not None:
-            return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
+            return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
 
     event = _open_alarm_for(email=sender)
     if event is None:
         return False
-    return bool(acknowledge_tenant_from_event(event, channel="email", sender=sender))
+    return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
 
 
 def _open_alarm_for(*, phone: str = "", email: str = "", chat_id: str = "", device: Device | None = None) -> Event | None:
@@ -306,7 +295,7 @@ def _announce_stopped(event: Event, channel: str, sender: str, silenced: int = 1
         "Escalamiento detenido",
         f"Recibimos OK por {channel}"
         + (f" de {sender}" if sender else "")
-        + f". Se silenciaron {silenced} alarma(s). Entra a la web para ver que paso.",
+        + f". Se silenciaron {silenced} alarma(s) de {device.name}. Entra a la web para ver que paso.",
     )
     if chats and telegram_configured():
         try:
