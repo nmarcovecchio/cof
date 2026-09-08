@@ -19,7 +19,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .alarm_ack import acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
 from .alarm_log import friendly_step
-from .alarms import dispatch_alarm, latest_config_payload, resolve_contacts
+from .alarms import configured_rules_view, dispatch_alarm, latest_config_payload, resolve_contacts
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
@@ -611,6 +611,15 @@ def create_app() -> Flask:
         )
         recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
+        recent_alarms = [
+            alarm_view(event)
+            for event in (
+                Event.query.filter_by(device_id=device.id, type="alarm")
+                .order_by(Event.started_at.desc())
+                .limit(8)
+                .all()
+            )
+        ]
         modem_trace_event = next(
             (
                 event
@@ -625,6 +634,8 @@ def create_app() -> Flask:
             device=device,
             recent_telemetry=recent_telemetry,
             recent_events=recent_events,
+            recent_alarms=recent_alarms,
+            configured_rules=configured_rules_view(device),
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
             modem_trace_event=modem_trace_event,

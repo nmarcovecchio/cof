@@ -16,6 +16,8 @@ MAX_QUEUED_JOBS = 16
 CALL_TIMEOUT = timedelta(minutes=4)
 SMS_TIMEOUT = timedelta(minutes=2)
 
+# Progress MQTT from firmware (publishTestCallProgress). The job finishes on
+# the later Call done / Call no answer / … result, not on these.
 CALL_PROGRESS_PREFIXES = (
     "Downloading",
     "Preparing",
@@ -24,6 +26,13 @@ CALL_PROGRESS_PREFIXES = (
     "Retrying",
     "Resetting",
     "Timeout, call already",
+    "Timeout, call still",
+    "Ringing",
+    "Playing audio",
+    "Audio finished",
+    "Remote hangup",
+    "CSFB in progress",
+    "Modem:",
 )
 
 MODEM_COMMANDS = {"test_call", "test_sms"}

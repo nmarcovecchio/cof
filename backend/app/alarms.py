@@ -180,6 +180,66 @@ def format_rule_detail(rule: dict, telemetry: dict) -> str:
     return core
 
 
+RULE_OPERATORS = {
+    "gt": ">",
+    "lt": "<",
+    "gte": "≥",
+    "lte": "≤",
+    "eq": "=",
+    "ne": "≠",
+}
+
+ACTION_LABELS = {
+    "call": "llamada",
+    "sms": "SMS",
+    "email": "email",
+    "telegram": "Telegram",
+    "log_only": "solo log",
+}
+
+
+def configured_rules_view(device: Device) -> list[dict]:
+    payload = latest_config_payload(device)
+    sensors = {
+        str(item.get("id")): item
+        for item in (payload.get("sensors") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    agenda = {str(item.get("id")): item for item in tenant_contacts(device.tenant)}
+    rows = []
+    for rule in payload.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        sensor_id = str(rule.get("sensor_id") or "")
+        sensor = sensors.get(sensor_id) or {}
+        sensor_name = (sensor.get("name") or "").strip() or sensor_id or "sensor"
+        actions = [ACTION_LABELS.get(str(item), str(item)) for item in (rule.get("actions") or [])]
+        who = []
+        for key in ("call_contact_ids", "sms_contact_ids", "email_contact_ids"):
+            for contact_id in rule.get(key) or []:
+                contact = agenda.get(str(contact_id)) or {}
+                name = (contact.get("name") or "").strip() or str(contact_id)
+                if name not in who:
+                    who.append(name)
+        duration = _safe_seconds(rule.get("duration_seconds"))
+        hysteresis = _safe_seconds(rule.get("hysteresis_seconds"))
+        operator = RULE_OPERATORS.get(rule.get("operator"), rule.get("operator") or "?")
+        title = (rule.get("description") or "").strip() or sensor_name
+        rows.append(
+            {
+                "title": title,
+                "condition": f"{sensor_name} {operator} {rule.get('threshold')}",
+                "duration_label": "inmediato" if duration <= 0 else f"durante {duration}s",
+                "actions": actions,
+                "who": who,
+                "escalate": bool(rule.get("escalate_calls", True)),
+                "hysteresis": hysteresis,
+                "clear": [ACTION_LABELS.get(str(item), str(item)) for item in (rule.get("clear_actions") or [])],
+            }
+        )
+    return rows
+
+
 def _redis_client():
     global _redis, _redis_failed
     if _redis_failed:

@@ -156,6 +156,91 @@
   <div class="card-body">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
+        <h2 class="h5 mb-1">Reglas de alarma</h2>
+        <div class="text-muted small">Las que estan publicadas en la config de este equipo. Editarlas no silencia una alarma abierta.</div>
+      </div>
+      {% if not device.archived_at %}
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar reglas</a>
+      {% endif %}
+    </div>
+    {% if configured_rules %}
+      {% for rule in configured_rules %}
+      <div class="border rounded p-3{% if not loop.last %} mb-2{% endif %}">
+        <div class="fw-semibold">{{ rule.title }}</div>
+        <div class="small text-muted">Dispara si {{ rule.condition }} · {{ rule.duration_label }}</div>
+        <div class="small mt-1">
+          Avisa: {{ rule.actions|join(', ') or 'nada' }}
+          {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
+        </div>
+        <div class="small text-muted">
+          {% if rule.escalate %}Escala al siguiente telefono si no atienden.{% else %}Llama solo al primero.{% endif %}
+          {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
+          {% if rule.clear %} Al normalizarse: {{ rule.clear|join(', ') }}.{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="text-muted mb-0">Ninguna regla publicada. Se configuran al publicar la config del equipo.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Alarmas disparadas</h2>
+        <div class="text-muted small">Que se aviso, si atendieron y si se silencio. El corte de la llamada no silencia.</div>
+      </div>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver todas</a>
+    </div>
+    {% if recent_alarms %}
+      {% for alarm in recent_alarms %}
+      <div class="border rounded p-3{% if not loop.last %} mb-2{% endif %}">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">{{ alarm.title }}</div>
+            <div class="small text-muted">{{ alarm.detail }}</div>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            {% if alarm.acked and alarm.open %}
+              <span class="badge text-bg-warning">reconocida</span>
+            {% elif alarm.open %}
+              <span class="badge text-bg-danger">abierta</span>
+            {% else %}
+              <span class="badge text-bg-success">cerrada</span>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Ver ciclo</a>
+          </div>
+        </div>
+        <div class="small text-muted mt-1">{{ alarm.event.started_at|datetime_local }}{% if alarm.event.cleared_at %} · cerro {{ alarm.event.cleared_at|datetime_local }}{% endif %}</div>
+        {% if alarm.steps %}
+        <ol class="timeline mt-3 mb-0">
+          {% for step in alarm.steps[-6:] %}
+          <li class="timeline-item is-{{ step.tone }}">
+            <div class="fw-semibold">{{ step.label }}</div>
+            <div class="small text-muted">{{ step.at|datetime_local }}</div>
+          </li>
+          {% endfor %}
+        </ol>
+        {% if alarm.steps|length > 6 %}
+        <div class="small text-muted mt-2">Ultimos 6 pasos de {{ alarm.steps|length }}. El ciclo completo esta en el detalle.</div>
+        {% endif %}
+        {% else %}
+        <div class="small text-muted mt-2">{{ alarm.last }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="text-muted mb-0">Todavia no se disparo ninguna alarma en este equipo.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
         <h2 class="h5 mb-1">Configuracion</h2>
         <div class="text-muted small">
           Deseada {{ device.desired_config_version or '-' }}
@@ -397,6 +482,8 @@
       {% else %}
       <div class="p-3 text-muted small">
         Traza AT de la ultima prueba de llamada (firmware 0.2.38+).
+        El corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>,
+        despues el evento <code>Remote hangup</code> y el resultado <code>Call done</code>.
         No se publica en vivo: un dump al terminar, para no saturar MQTT.
       </div>
       {% endif %}
@@ -415,6 +502,8 @@
                   <span class="badge text-bg-warning text-dark">{{ sev }}</span>
                 {% elif sev == 'error' %}
                   <span class="badge text-bg-danger">{{ sev }}</span>
+                {% elif event.type == 'test_call' and (event.message or '').startswith('Remote hangup') %}
+                  <span class="badge text-bg-success">corte</span>
                 {% elif event.type == 'test_call' and (event.message or '').startswith('Call done') %}
                   <span class="badge text-bg-success">ok</span>
                 {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
