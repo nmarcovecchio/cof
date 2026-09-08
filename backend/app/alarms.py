@@ -248,7 +248,7 @@ def configured_rules_view(device: Device) -> list[dict]:
                 "who": who,
                 "escalate": bool(rule.get("escalate_calls", True)),
                 "hysteresis": hysteresis,
-                "clear": [ACTION_LABELS.get(str(item), str(item)) for item in (_id_list(rule.get("clear_actions")) or [])],
+                "on_clear": [ACTION_LABELS.get(str(item), str(item)) for item in (_id_list(rule.get("clear_actions")) or [])],
             }
         )
     return rows

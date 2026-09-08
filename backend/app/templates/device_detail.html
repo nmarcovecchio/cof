@@ -175,7 +175,7 @@
         <div class="small text-muted">
           {% if rule.escalate %}Escala al siguiente telefono si no atienden.{% else %}Llama solo al primero.{% endif %}
           {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
-          {% if rule.clear %} Al normalizarse: {{ rule.clear|join(', ') }}.{% endif %}
+          {% if rule.on_clear %} Al normalizarse: {{ rule.on_clear|join(', ') }}.{% endif %}
         </div>
       </div>
       {% endfor %}
