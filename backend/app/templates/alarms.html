@@ -53,7 +53,7 @@
             <div class="fw-semibold">{{ alarm.title }}</div>
             <div class="small text-muted">{{ alarm.detail }}</div>
           </td>
-          <td class="small">{{ alarm.last }}</td>
+          <td class="small">{{ alarm.acked_label or alarm.last }}</td>
           <td class="text-end">
             <a class="btn btn-sm btn-outline-primary" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Ver ciclo</a>
           </td>

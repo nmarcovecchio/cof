@@ -213,19 +213,16 @@
             <a class="btn btn-sm btn-outline-primary" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Ver ciclo</a>
           </div>
         </div>
-        <div class="small text-muted mt-1">{{ alarm.event.started_at|datetime_local }}{% if alarm.event.cleared_at %} · cerro {{ alarm.event.cleared_at|datetime_local }}{% endif %}</div>
+        <div class="small text-muted mt-1">{{ alarm.event.started_at|datetime_local }}{% if alarm.event.cleared_at %} · cerro {{ alarm.event.cleared_at|datetime_local }}{% endif %}{% if alarm.acked_label %} · {{ alarm.acked_label }}{% endif %}</div>
         {% if alarm.steps %}
         <ol class="timeline mt-3 mb-0">
-          {% for step in alarm.steps[-6:] %}
+          {% for step in alarm.steps %}
           <li class="timeline-item is-{{ step.tone }}">
             <div class="fw-semibold">{{ step.label }}</div>
             <div class="small text-muted">{{ step.at|datetime_local }}</div>
           </li>
           {% endfor %}
         </ol>
-        {% if alarm.steps|length > 6 %}
-        <div class="small text-muted mt-2">Ultimos 6 pasos de {{ alarm.steps|length }}. El ciclo completo esta en el detalle.</div>
-        {% endif %}
         {% else %}
         <div class="small text-muted mt-2">{{ alarm.last }}</div>
         {% endif %}

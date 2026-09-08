@@ -42,6 +42,9 @@
         <div class="meta-value">{{ alarm.event.cleared_at|datetime_local if alarm.event.cleared_at else 'sigue abierta' }}</div>
       </div>
     </div>
+    {% if alarm.acked_label %}
+    <p class="mb-0 mt-3">{{ alarm.acked_label }}</p>
+    {% endif %}
     <p class="small text-muted mb-0 mt-3">
       Escalamiento: {{ 'despues de cada llamada, siguiente telefono' if alarm.escalate else 'solo el primero' }}{% if alarm.escalate and alarm.escalate_delay %}, espera {{ alarm.escalate_delay }}s{% endif %}.
       Rearme: {{ alarm.hysteresis ~ 's si sigue prendida' if alarm.hysteresis else 'no se repite hasta que se normalice' }}.

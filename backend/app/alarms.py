@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm.attributes import flag_modified
 
-from .alarm_ack import public_ack_url
+from .alarm_ack import actor_name_for, display_actor, issue_ack_link
 from .alarm_log import append_alarm_step
 from .contacts import pick_contacts, tenant_contacts, tenant_telegram_chats
 from .extensions import db
@@ -419,32 +419,34 @@ def dispatch_alarm(
     db.session.add(event)
     db.session.flush()
 
-    ack_url = public_ack_url(event.id, ack_token)
     notify_text = text + "\n\n" + ACK_HINT
-    if ack_url:
-        notify_text += f"\n{ack_url}"
-    sms_text = _sms_with_ack_link(spoken, ack_url)
 
     if channels["email"]:
         if not contacts["smtp_ready"]:
             results["email"] = "skipped: SMTP no configurado"
             append_alarm_step(event, channel="email", to=contacts["emails"], status="skipped", detail="SMTP no configurado")
         else:
-            try:
-                send_email(
-                    contacts["emails"],
-                    f"[CallOnFail] Alarma #{event.id} - {device.name}",
-                    notify_text,
-                    extra_headers={
-                        "Message-ID": f"<alarm-{event.id}-{ack_token}@callonfail.com.ar>",
-                    },
-                )
-                results["email"] = f"sent:{len(contacts['emails'])}"
-                append_alarm_step(event, channel="email", to=contacts["emails"], status="sent")
-            except Exception as exc:
-                logger.exception("Alarm email failed device=%s", device.device_uid)
-                results["email"] = f"error: {exc}"
-                append_alarm_step(event, channel="email", to=contacts["emails"], status="error", detail=str(exc))
+            sent = 0
+            for email in contacts["emails"]:
+                name = actor_name_for(device, email=email)
+                label = display_actor(name, email)
+                try:
+                    link = issue_ack_link(event, channel="email", to=email, name=name)
+                    body = notify_text + (f"\n{link}" if link else "")
+                    send_email(
+                        [email],
+                        f"[CallOnFail] Alarma #{event.id} - {device.name}",
+                        body,
+                        extra_headers={
+                            "Message-ID": f"<alarm-{event.id}-{ack_token}@callonfail.com.ar>",
+                        },
+                    )
+                    sent += 1
+                    append_alarm_step(event, channel="email", to=label, status="sent")
+                except Exception as exc:
+                    logger.exception("Alarm email failed device=%s to=%s", device.device_uid, email)
+                    append_alarm_step(event, channel="email", to=label, status="error", detail=str(exc))
+            results["email"] = f"sent:{sent}" if sent else "error"
     elif "email" in wanted:
         results["email"] = "skipped: sin email del cliente"
         append_alarm_step(event, channel="email", to=[], status="skipped", detail="sin email del cliente")
@@ -455,9 +457,14 @@ def dispatch_alarm(
             append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="skipped", detail="bot no configurado")
         else:
             try:
-                send_telegram(contacts["telegram_chat_ids"], notify_text, button_url=ack_url)
+                telegram_url = issue_ack_link(event, channel="telegram", to=",".join(contacts["telegram_chat_ids"]), name="")
+                send_telegram(
+                    contacts["telegram_chat_ids"],
+                    notify_text + (f"\n{telegram_url}" if telegram_url else ""),
+                    button_url=telegram_url,
+                )
                 results["telegram"] = f"sent:{len(contacts['telegram_chat_ids'])}"
-                append_alarm_step(event, channel="telegram", to=contacts["telegram_chat_ids"], status="sent")
+                append_alarm_step(event, channel="telegram", to="grupo del cliente", status="sent")
             except Exception as exc:
                 logger.exception("Alarm telegram failed device=%s", device.device_uid)
                 results["telegram"] = f"error: {exc}"
@@ -469,12 +476,15 @@ def dispatch_alarm(
     if channels["sms"]:
         sms_states = []
         for index, phone in enumerate(sms_phones):
+            name = actor_name_for(device, phone=phone)
+            label = display_actor(name, phone)
+            sms_url = issue_ack_link(event, channel="sms", to=phone, name=name)
             job = enqueue_modem_job(
                 device,
                 "test_sms",
                 {
                     "phone": phone,
-                    "text": sms_text,
+                    "text": _sms_with_ack_link(spoken, sms_url),
                     "alarm_event_id": event.id,
                     "phone_index": index,
                 },
@@ -484,7 +494,7 @@ def dispatch_alarm(
             append_alarm_step(
                 event,
                 channel="sms",
-                to=phone,
+                to=label,
                 status=job.status,
                 detail=job.result or "",
                 command_id=job.command_id,

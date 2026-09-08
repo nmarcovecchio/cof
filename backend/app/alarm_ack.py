@@ -2,6 +2,7 @@ import imaplib
 import logging
 import os
 import re
+import secrets
 from datetime import timedelta
 from email import message_from_bytes
 from email.header import decode_header
@@ -22,6 +23,65 @@ logger = logging.getLogger("callonfail.alarm_ack")
 ACK_WORD = re.compile(r"\bok\b", re.IGNORECASE)
 EVENT_IN_SUBJECT = re.compile(r"alarma\s*#\s*(\d+)", re.IGNORECASE)
 TOKEN_IN_TEXT = re.compile(r"/(?:alarms/(\d+)/ack|a/(\d+))/([A-Za-z0-9_\-]+)")
+
+ACK_VIA = {
+    "email": "el enlace del email",
+    "email_reply": "un email con OK",
+    "sms": "el enlace del SMS",
+    "sms_reply": "un SMS con OK",
+    "telegram": "Telegram",
+    "link": "el enlace de confirmación",
+    "web": "la web",
+}
+
+
+def display_actor(name: str, addr: str = "") -> str:
+    name = (name or "").strip()
+    addr = str(addr or "").strip()
+    if name and addr and name != addr:
+        return f"{name} ({addr})"
+    return name or addr
+
+
+def actor_name_for(device, *, email: str = "", phone: str = "") -> str:
+    if device is None:
+        return ""
+    email_n = normalize_email(email or "")
+    phone_n = normalize_phone(phone or "")
+    for contact in tenant_contacts(device.tenant):
+        if email_n and normalize_email(contact.get("email") or "") == email_n:
+            return str(contact.get("name") or "").strip()
+        if phone_n and phones_match(phone_n, contact.get("phone") or ""):
+            return str(contact.get("name") or "").strip()
+    return ""
+
+
+def issue_ack_link(event: Event, *, channel: str, to: str = "", name: str = "") -> str:
+    token = secrets.token_urlsafe(16)
+    payload = dict(event.payload or {})
+    links = [item for item in (payload.get("ack_links") or []) if isinstance(item, dict)]
+    links.append({"token": token, "channel": channel, "name": name, "to": to})
+    payload["ack_links"] = links
+    event.payload = payload
+    flag_modified(event, "payload")
+    return public_ack_url(event.id, token)
+
+
+def ack_claim_for_token(event: Event, token: str) -> dict:
+    payload = event.payload or {}
+    for item in payload.get("ack_links") or []:
+        if isinstance(item, dict) and item.get("token") == token:
+            return item
+    return {"channel": "link", "name": "", "to": ""}
+
+
+def _token_matches(event: Event, token: str) -> bool:
+    if not token:
+        return False
+    payload = event.payload or {}
+    if token == str(payload.get("ack_token") or ""):
+        return True
+    return any(isinstance(item, dict) and item.get("token") == token for item in (payload.get("ack_links") or []))
 
 
 def is_ack_text(text: str, *, email_body: bool = False) -> bool:
@@ -82,12 +142,17 @@ def acknowledge_event(event: Event, *, channel: str, sender: str = "", notify: b
         event.payload = payload
         flag_modified(event, "payload")
     cancelled = cancel_alarm_jobs(event.id, reason="acked")
+    who = sender or ACK_VIA.get(channel, channel)
+    via = ACK_VIA.get(channel, channel)
+    detail = f"desde {via}"
+    if cancelled:
+        detail = f"{detail} ({cancelled} en cola cancelados)"
     append_alarm_step(
         event,
         channel="ack",
-        to=sender or channel,
+        to=who,
         status="acked",
-        detail=f"{channel} OK" + (f" ({cancelled} en cola cancelados)" if cancelled else ""),
+        detail=detail,
     )
     if notify:
         _announce_stopped(event, channel, sender)
@@ -98,8 +163,7 @@ def lookup_ack_link(event_id: int, token: str) -> tuple[Event | None, str]:
     event = Event.query.filter_by(id=event_id, type="alarm").first()
     if event is None:
         return None, "invalid"
-    expected = str((event.payload or {}).get("ack_token") or "")
-    if not expected or expected != token:
+    if not _token_matches(event, token):
         return None, "invalid"
     if event.cleared_at is not None:
         return event, "expired"
@@ -137,7 +201,12 @@ def acknowledge_by_token(event_id: int, token: str, *, channel: str = "link", se
     event = event_for_ack_token(event_id, token)
     if event is None:
         return None
-    acknowledge_device_from_event(event, channel=channel, sender=sender or "enlace")
+    claim = ack_claim_for_token(event, token)
+    channel = str(claim.get("channel") or channel or "link")
+    sender = (claim.get("name") or sender or claim.get("to") or "").strip()
+    if not sender:
+        sender = "Alguien del grupo Telegram" if channel == "telegram" else "Alguien"
+    acknowledge_device_from_event(event, channel=channel, sender=sender)
     return event
 
 
@@ -149,7 +218,11 @@ def handle_inbound_sms(device: Device, payload: dict) -> None:
     event = _open_alarm_for(phone=sender, device=device)
     if event is None:
         return
-    acknowledge_device_from_event(event, channel="sms", sender=sender or "sms")
+    acknowledge_device_from_event(
+        event,
+        channel="sms_reply",
+        sender=actor_name_for(device, phone=sender) or sender or "sms",
+    )
 
 
 def poll_imap_acks() -> int:
@@ -205,19 +278,22 @@ def _ack_from_email(message) -> bool:
     if subject_match:
         event = Event.query.filter_by(id=int(subject_match.group(1)), type="alarm").first()
         if event is not None and _sender_matches(event, email=sender):
-            return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
+            name = actor_name_for(event.device, email=sender) or sender
+            return bool(acknowledge_device_from_event(event, channel="email_reply", sender=name))
 
     refs = " ".join(filter(None, [message.get("In-Reply-To", ""), message.get("References", "")]))
     ref_match = re.search(r"alarm-(\d+)-", refs)
     if ref_match:
         event = Event.query.filter_by(id=int(ref_match.group(1)), type="alarm").first()
         if event is not None:
-            return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
+            name = actor_name_for(event.device, email=sender) or sender
+            return bool(acknowledge_device_from_event(event, channel="email_reply", sender=name))
 
     event = _open_alarm_for(email=sender)
     if event is None:
         return False
-    return bool(acknowledge_device_from_event(event, channel="email", sender=sender))
+    name = actor_name_for(event.device, email=sender) or sender
+    return bool(acknowledge_device_from_event(event, channel="email_reply", sender=name))
 
 
 def _open_alarm_for(*, phone: str = "", email: str = "", chat_id: str = "", device: Device | None = None) -> Event | None:

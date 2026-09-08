@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .alarm_ack import acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
+from .alarm_ack import ACK_VIA, acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
 from .alarm_log import friendly_step
 from .alarms import configured_rules_view, dispatch_alarm, latest_config_payload, resolve_contacts
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
@@ -318,7 +318,7 @@ def create_app() -> Flask:
                 event=event,
                 device_name=event.device.name if event and event.device else "",
             )
-        event = acknowledge_by_token(event_id, token, channel="link", sender="enlace")
+        event = acknowledge_by_token(event_id, token, channel="link", sender="")
         if event is None:
             return render_template("alarm_ack.html", state="invalid", event=None), 404
         db.session.commit()
@@ -334,7 +334,7 @@ def create_app() -> Flask:
     @login_required
     def alarm_silence(event_id):
         event = Event.query.filter_by(id=event_id, type="alarm").first_or_404()
-        changed = acknowledge_device_from_event(event, channel="web", sender="web")
+        changed = acknowledge_device_from_event(event, channel="web", sender=session.get("username") or "web")
         db.session.commit()
         if changed:
             flash(f"Se silenciaron {len(changed)} alarma(s) de este equipo. Revisá el detalle.", "success")
@@ -355,7 +355,7 @@ def create_app() -> Flask:
         if not open_events:
             flash("No habia alarmas abiertas para silenciar", "warning")
             return redirect(url_for("device_detail", device_uid=device.device_uid))
-        changed = acknowledge_device_from_event(open_events[0], channel="web", sender="web")
+        changed = acknowledge_device_from_event(open_events[0], channel="web", sender=session.get("username") or "web")
         db.session.commit()
         if changed:
             flash(f"Se silenciaron {len(changed)} alarma(s) de este equipo.", "success")
@@ -995,6 +995,11 @@ def alarm_view(event: Event) -> dict:
         "escalate_delay": payload.get("escalate_delay_seconds") or 0,
         "hysteresis": payload.get("hysteresis_seconds") or 0,
         "acked": bool(payload.get("acked")),
+        "acked_label": (
+            f"{payload.get('acked_from') or 'Alguien'} silenció desde {ACK_VIA.get(payload.get('acked_via'), 'el enlace de confirmación')}"
+            if payload.get("acked")
+            else ""
+        ),
         "can_silence": event.cleared_at is None or bool(open_device_alarms(event)),
         "clear_actions": payload.get("clear_actions") or [],
     }
