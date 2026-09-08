@@ -198,33 +198,47 @@ ACTION_LABELS = {
 }
 
 
+def _as_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _iter_dicts(value) -> list[dict]:
+    if isinstance(value, dict):
+        value = list(value.values())
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def configured_rules_view(device: Device) -> list[dict]:
     payload = latest_config_payload(device)
     sensors = {
         str(item.get("id")): item
-        for item in (payload.get("sensors") or [])
-        if isinstance(item, dict) and item.get("id")
+        for item in _iter_dicts(payload.get("sensors"))
+        if item.get("id")
     }
     agenda = {str(item.get("id")): item for item in tenant_contacts(device.tenant)}
     rows = []
-    for rule in payload.get("rules") or []:
-        if not isinstance(rule, dict):
-            continue
+    for rule in _iter_dicts(payload.get("rules")):
         sensor_id = str(rule.get("sensor_id") or "")
         sensor = sensors.get(sensor_id) or {}
-        sensor_name = (sensor.get("name") or "").strip() or sensor_id or "sensor"
-        actions = [ACTION_LABELS.get(str(item), str(item)) for item in (rule.get("actions") or [])]
+        sensor_name = _as_text(sensor.get("name")) or sensor_id or "sensor"
+        actions = [ACTION_LABELS.get(str(item), str(item)) for item in (_id_list(rule.get("actions")) or [])]
         who = []
         for key in ("call_contact_ids", "sms_contact_ids", "email_contact_ids"):
-            for contact_id in rule.get(key) or []:
+            for contact_id in _id_list(rule.get(key)) or []:
                 contact = agenda.get(str(contact_id)) or {}
-                name = (contact.get("name") or "").strip() or str(contact_id)
+                name = _as_text(contact.get("name")) or str(contact_id)
                 if name not in who:
                     who.append(name)
         duration = _safe_seconds(rule.get("duration_seconds"))
         hysteresis = _safe_seconds(rule.get("hysteresis_seconds"))
         operator = RULE_OPERATORS.get(rule.get("operator"), rule.get("operator") or "?")
-        title = (rule.get("description") or "").strip() or sensor_name
+        title = _as_text(rule.get("description")) or sensor_name
         rows.append(
             {
                 "title": title,
@@ -234,7 +248,7 @@ def configured_rules_view(device: Device) -> list[dict]:
                 "who": who,
                 "escalate": bool(rule.get("escalate_calls", True)),
                 "hysteresis": hysteresis,
-                "clear": [ACTION_LABELS.get(str(item), str(item)) for item in (rule.get("clear_actions") or [])],
+                "clear": [ACTION_LABELS.get(str(item), str(item)) for item in (_id_list(rule.get("clear_actions")) or [])],
             }
         )
     return rows

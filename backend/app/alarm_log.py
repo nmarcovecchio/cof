@@ -59,10 +59,15 @@ def call_outcome(result: str) -> str:
 
 
 def friendly_step(step: dict) -> str:
-    channel = step.get("channel") or ""
-    status = step.get("status") or ""
-    targets = ", ".join(step.get("to") or [])
-    detail = (step.get("detail") or "").strip()
+    channel = str(step.get("channel") or "")
+    status = str(step.get("status") or "")
+    raw_to = step.get("to") or []
+    if isinstance(raw_to, str):
+        raw_to = [raw_to]
+    if not isinstance(raw_to, (list, tuple)):
+        raw_to = [raw_to]
+    targets = ", ".join(str(item) for item in raw_to if item)
+    detail = str(step.get("detail") or "").strip()
 
     if channel == "email":
         if status.startswith("error") or status.startswith("skipped"):

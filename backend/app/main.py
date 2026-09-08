@@ -153,6 +153,8 @@ def create_app() -> Flask:
     def datetime_local(value):
         if value is None or value == "":
             return "-"
+        if not isinstance(value, (str, datetime)):
+            return "-"
 
         if isinstance(value, str):
             try:
@@ -160,15 +162,16 @@ def create_app() -> Flask:
             except ValueError:
                 return value
 
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-
         try:
-            target_tz = ZoneInfo(app.config["APP_TIMEZONE"])
-        except ZoneInfoNotFoundError:
-            target_tz = ZoneInfo("UTC")
-
-        return value.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            try:
+                target_tz = ZoneInfo(app.config["APP_TIMEZONE"])
+            except ZoneInfoNotFoundError:
+                target_tz = ZoneInfo("UTC")
+            return value.astimezone(target_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+        except Exception:
+            return "-"
 
     @app.template_filter("json_pretty")
     def json_pretty(value):
@@ -611,15 +614,22 @@ def create_app() -> Flask:
         )
         recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
-        recent_alarms = [
-            alarm_view(event)
-            for event in (
-                Event.query.filter_by(device_id=device.id, type="alarm")
-                .order_by(Event.started_at.desc())
-                .limit(8)
-                .all()
-            )
-        ]
+        recent_alarms = []
+        for event in (
+            Event.query.filter_by(device_id=device.id, type="alarm")
+            .order_by(Event.started_at.desc())
+            .limit(8)
+            .all()
+        ):
+            try:
+                recent_alarms.append(alarm_view(event))
+            except Exception:
+                app.logger.exception("alarm_view failed device=%s event=%s", device.device_uid, event.id)
+        try:
+            rules = configured_rules_view(device)
+        except Exception:
+            app.logger.exception("configured_rules_view failed device=%s", device.device_uid)
+            rules = []
         modem_trace_event = next(
             (
                 event
@@ -628,14 +638,18 @@ def create_app() -> Flask:
             ),
             None,
         )
-        alarm_state = alarm_states_map([device]).get(device.id)
+        alarm_state = None
+        try:
+            alarm_state = alarm_states_map([device]).get(device.id)
+        except Exception:
+            app.logger.exception("alarm_states_map failed device=%s", device.device_uid)
         return render_template(
             "device_detail.html",
             device=device,
             recent_telemetry=recent_telemetry,
             recent_events=recent_events,
             recent_alarms=recent_alarms,
-            configured_rules=configured_rules_view(device),
+            configured_rules=rules,
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
             modem_trace_event=modem_trace_event,
@@ -947,9 +961,9 @@ def apply_tenant_form(tenant: Tenant) -> str | None:
 
 
 def _step_tone(step: dict) -> str:
-    channel = step.get("channel") or ""
-    status = step.get("status") or ""
-    detail = step.get("detail") or ""
+    channel = str(step.get("channel") or "")
+    status = str(step.get("status") or "")
+    detail = str(step.get("detail") or "")
     if channel == "clear":
         return "clear" if not status.startswith("error") else "bad"
     if status in {"acked", "notified", "rearm", "cycle_done"} or status == "answered" or detail.startswith("Call done") or detail.startswith("SMS sent"):
@@ -964,9 +978,11 @@ def _step_tone(step: dict) -> str:
 
 
 def alarm_view(event: Event) -> dict:
-    payload = event.payload or {}
+    payload = event.payload if isinstance(event.payload, dict) else {}
     steps = []
     for step in payload.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
         steps.append({**step, "label": friendly_step(step), "tone": _step_tone(step)})
     return {
         "event": event,
