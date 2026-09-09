@@ -297,12 +297,6 @@
           <i class="bi bi-activity"></i> Estado
         </button>
       </form>
-      <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar una alarma real de prueba? Queda abierta, escala llamadas y se puede silenciar con OK o desde la web.');">
-        {{ csrf_field() }}
-        <button class="btn btn-outline-danger" type="submit">
-          <i class="bi bi-exclamation-triangle"></i> Disparar alarma
-        </button>
-      </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
@@ -314,7 +308,14 @@
     {% if not device.archived_at %}
     <form class="test-actions" id="modem-test-form" method="post">
       {{ csrf_field() }}
-      <div class="small text-muted mb-2">Pruebas del modem</div>
+      <div class="small text-muted mb-2">Pruebas</div>
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <button class="btn btn-outline-danger" type="submit" formaction="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" formnovalidate onclick="return confirm('Disparar una alarma real de prueba? Queda abierta, escala llamadas y se puede silenciar con OK o desde la web.');">
+          <i class="bi bi-exclamation-triangle"></i> Probar alarma
+        </button>
+        <span class="small text-muted">Agenda completa: SMS, email, Telegram y llamadas. No es solo el módem.</span>
+      </div>
+      <div class="small text-muted mb-2">Módem</div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <input class="form-control" id="test-phone" name="phone" type="tel" required placeholder="+54911..." value="{{ test_phone|default('') }}" style="max-width: 16rem;">
         <input class="form-control" id="test-sms-text" name="text" type="text" maxlength="800" value="CallOnFail prueba de llamada" style="max-width: 20rem;">
