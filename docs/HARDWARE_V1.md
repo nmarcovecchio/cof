@@ -1,8 +1,8 @@
 # Hardware v1 — CallOnFail
 
 **Retomar:** Telegram y email ya andan. Falta **probar el ciclo de alarma**.
-Alimentación: fuente 5 V 5 A + gel 12 V + **ZK-S4** (80 W provisorio, se
-setea 13,7 V / 0,5 A; revisar módulo más chico) + XL4015 de backup + WDT/RESET.
+Alimentación: fuente 5 V 5 A + gel **6 V 7 Ah** + **XY-SJVA** (3 A / 35 W
+CC/CV, seteo 6,85 V / 0,6 A) + buck-boost 5 A de backup + WDT/RESET.
 
 Placa: WT32-ETH01 + A7672SA-FASE. Perfil `cof-wt32-a7672-v1`.
 
@@ -14,31 +14,37 @@ No usar GPIO21/22 para I2C. No alimentar el WT32 por 5V y 3V3 a la vez.
 
 ## Qué lleva el producto
 
-| Función | Cómo |
-|---|---|
-| Temp ×4 (máx. de venta) | DS18B20 en un bus, ~15–20 m, cadena |
-| Humedad + temp ambiente | SHT31 en la placa |
-| 220 V | ZMPT101B (no conectar 220 hasta validar) |
-| Fuga de agua | IN1 (contacto seco) |
-| 3 entradas más | IN2–IN4 |
-| 2 salidas de campo | OUT1 sirena, OUT2 auxiliar (relé/MOSFET) |
-| LEDs de **gabinete** | PWR, NET, ALARMA (frente; no los OUT de bornes) |
+
+| Función                     | Cómo                                                            |
+| --------------------------- | --------------------------------------------------------------- |
+| Temp ×4 (máx. de venta)     | DS18B20 en un bus, ~15–20 m, cadena                             |
+| Humedad + temp ambiente     | SHT31 en la placa                                               |
+| 220 V                       | ZMPT101B (no conectar 220 hasta validar)                        |
+| Fuga de agua                | IN1 (contacto seco)                                             |
+| 3 entradas más              | IN2–IN4                                                         |
+| 2 salidas de campo          | OUT1 sirena, OUT2 auxiliar (relé/MOSFET)                        |
+| LEDs de **gabinete**        | PWR, NET, ALARMA (frente; no los OUT de bornes)                 |
 | Botón **RESET** de gabinete | Hundido; corta `5V_SYS` ~2 s (placa + PHY). No silencia alarmas |
-| OLED | Servicio / lab, adentro, no en el frente |
-| Backup 4 h | Gel 12 V 4 Ah (VRLA). LiFePO4 queda para después |
+| OLED                        | Servicio / lab, adentro, no en el frente                        |
+| Backup 4 h                  | Gel 6 V 7 Ah (VRLA). LiFePO4 queda para después                 |
+
 
 ---
 
 ## 1. Alimentación (v1)
 
 Riel de equipo: **5 V**. La fuente de 220 que ya está comprada es **5 V 5 A**.
-Eso alimenta WT32 + A7672 + sensores. Un solo buck (**XL4015**) y solo para
-backup. Los **3V3 salen del WT32**; no hay otro regulador de 3V3.
+Eso alimenta WT32 + A7672 + sensores. Un solo convertidor de backup
+(**buck-boost**, no el XL4015). Los **3V3 salen del WT32**; no hay otro
+regulador de 3V3.
 
-Gel **12 V ~4 Ah** (sellada). Usar ~la mitad. Flote **13,5–13,8 V**, no 14,7 V
-de auto. La gel **no** va en paralelo con la fuente de 5 V. Se carga desde
-los 5 V con un **boost CC/CV** (provisorio: **ZK-S4** 80 W; 4 A es el techo,
-se setea **13,7 V / 0,5 A**. Revisar módulo más chico después).
+Gel **6 V 7 Ah** (sellada, tipo NP7-6). Usar ~la mitad. Flote **6,8–6,9 V**,
+no 7,3 V de “carga rápida”. La gel **no** va en paralelo con la fuente de
+5 V. Se carga desde `5V_PSU` con **XY-SJVA** (buck-boost CC/CV 3 A / 35 W;
+a 5 V de entrada ~15 W). Seteo **6,85 V / 0,6 A**, ~C/10. No ZK-S4 (80 W).
+
+4 Ah a 6 V queda justo para 4 h. 7 Ah deja margen de llamada y Peukert.
+No dos 6 V en serie: eso es volver a 12 V.
 
 GND común. El supervisor (WDT + one-shot del RESET) vive en **`5V_BUS`**,
 antes de los MOSFET de corte. Así funciona en el banco sin gel, y sigue
@@ -49,11 +55,11 @@ vivo cuando se corta `5V_SYS`.
   └── Fuente 5V 5A
           ├── 5V_PSU ──────────────────────────────── 5V_BUS
           │     │
-          │     └── “hay PSU” → apaga el XL4015 (EN a GND)
+          │     └── “hay PSU” → apaga el buck-boost (EN a GND)
           │
-          └── ZK-S4 boost CC/CV (13,7 V / 0,5 A)  [provisorio 80 W]
-                    └── Gel 12 V 4 Ah + fusible 3–5 A
-                          └── XL4015 (ajuste 5,4 V) ── SB560 ── 5V_BUS
+          └── XY-SJVA CC/CV (6,85 V / 0,6 A)  [3 A / 35 W]
+                    └── Gel 6 V 7 Ah + fusible 3–5 A
+                          └── buck-boost (ajuste 5,4 V) ── SB560 ── 5V_BUS
                               (solo si se cortó la 220)
 
 
@@ -70,30 +76,70 @@ vivo cuando se corta `5V_SYS`.
         +1000 µF junto al módulo
 ```
 
-Hay 220: la fuente de 5 V lleva todo. El ZK-S4 deja la gel en flote a
-13,7 V / 0,5 A. El XL4015 está apagado.
+Hay 220: la fuente de 5 V lleva todo. El XY-SJVA deja la gel en flote a
+6,85 V / 0,6 A. El buck-boost de backup está apagado.
 
-Se corta la 220: se muere la fuente y el boost. El EN del XL4015 se suelta,
-la gel pasa a 5 V. El Schottky del buck (ajuste 5,4 V → ~5,0 V después del
+Se corta la 220: se muere la fuente y el cargador. El EN del buck-boost se
+suelta, la gel pasa a 5 V. El Schottky (ajuste 5,4 V → ~5,0 V después del
 diodo) no pelea con la fuente. El capellón en `5V_BUS` tapa el hueco. El
 ZMPT avisa “se cortó la luz”. Ethernet off, LTE si hace falta, ~4 h.
 
-El boost **toma 5 V_PSU**, no `5V_BUS` (si no, en backup la gel se carga a
-sí misma). IN− y OUT− del ZK-S4 no se unen. El USB de esa placa no es 5 V.
+El XY-SJVA **toma 5V_PSU**, no `5V_BUS` (si no, en backup la gel se carga a
+sí misma). No sirve de backup (3 A / ~15 W a 5 V). LED verde “lleno” es
+~0,1×I; en gel se ignora (flote a 6,85 V).
+
+IN− y OUT−: con el tester, módulo apagado. Si están abiertos, **no** los
+unes ni los tires los dos al GND del WT32 (el shunt de CC va en el −).
+Gel− solo a OUT−. Si ya vienen cortocircuitados en la placa, GND común
+está bien.
+
+### Cableado de banco
+
+```text
+Fuente 5V+ ──── 5V_PSU ──────────────────────────── 5V_BUS
+Fuente 5V− ──── GND
+                 │
+                 ├── XY-SJVA IN+    XY-SJVA IN− ── GND fuente (no puentear OUT−)
+                 │         │
+                 │         OUT+ ── fusible 3–5 A ── Gel+
+                 │         OUT− ────────────────── Gel−  (ver nota IN−/OUT−)
+                 │
+                 │   Gel+ ── buck-boost VIN+
+                 │   GND  ── VIN−
+                 │           VOUT+ ── SB560 ──> 5V_BUS
+                 │           VOUT− ── GND
+                 │
+                 └── 10k ── gate 2N7000
+                              source GND
+                              drain ── EN del buck-boost
+                     Gel+ ── 10k ── EN     (HIGH = backup ON)
+
+
+5V_BUS ── 1000–2200 µF a GND
+       ├── WDT + one-shot RESET
+       ├── AO3401 ── 5V_SYS    → WT32 5V, LED PWR, 3V3
+       └── AO3401 ── 5V_MODEM  → A7672 VCC +1000 µF
+```
+
+XY-SJVA: **CV 6,85 V / CC 0,6 A** (vacío, después gel). Buck-boost de
+backup: **5,4 V**. Si ese módulo no trae EN, el 2N7000 maneja un AO3401
+que corta gel+ al VIN.
 
 ### Cortes (WDT / RESET / módem)
 
 IRF4905 / IRF9540 no cierran bien a 5 V (quieren Vgs ≈ −10 V). Usar
 **P-MOSFET logic AO3401** (SOT-23, Electrocomponentes): source = `5V_BUS`,
 drain = carga, gate a GND = ON, gate a `5V_BUS` = OFF. Arranca en el banco
-sin gel. Through-hole: IRLZ44N high-side con gate a 12 V de la gel (solo
-si la gel está siempre conectada).
+sin gel. No usar la gel 6 V como “12 V de gate” para un P-MOSFET de 5 V:
+no alcanza Vgs. AO3401 en el riel de 5 V.
 
-| Qué | Quién lo corta | Default |
-|---|---|---|
-| `5V_SYS` | WDT timeout **o** botón RESET del gabinete (one-shot ~2 s) | ON |
-| `5V_MODEM` | ESP32 IO (después AT / RESET del A7672) | ON |
-| Gel | Nadie | Siempre conectada |
+
+| Qué        | Quién lo corta                                             | Default           |
+| ---------- | ---------------------------------------------------------- | ----------------- |
+| `5V_SYS`   | WDT timeout **o** botón RESET del gabinete (one-shot ~2 s) | ON                |
+| `5V_MODEM` | ESP32 IO (después AT / RESET del A7672)                    | ON                |
+| Gel        | Nadie                                                      | Siempre conectada |
+
 
 Un pulso a `EN` del ESP32 **no** resetea el PHY LAN8720. Por eso el RESET
 de gabinete corta `5V_SYS`, no el pin EN.
@@ -101,10 +147,18 @@ de gabinete corta `5V_SYS`, no el pin EN.
 Durante una llamada hay que seguir pateando el WDT. Timeout 4–5 min
 (> llamada + TTS).
 
-### Por qué no van 2 bucks ni buck-boost
+### Por qué 6 V y por qué buck-boost
 
-La fuente ya es 5 V 5 A. El XL4015 es el puente 12 V → 5 V cuando no hay
-220. La gel vacía sigue en ~11 V: siempre por encima de 5 V.
+6 V queda más cerca del riel de 5 V: carga 5 V → 6,85 V (menos salto que
+13,7 V), bateria más chata, mismo tipo NP7-6 de alarma / luces de
+emergencia. No 12 V.
+
+La gel 6 V llena está ~6,8 V; vacía (corte) ~5,5 V. Eso **cruza** los 5,4 V
+del backup. Un buck (XL4015) necesita ~1,5 V de cabeza: solo sirve con la
+bateria llena. Un boost solo se queda corto cuando está llena. El puente
+es un **buck-boost automático** a 5,4 V (módulo 5 A tipo XL6019 / ZK-4KX;
+no el XY-SJVA). Si no trae EN, un AO3401 corta el + de la gel al
+convertidor mientras haya `5V_PSU`.
 
 ---
 
@@ -132,11 +186,13 @@ IO0 a GND solo para flashear; después soltar y reset
 
 Todo a 3V3 del WT32 (riel `5V_SYS`).
 
-| Equipo | Dir. | Rol |
-|---|---|---|
-| OLED SH1106 | 0x3C | Lab / adentro del gabinete |
-| SHT31 | 0x44 | Humedad + temp ambiente |
-| PCF8574 | 0x20–0x27 | 4 IN, 2 OUT, 2 LEDs de frente |
+
+| Equipo      | Dir.      | Rol                           |
+| ----------- | --------- | ----------------------------- |
+| OLED SH1106 | 0x3C      | Lab / adentro del gabinete    |
+| SHT31       | 0x44      | Humedad + temp ambiente       |
+| PCF8574     | 0x20–0x27 | 4 IN, 2 OUT, 2 LEDs de frente |
+
 
 ---
 
@@ -166,14 +222,16 @@ ZMPT GND  →  GND
 
 Hoy el firmware solo usa P0 como botón de lab. En v1:
 
-| PCF | I/O | Borne |
-|---|---|---|
-| P0 | IN | IN1 fuga de agua |
-| P1 | IN | IN2 |
-| P2 | IN | IN3 |
-| P3 | IN | IN4 |
-| P4 | OUT | OUT1 sirena (MOSFET/ULN + relé, **no** bobina al PCF) |
-| P5 | OUT | OUT2 auxiliar (igual) |
+
+| PCF | I/O | Borne                                                 |
+| --- | --- | ----------------------------------------------------- |
+| P0  | IN  | IN1 fuga de agua                                      |
+| P1  | IN  | IN2                                                   |
+| P2  | IN  | IN3                                                   |
+| P3  | IN  | IN4                                                   |
+| P4  | OUT | OUT1 sirena (MOSFET/ULN + relé, **no** bobina al PCF) |
+| P5  | OUT | OUT2 auxiliar (igual)                                 |
+
 
 Entradas: contacto seco a GND. El PCF se escribe 0xFF (pull-up).
 
@@ -185,12 +243,14 @@ Estos 4 IN + 2 OUT son **solo campo**. No van LEDs, RESET de gabinete ni reset d
 
 Tres LEDs y un botón, cable a un conector de la placa. No usar OUT1/OUT2 ni IN1–4.
 
-| Frente | Color / tipo | Qué hace | Origen |
-|---|---|---|---|
-| PWR | LED verde | Hay `5V_SYS` | 3V3/5V_SYS + resistor, **sin** el ESP32 |
-| NET | LED verde/azul | Ethernet o MQTT OK | PCF **P6** (sink) |
-| ALARMA | LED rojo | Alarma abierta | PCF **P7** (sink) |
-| RESET | Botón NA, **hundido** | Power cycle de `5V_SYS` ~2 s | Al supervisor / MOSFET, **sin** el ESP32 |
+
+| Frente | Color / tipo          | Qué hace                     | Origen                                   |
+| ------ | --------------------- | ---------------------------- | ---------------------------------------- |
+| PWR    | LED verde             | Hay `5V_SYS`                 | 3V3/5V_SYS + resistor, **sin** el ESP32  |
+| NET    | LED verde/azul        | Ethernet o MQTT OK           | PCF **P6** (sink)                        |
+| ALARMA | LED rojo              | Alarma abierta               | PCF **P7** (sink)                        |
+| RESET  | Botón NA, **hundido** | Power cycle de `5V_SYS` ~2 s | Al supervisor / MOSFET, **sin** el ESP32 |
+
 
 Hundido (agujero, clip o botón bajo) para que no lo dispare un palo de escoba.
 **No silencia alarmas.** Es “reiniciá la caja”. Al volver, si el sensor sigue mal, la alarma se vuelve a armar.
@@ -229,10 +289,12 @@ GND comun
 
 Control v1 (open-collector a GND; el módulo ya tiene pull-up). No >100 nF en estos pines. No bajar RESET y PWRKEY a la vez.
 
-| A7672 | Pin | WT32 |
-|---|---|---|
-| RESET | 16 | IO4, pulso bajo ~2,5 s |
-| PWRKEY | 1 | IO2, encendido / apagado |
+
+| A7672  | Pin | WT32                     |
+| ------ | --- | ------------------------ |
+| RESET  | 16  | IO4, pulso bajo ~2,5 s   |
+| PWRKEY | 1   | IO2, encendido / apagado |
+
 
 `USIM_RST` es la SIM, no el módem.
 
@@ -262,9 +324,9 @@ IO2 / lógica ESP ── 2N7000 → gate AO3401_MODEM a 5V_BUS
 ```
 
 - Patada **acoplada por capacitor**: IO15 es strapping; no puede quedar a GND
-  en el reset del ESP32.
+en el reset del ESP32.
 - El one-shot **reinicia el 4541**: después de un RESET hay otros 4–5 min
-  para bootear y volver a patear.
+para bootear y volver a patear.
 - El botón dispara el **mismo** one-shot. Funciona con el firmware muerto.
 - No silencia alarmas. Al volver `5V_SYS`, si el sensor sigue mal, se rearma.
 
@@ -281,39 +343,64 @@ IO2 / lógica ESP ── 2N7000 → gate AO3401_MODEM a 5V_BUS
 
 AO3401: Rds bajo a Vgs = −4,5 V, aguanta el pico de 2 A del A7672.
 
-### EN del XL4015
+### EN del buck-boost
 
 ```text
 5V_PSU ── 10k ── gate 2N7000
-                   drain ── EN del XL4015
+                   drain ── EN del buck-boost (o gate AO3401 de corte)
                    source ── GND
-EN del XL4015 ── 10k a VIN (12 V gel)     HIGH = buck ON
+EN ── 10k a VIN (6 V gel)     HIGH = backup ON
 ```
 
-Hay fuente de 5 V → EN a GND → buck apagado. Sin 5 V_PSU → EN a 12 V → backup.
+Hay fuente de 5 V → EN a GND → backup apagado. Sin 5V_PSU → EN a 6 V →
+backup.
 
-LVD opcional (después): si la gel < 11,2 V, forzar EN a GND.
+Usar la gel en un corte es normal. Lo que la mata es seguir chupando
+cuando ya está vacía (menos de ~5,5 V, sulfato). El convertidor de backup
+no corta solo: quiere 5,4 V hasta que no puede más.
+
+### ADC gel (firmware) + LVD (hardware)
+
+**ADC (v1):** Gel+ al WT32 **IO35** (ADC1, pin libre). No IO36 (ZMPT) ni
+32/33 (I2C).
+
+```text
+Gel+ ── 47 kΩ ──┬── IO35
+                └── 22 kΩ a GND
+                └── 100 nF a GND
+```
+
+~2,2 V a 6,9 V; ~1,75 V a 5,5 V. Medir Gel+ vs GND del equipo. MQTT:
+tensión, aviso p.ej. bajo 6,0 V. El firmware puede bajar EN bajo 5,5 V;
+si el ESP está muerto, no alcanza.
+
+**LVD (después, en `5V_BUS`):** comparador o TL431 + 2N7000 al mismo EN
+del buck-boost. Gel bajo 5,5 V → EN a GND, sin el ESP. No hace falta
+ADS1115.
 
 ---
 
 ## 10. GPIO WT32 — mapa
 
-| GPIO | Uso |
-|---|---|
-| 0 | ETH CLK + boot |
-| 2 | A7672 PWRKEY (v1) |
-| 4 | A7672 RESET (v1) |
-| 5 | UART módem RX |
-| 14 | DS18B20 |
-| 15 | WDT kick (v1) |
-| 16, 18, 23 | Ethernet |
-| 17 | UART módem TX |
-| 32 | I2C SDA |
-| 33 | I2C SCL |
-| 36 | ZMPT |
-| 39 | Botón de servicio (v1, opcional) |
 
-IO2 / IO4 / IO15 / IO39: propuesta de PCB, no están en firmware.
+| GPIO       | Uso                              |
+| ---------- | -------------------------------- |
+| 0          | ETH CLK + boot                   |
+| 2          | A7672 PWRKEY (v1)                |
+| 4          | A7672 RESET (v1)                 |
+| 5          | UART módem RX                    |
+| 14         | DS18B20                          |
+| 15         | WDT kick (v1)                    |
+| 16, 18, 23 | Ethernet                         |
+| 17         | UART módem TX                    |
+| 32         | I2C SDA                          |
+| 33         | I2C SCL                          |
+| 35         | ADC gel (v1)                     |
+| 36         | ZMPT                             |
+| 39         | Botón de servicio (v1, opcional) |
+
+
+IO2 / IO4 / IO15 / IO35 / IO39: propuesta de PCB, no están en firmware.
 
 ---
 
@@ -330,24 +417,39 @@ IO2 / IO4 / IO15 / IO39: propuesta de PCB, no están en firmware.
 
 **Frente (gabinete):** LEDs PWR, NET, ALARMA. Botón RESET hundido. Bornes IN1–4, OUT1–2. Jack Ethernet. (SIM / SMA antena según mecánica.)
 
-**Adentro:** WT32, A7672, OLED, SHT31, PCF, ZMPT, fuente 5 V 5 A, ZK-S4
-(carga gel, provisorio), XL4015 (backup), WDT (4541+555), AO3401, botón de
-servicio (IO39), USB-serial de fábrica.
+**Adentro:** WT32, A7672, OLED, SHT31, PCF, ZMPT, fuente 5 V 5 A, XY-SJVA
+(carga gel), buck-boost 5 A (backup), WDT (4541+555), AO3401, divisor gel
+en IO35, botón de servicio (IO39), USB-serial de fábrica.
 
-### BOM alimentación (casas tipo Liniers / Electrocomponentes / Micro)
+### Pedido AE (un prototipo)
 
-| Qué | Para |
-|---|---|
-| Fuente 5 V 5 A 220 V | Ya comprada. Riel principal |
-| **ZK-S4** (AE, 80 W) | Boost 5 V → 13,7 V / 0,5 A. Revisar más chico |
-| Gel 12 V 4 Ah | Backup ~4 h |
-| XL4015 ×1 | Solo backup 12 V → 5,4 V |
-| SB560 o MBR2045CT ×1 | Buck → 5V_BUS |
-| AO3401 ×2 (SOT-23) | High-side `5V_SYS` y `5V_MODEM` |
-| 2N7000 / BS170 ×3 | EN del buck, corte SYS, corte módem |
-| CD4541 + NE555 | WDT 4–5 min + one-shot 2 s |
-| Fusible 3–5 A | + de la gel |
-| 1000–2200 µF / 10 V | `5V_BUS` y VCC del A7672 |
+Gel **6 V 7 Ah** (NP7-6): acá, no China (envío de plomo).
 
-No 1N4007 en el camino de potencia. No IRF4905/IRF9540 para conmutar 5 V.
-XL6009 de un pote no carga gel. LTC3780 es overkill de tamaño.
+
+| Cant.     | Buscar                                                                     | Para                                         |
+| --------- | -------------------------------------------------------------------------- | -------------------------------------------- |
+| 1         | **XY-SJVA** (o XY-SJVA-4) CC/CV 3 A 35 W, 5–30 V → 0,5–30 V, **dos potes** | Carga gel: **6,85 V / 0,6 A** desde `5V_PSU` |
+| 1         | Buck-boost **5 A** XL6019 o ZK-4KX                                         | Solo backup gel → **5,4 V**. No el XY-SJVA   |
+| 1 pack 50 | **AO3401** SOT-23                                                          | High-side `5V_SYS` y `5V_MODEM`              |
+| 1 pack 50 | **2N7000** TO-92                                                           | EN backup, corte SYS, corte módem            |
+| 1 pack 10 | **SB560** o SS56 (Schottky 5 A 60 V)                                       | Backup → `5V_BUS`. No 1N4007                 |
+| 5–10      | **CD4541BE** DIP-16                                                        | WDT ~4–5 min                                 |
+| 10        | **NE555P** DIP-8                                                           | One-shot RESET ~2 s                          |
+| 4         | DS18B20 waterproof                                                         | Temps en cadena                              |
+| 1         | SHT31 I2C                                                                  | Humedad                                      |
+| 1         | PCF8574 módulo                                                             | 4 IN + 2 OUT + LEDs                          |
+| 1         | OLED 1.3" SH1106                                                           | Si no está el del lab                        |
+| 1         | ULN2003 + 2 relés 5 V                                                      | OUT1 / OUT2                                  |
+| 5+1       | Fusible 5×20 **5 A** + porta                                               | + de la gel                                  |
+| 10 c/u    | 1000 µF y 2200 µF / 16 V                                                   | `5V_BUS` y A7672                             |
+| packs     | 10 kΩ, 100 kΩ, 47 kΩ, 22 kΩ, 4,7 kΩ, 330 Ω, 100 nF, 10 µF                  | WDT, 1-Wire, LEDs, divisor ADC gel           |
+| 20 c/u    | LED 5 mm verde / rojo / azul                                               | PWR / ALARMA / NET                           |
+| 1         | Pulsador panel NA hundido + táctiles 6×6                                   | RESET gabinete + servicio                    |
+| 1 set     | Bornera 5,08 mm                                                            | IN/OUT                                       |
+
+
+Fuente **5 V 5 A**: ya comprada. No ZK-S4. No XL4015. No XL6009 de un pote.
+No IRF4905/IRF9540 a 5 V. No 1N4007 en potencia.
+
+XY-SJVA: CV **6,85 V**, CC **0,6 A**, vacío primero. No unir IN−/OUT− si el
+tester los ve abiertos. LED verde de “lleno” no vale para gel.
