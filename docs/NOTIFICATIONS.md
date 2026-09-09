@@ -32,7 +32,7 @@ docker compose up -d --build web mqtt-worker
 ```
 
 Recien ahi: web → cliente (grupo Telegram + agenda) → **Probar Telegram** /
-**Probar email** → **Disparar alarma**. WhatsApp no va.
+**Probar email** → **Disparar esta alarma** (en la regla). WhatsApp no va.
 
 ---
 
@@ -176,7 +176,7 @@ el cliente de nuevo.
 5. En el dispositivo: **Publicar config** → habilitar llamadas si ese equipo
    debe llamar → en cada regla elegir contactos, espera entre llamadas y
    rearme.
-6. En el dispositivo: **Disparar alarma**.
+6. En el dispositivo: **Disparar esta alarma** en la regla a probar.
    - Email y Telegram salen ya (a los contactos de esa prueba: todos).
    - SMS si hay telefono.
    - Llamada solo si `Llamadas habilitadas` y hay telefono. Mismo camino CSFB
@@ -188,7 +188,7 @@ de que se normalice, para volver a sonar si el sensor sigue mal. `0` = no
 vuelve a sonar hasta que se normalice y se vuelva a romper.
 
 Una alarma de regla no se vuelve a disparar mientras sigue abierta (salvo
-rearme por histeresis). **Disparar alarma** no espera eso: es una prueba.
+rearme por histeresis). **Disparar esta alarma** no espera la condicion del sensor: es una prueba.
 
 ## 6. Checklist rapido
 
@@ -202,5 +202,5 @@ rearme por histeresis). **Disparar alarma** no espera eso: es una prueba.
 - [ ] Telefono `+549...` en el contacto
 - [ ] En la regla, tildar quien recibe SMS/email/Telegram/llamada
 - [ ] En el equipo, llamadas habilitadas si corresponde
-- [ ] **Disparar alarma** genera evento `alarm` y los avisos
+- [ ] **Disparar esta alarma** genera evento `alarm` y los avisos de esa regla
 - [ ] El enlace/boton confirma y silencia; al cerrarse la alarma el enlace muere

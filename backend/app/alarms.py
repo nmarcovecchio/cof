@@ -241,12 +241,14 @@ def configured_rules_view(device: Device) -> list[dict]:
         title = _as_text(rule.get("description")) or sensor_name
         rows.append(
             {
+                "id": rule_key(rule),
                 "title": title,
                 "condition": f"{sensor_name} {operator} {rule.get('threshold')}",
                 "duration_label": "inmediato" if duration <= 0 else f"durante {duration}s",
                 "actions": actions,
                 "who": who,
                 "escalate": bool(rule.get("escalate_calls", True)),
+                "escalate_delay": _safe_seconds(rule.get("escalate_delay_seconds")),
                 "hysteresis": hysteresis,
                 "on_clear": [ACTION_LABELS.get(str(item), str(item)) for item in (_id_list(rule.get("clear_actions")) or [])],
             }
@@ -350,6 +352,67 @@ def _mqtt_note(contacts: dict, sent: str) -> str:
     if contacts.get("device_live"):
         return sent
     return f"{sent} (equipo no visto en 3 min; SMS/llamada se pueden perder)"
+
+
+def rule_actions(rule: dict) -> list[str]:
+    selected = [str(item) for item in (rule.get("actions") or [])]
+    actions = [item for item in selected if item != "log_only"]
+    if not actions and "log_only" not in selected:
+        return ["email", "telegram"]
+    return actions
+
+
+def find_rule(config: dict, rule_id: str) -> dict | None:
+    wanted = (rule_id or "").strip()
+    if not wanted:
+        return None
+    for rule in _iter_dicts((config or {}).get("rules")):
+        if rule_key(rule) == wanted:
+            return rule
+    return None
+
+
+def fire_rule_alarm(
+    device: Device,
+    rule: dict,
+    *,
+    source: str,
+    title: str,
+    detail: str,
+    telemetry: dict | None = None,
+    config: dict | None = None,
+    hold_until_ack: bool = False,
+) -> Event:
+    key = rule_key(rule)
+    hysteresis = _safe_seconds(rule.get("hysteresis_seconds"), 0)
+    extra = {
+        "rule_key": key,
+        "sensor_id": rule.get("sensor_id"),
+        "operator": rule.get("operator"),
+        "threshold": rule.get("threshold"),
+        "value": sensor_value(telemetry or {}, str(rule.get("sensor_id") or "")),
+        "escalate_calls": bool(rule.get("escalate_calls", True)),
+        "escalate_delay_seconds": _safe_seconds(rule.get("escalate_delay_seconds"), 0),
+        "hysteresis_seconds": hysteresis,
+        "email_contact_ids": _id_list(rule.get("email_contact_ids")),
+        "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
+        "call_contact_ids": _id_list(rule.get("call_contact_ids")),
+        "clear_actions": [
+            item
+            for item in (rule.get("clear_actions") or ["email", "telegram"])
+            if item in {"email", "telegram", "sms"}
+        ],
+        "hold_until_ack": hold_until_ack,
+    }
+    return dispatch_alarm(
+        device,
+        source=source,
+        title=title,
+        detail=detail,
+        actions=rule_actions(rule),
+        extra=extra,
+        config=config,
+    )
 
 
 def dispatch_alarm(
@@ -689,7 +752,7 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
         if not holds:
             _condition_since(device.id, key, now_ts, False)
             open_event = open_alarm_event(device.id, key)
-            if open_event is not None:
+            if open_event is not None and not (open_event.payload or {}).get("hold_until_ack"):
                 from .modem_queue import cancel_alarm_jobs
 
                 cancel_alarm_jobs(open_event.id, reason="cleared")
@@ -721,31 +784,13 @@ def evaluate_device_rules(device: Device, telemetry: dict) -> list[Event]:
         if since is None or (now_ts - since) < duration:
             continue
 
-        selected = list(rule.get("actions") or [])
-        actions = [item for item in selected if item != "log_only"]
-        if not actions and "log_only" not in selected:
-            actions = ["email", "telegram"]
-        detail = format_rule_detail(rule, telemetry)
-        event = dispatch_alarm(
+        event = fire_rule_alarm(
             device,
+            rule,
             source="rule",
             title="Alarma CallOnFail",
-            detail=detail,
-            actions=actions,
-            extra={
-                "rule_key": key,
-                "sensor_id": rule.get("sensor_id"),
-                "operator": rule.get("operator"),
-                "threshold": rule.get("threshold"),
-                "value": sensor_value(telemetry, str(rule.get("sensor_id") or "")),
-                "escalate_calls": bool(rule.get("escalate_calls", True)),
-                "escalate_delay_seconds": _safe_seconds(rule.get("escalate_delay_seconds"), 0),
-                "hysteresis_seconds": hysteresis,
-                "email_contact_ids": _id_list(rule.get("email_contact_ids")),
-                "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
-                "call_contact_ids": _id_list(rule.get("call_contact_ids")),
-                "clear_actions": [item for item in (rule.get("clear_actions") or ["email", "telegram"]) if item in {"email", "telegram", "sms"}],
-            },
+            detail=format_rule_detail(rule, telemetry),
+            telemetry=telemetry,
             config=config,
         )
         set_rearm(device.id, key, None)

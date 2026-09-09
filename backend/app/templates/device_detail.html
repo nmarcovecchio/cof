@@ -163,20 +163,40 @@
       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar reglas</a>
       {% endif %}
     </div>
+    {% if not device.archived_at %}
+    <form class="d-flex flex-wrap align-items-center gap-2 mb-3" method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar una alarma real a toda la agenda? SMS, email, Telegram y llamadas. Queda abierta hasta un OK.');">
+      {{ csrf_field() }}
+      <button class="btn btn-outline-danger" type="submit">
+        <i class="bi bi-exclamation-triangle"></i> Probar alarma
+      </button>
+      <span class="small text-muted">Agenda completa: SMS, email, Telegram y llamadas. No es solo el módem.</span>
+    </form>
+    {% endif %}
     {% if configured_rules %}
       {% for rule in configured_rules %}
-      <div class="border rounded p-3{% if not loop.last %} mb-2{% endif %}">
-        <div class="fw-semibold">{{ rule.title }}</div>
-        <div class="small text-muted">Dispara si {{ rule.condition }} · {{ rule.duration_label }}</div>
-        <div class="small mt-1">
-          Avisa: {{ rule.actions|join(', ') or 'nada' }}
-          {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
+      <div class="border rounded p-3 d-flex flex-wrap justify-content-between align-items-start gap-3{% if not loop.last %} mb-2{% endif %}">
+        <div>
+          <div class="fw-semibold">{{ rule.title }}</div>
+          <div class="small text-muted">Dispara si {{ rule.condition }} · {{ rule.duration_label }}</div>
+          <div class="small mt-1">
+            Avisa: {{ rule.actions|join(', ') or 'nada' }}
+            {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
+          </div>
+          <div class="small text-muted">
+            {% if rule.escalate %}Escala al siguiente telefono{% if rule.escalate_delay %} cada {{ rule.escalate_delay }}s{% endif %} si no hay OK.{% else %}Llama solo al primero.{% endif %}
+            {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
+            {% if rule.on_clear %} Al normalizarse: {{ rule.on_clear|join(', ') }}.{% endif %}
+          </div>
         </div>
-        <div class="small text-muted">
-          {% if rule.escalate %}Escala al siguiente telefono si no atienden.{% else %}Llama solo al primero.{% endif %}
-          {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
-          {% if rule.on_clear %} Al normalizarse: {{ rule.on_clear|join(', ') }}.{% endif %}
-        </div>
+        {% if not device.archived_at %}
+        <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar esta regla? Avisa como esta configurada (no a toda la agenda). Queda abierta hasta un OK.');">
+          {{ csrf_field() }}
+          <input type="hidden" name="rule_id" value="{{ rule.id }}">
+          <button class="btn btn-sm btn-outline-danger" type="submit">
+            <i class="bi bi-exclamation-triangle"></i> Disparar esta alarma
+          </button>
+        </form>
+        {% endif %}
       </div>
       {% endfor %}
     {% else %}
@@ -308,14 +328,7 @@
     {% if not device.archived_at %}
     <form class="test-actions" id="modem-test-form" method="post">
       {{ csrf_field() }}
-      <div class="small text-muted mb-2">Pruebas</div>
-      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-        <button class="btn btn-outline-danger" type="submit" formaction="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" formnovalidate onclick="return confirm('Disparar una alarma real de prueba? Queda abierta, escala llamadas y se puede silenciar con OK o desde la web.');">
-          <i class="bi bi-exclamation-triangle"></i> Probar alarma
-        </button>
-        <span class="small text-muted">Agenda completa: SMS, email, Telegram y llamadas. No es solo el módem.</span>
-      </div>
-      <div class="small text-muted mb-2">Módem</div>
+      <div class="small text-muted mb-2">Pruebas del modem</div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <input class="form-control" id="test-phone" name="phone" type="tel" required placeholder="+54911..." value="{{ test_phone|default('') }}" style="max-width: 16rem;">
         <input class="form-control" id="test-sms-text" name="text" type="text" maxlength="800" value="CallOnFail prueba de llamada" style="max-width: 20rem;">

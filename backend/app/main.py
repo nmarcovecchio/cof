@@ -19,7 +19,16 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .alarm_ack import ACK_VIA, acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
 from .alarm_log import friendly_step
-from .alarms import configured_rules_view, dispatch_alarm, latest_config_payload, resolve_contacts
+from .alarms import (
+    configured_rules_view,
+    dispatch_alarm,
+    find_rule,
+    fire_rule_alarm,
+    latest_config_payload,
+    open_alarm_event,
+    resolve_contacts,
+    rule_key,
+)
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
@@ -783,12 +792,34 @@ def create_app() -> Flask:
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         if device.archived_at is not None:
             return redirect(url_for("device_detail", device_uid=device.device_uid))
-        event = dispatch_alarm(
-            device,
-            source="manual",
-            title="Alarma de prueba",
-            detail="Disparada desde la web",
-        )
+        config = latest_config_payload(device)
+        rule_id = (request.form.get("rule_id") or "").strip()
+        if not rule_id:
+            event = dispatch_alarm(
+                device,
+                source="manual",
+                title="Alarma de prueba",
+                detail="Disparada desde la web (agenda completa)",
+            )
+        else:
+            rule = find_rule(config, rule_id)
+            if rule is None:
+                flash("Elegí una regla publicada para probarla.", "warning")
+                return redirect(url_for("device_detail", device_uid=device.device_uid))
+            open_event = open_alarm_event(device.id, rule_key(rule))
+            if open_event is not None:
+                flash("Esa regla ya tiene una alarma abierta. Silenciala antes de probar de nuevo.", "warning")
+                return redirect(url_for("device_detail", device_uid=device.device_uid))
+            title = (rule.get("description") or "").strip() or "Alarma de prueba"
+            event = fire_rule_alarm(
+                device,
+                rule,
+                source="manual",
+                title=title,
+                detail="Disparada desde la web",
+                config=config,
+                hold_until_ack=True,
+            )
         db.session.commit()
         results = (event.payload or {}).get("results") or {}
         sent = [name for name, value in results.items() if str(value).startswith("sent") or str(value).startswith("queued")]

@@ -168,5 +168,5 @@ If ACK is `unsupported`, OTA first.
 
 1. MQTT TLS + per-device passwords — only with Serial access to the ESP32.
 
-Alarmas por regla, email, Telegram y el boton **Disparar alarma** estan en
+Alarmas por regla, email, Telegram y **Disparar esta alarma** estan en
 `docs/NOTIFICATIONS.md`. El telefono/email/chat van en el cliente.
