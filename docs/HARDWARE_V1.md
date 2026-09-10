@@ -6,6 +6,10 @@ CC/CV, seteo 6,85 V / 0,6 A) + buck-boost 5 A de backup + WDT/RESET.
 
 Placa: WT32-ETH01 + A7672SA-FASE. Perfil `cof-wt32-a7672-v1`.
 
+Esquemático KiCad 10: `hardware/kicad/cof-v1.kicad_pro`
+(hoja Alimentacion + hoja ESP32/modem/sensores). PDF: `hardware/kicad/cof-v1.pdf`.
+BOM del proto: `hardware/kicad/cof-v1-bom.csv`. El pedido AE de abajo es packs / recambio, no el exacto del esquemático.
+
 **Lab** = ya cableado y en firmware. **v1** = placa a diseñar; firmware de I/O, RESET, WDT y LEDs de gabinete todavía no.
 
 No usar GPIO21/22 para I2C. No alimentar el WT32 por 5V y 3V3 a la vez.
@@ -156,9 +160,10 @@ emergencia. No 12 V.
 La gel 6 V llena está ~6,8 V; vacía (corte) ~5,5 V. Eso **cruza** los 5,4 V
 del backup. Un buck (XL4015) necesita ~1,5 V de cabeza: solo sirve con la
 bateria llena. Un boost solo se queda corto cuando está llena. El puente
-es un **buck-boost automático** a 5,4 V (módulo 5 A tipo XL6019 / ZK-4KX;
-no el XY-SJVA). Si no trae EN, un AO3401 corta el + de la gel al
-convertidor mientras haya `5V_PSU`.
+es un **buck-boost automático** a 5,4 V (módulo 5 A tipo **XL6019**, no
+el XY-SJVA, no ZK-4KX). El **XL6009 de un pote es solo boost**: con la gel
+llena (~6,8 V) no puede entregar 5,4 V. Si no trae EN, un AO3401 corta el
++ de la gel al convertidor mientras haya `5V_PSU`.
 
 ---
 
@@ -429,7 +434,7 @@ Gel **6 V 7 Ah** (NP7-6): acá, no China (envío de plomo).
 | Cant.     | Buscar                                                                     | Para                                         |
 | --------- | -------------------------------------------------------------------------- | -------------------------------------------- |
 | 1         | **XY-SJVA** (o XY-SJVA-4) CC/CV 3 A 35 W, 5–30 V → 0,5–30 V, **dos potes** | Carga gel: **6,85 V / 0,6 A** desde `5V_PSU` |
-| 1         | Buck-boost **5 A** XL6019 o ZK-4KX                                         | Solo backup gel → **5,4 V**. No el XY-SJVA   |
+| 1         | Buck-boost auto **XL6019** (no XL6009 de un pote, no ZK-4KX)                | Solo backup gel → **5,4 V**. No el XY-SJVA   |
 | 1 pack 50 | **AO3401** SOT-23                                                          | High-side `5V_SYS` y `5V_MODEM`              |
 | 1 pack 50 | **2N7000** TO-92                                                           | EN backup, corte SYS, corte módem            |
 | 1 pack 10 | **SB560** o SS56 (Schottky 5 A 60 V)                                       | Backup → `5V_BUS`. No 1N4007                 |

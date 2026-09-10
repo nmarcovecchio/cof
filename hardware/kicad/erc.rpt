@@ -1,0 +1,49 @@
+ERC report (2026-09-09T23:30:26, Encoding UTF8)
+Report includes: Errors, Warnings, Exclusions
+
+***** Sheet /
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(114.30 mm, 73.66 mm): Symbol U1 [XY_SJVA]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(165.10 mm, 152.40 mm): Symbol U2 [BUCKBOOST]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(114.30 mm, 101.60 mm): Symbol U5 [WT32]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(114.30 mm, 190.50 mm): Symbol U7 [OLED]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(114.30 mm, 236.22 mm): Symbol U8 [SHT31]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(114.30 mm, 281.94 mm): Symbol U9 [DS18B20]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(187.96 mm, 281.94 mm): Symbol U10 [ZMPT]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(238.76 mm, 91.44 mm): Symbol U6 [A7672]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(254.00 mm, 190.50 mm): Symbol U11 [PCF8574]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(340.36 mm, 271.78 mm): Symbol K1 [RELAY]
+[lib_symbol_issues]: La configuración actual no incluye la biblioteca de símbolos 'Module'
+    ; warning
+    @(340.36 mm, 327.66 mm): Symbol K2 [RELAY]
+
+***** Sheet /Alimentacion/
+
+***** Sheet /ESP32 modem sensores/
+
+ ** ERC messages: 11  Errors 0  Warnings 11
+
+ ** Ignored checks:
+    - Global label only appears once in the schematic
+    - Four connection points are joined together
+    - SPICE model issue
+    - Assigned footprint doesn't match footprint filters
