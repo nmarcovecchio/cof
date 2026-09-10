@@ -26,6 +26,7 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
 LIB = Path(r"C:\Program Files\KiCad\10.0\share\kicad\symbols")
+KICAD_PRO_TEMPLATE = Path(r"C:\Program Files\KiCad\10.0\share\kicad\template\kicad.kicad_pro")
 
 ROOT_UUID = "a1111111-1111-4111-8111-111111111111"
 PWR_UUID = "a2222222-2222-4222-8222-222222222222"
@@ -37,7 +38,6 @@ EXTRACT = {
     "Device:C": ("Device.kicad_sym", "C"),
     "Device:C_Polarized": ("Device.kicad_sym", "C_Polarized"),
     "Device:D": ("Device.kicad_sym", "D"),
-    "Device:D_Schottky": ("Device.kicad_sym", "D_Schottky"),
     "Device:LED": ("Device.kicad_sym", "LED"),
     "Device:Fuse": ("Device.kicad_sym", "Fuse"),
     "Device:Battery": ("Device.kicad_sym", "Battery"),
@@ -47,7 +47,6 @@ EXTRACT = {
     "Timer:NE555D": ("Timer.kicad_sym", "NE555D"),
     "Switch:SW_Push": ("Switch.kicad_sym", "SW_Push"),
     "Connector_Generic:Conn_01x02": ("Connector_Generic.kicad_sym", "Conn_01x02"),
-    "Connector_Generic:Conn_01x03": ("Connector_Generic.kicad_sym", "Conn_01x03"),
     "Connector_Generic:Conn_01x04": ("Connector_Generic.kicad_sym", "Conn_01x04"),
     "Connector_Generic:Conn_01x05": ("Connector_Generic.kicad_sym", "Conn_01x05"),
     "Connector_Generic:Conn_01x06": ("Connector_Generic.kicad_sym", "Conn_01x06"),
@@ -97,18 +96,30 @@ def take_sexp(s: str, start: int) -> str:
 
 
 def extract_symbol(lib_file: str, name: str) -> str:
-    text = (LIB / lib_file).read_text(encoding="utf-8")
-    needle = f'(symbol "{name}"'
-    idx = 0
-    while True:
-        j = text.find(needle, idx)
-        if j < 0:
-            raise KeyError(f"{name} not in {lib_file}")
-        after = j + len(needle)
-        if after < len(text) and text[after] in " \r\n\t":
-            body = take_sexp(text, j)
-            return body.replace(f'(symbol "{name}"', f'(symbol "{lib_file[:-10]}:{name}"', 1)
-        idx = j + 1
+    lib_id = f"{lib_file.replace('.kicad_sym', '')}:{name}"
+    if LIB.exists():
+        text = (LIB / lib_file).read_text(encoding="utf-8")
+        needle = f'(symbol "{name}"'
+        idx = 0
+        while True:
+            j = text.find(needle, idx)
+            if j < 0:
+                break
+            after = j + len(needle)
+            if after < len(text) and text[after] in " \r\n\t":
+                body = take_sexp(text, j)
+                return body.replace(f'(symbol "{name}"', f'(symbol "{lib_id}"', 1)
+            idx = j + 1
+    for sch_name in ("01-alimentacion.kicad_sch", "02-io.kicad_sch"):
+        path = OUT / sch_name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        needle = f'(symbol "{lib_id}"'
+        j = text.find(needle)
+        if j >= 0:
+            return take_sexp(text, j)
+    raise KeyError(f"{lib_id} not in KiCad libs or existing sheets")
 
 
 def parse_pins(sym_text: str) -> dict[str, tuple[float, float, float]]:
@@ -241,7 +252,7 @@ BOXES = {
         [("3", "OUT+"), ("4", "OUT-")],
     ),
     "Module:BUCKBOOST": (
-        "XL6019 auto 5.4V",
+        "XL6019 auto 5.1V",
         [("1", "VIN+"), ("2", "VIN-"), ("3", "EN")],
         [("4", "VOUT+"), ("5", "VOUT-")],
     ),
@@ -305,6 +316,32 @@ BOXES = {
         "Relay 5V",
         [("1", "COIL+"), ("2", "COIL-")],
         [("3", "COM"), ("4", "NO")],
+    ),
+    "Module:BUZZER": (
+        "Buzzer 5V activo",
+        [("1", "+"), ("2", "-")],
+        [],
+    ),
+    "Module:IDC10": (
+        "IDC-10 A↔B",
+        [],
+        [
+            ("1", "GND"),
+            ("2", "5V_SYS"),
+            ("3", "GND"),
+            ("4", "5V_MODEM"),
+            ("5", "GEL_ADC"),
+            ("6", "IO15"),
+            ("7", "MODEM_CUT"),
+            ("8", "LED_PWR"),
+            ("9", "BTN_RESET"),
+            ("10", "GND"),
+        ],
+    ),
+    "Module:AHCTBUF": (
+        "74HCT125",
+        [("1", "1OE"), ("2", "1A"), ("7", "GND"), ("4", "2A"), ("9", "3A"), ("12", "4A")],
+        [("3", "1Y"), ("14", "VCC"), ("6", "2OE"), ("10", "3OE"), ("13", "4OE")],
     ),
 }
 
@@ -918,8 +955,8 @@ class Sch:
 	(paper "{self.paper}")
 	(title_block
 		(title "{self.title}")
-		(date "2026-09-09")
-		(rev "1")
+		(date "2026-09-10")
+		(rev "1.2")
 		(company "CallOnFail")
 		(comment 1 "{self.comment}")
 	)
@@ -971,8 +1008,9 @@ def build_power(lookups) -> Sch:
     s = Sch(
         PWR_UUID,
         "CallOnFail v1 — Alimentacion",
-        "Gel 6V 7Ah + XY-SJVA 6,85V/0,6A + buck-boost 5,4V. No 12V, no ZK-S4, no XL4015.",
+        "Gel 6V 7Ah + XY-SJVA 6,85V/0,6A + buck-boost 5,1V. No 12V, no ZK-S4, no XL4015.",
         f"/{ROOT_UUID}/{PWR_UUID}",
+        paper="A1",
     )
     s.pin_lookup = lookups
 
@@ -1024,72 +1062,112 @@ def build_power(lookups) -> Sch:
     # --- Backup: U2 debajo/izq de la bateria, VIN corto ---
     s.place("Device:R", "R1", "10k", g(48), g(108), 0)
     s.place("Transistor_FET:2N7000", "Q5", "2N7000", g(70), g(124), 0)
+    s.place("Device:R", "R18", "100k", g(48), g(140), 0)
     s.place("Module:BUCKBOOST", "U2", "XL6019", g(130), g(120), 0)
     s.place("Device:R", "R2", "10k", g(96), g(146), 0)
-    s.place("Device:D_Schottky", "D1", "SB560", g(178), g(112), 180)
-    s.place("Device:C_Polarized", "C1", "2200uF/16V", g(210), g(120), 0)
+    s.place("Device:Q_PMOS", "Q10", "NDP6020P", g(154), g(112), 180)
+    s.place("Transistor_FET:2N7000", "Q11", "2N7000", g(230), g(108), 0)
+    s.place("Device:R", "R37", "100k", g(166), g(128), 0)
+    s.place("Device:Q_PMOS", "Q8", "NDP6020P", g(178), g(96), 180)
+    s.place("Transistor_FET:2N7000", "Q9", "2N7000", g(206), g(96), 0)
+    s.place("Device:R", "R36", "100k", g(190), g(80), 0)
+    s.place("Device:C_Polarized", "C1", "2200uF/16V", g(256), g(120), 0)
+    s.place("Device:C", "C10", "100n", g(278), g(120), 0)
     s.tap_net("R1", "1", "5V_PSU", "U", g(6))
     s.join("R1", "2", "Q5", "2")
+    s.join("R1", "2", "R18", "1")
+    s.junc(*s.pin("R1", "2"))
+    s.gnd_pin("R18", "2", "D")
     s.gnd_pin("Q5", "1", "D")
     s.join("Q5", "3", "U2", "3")
+    s.tap_local("R1", "2", "PSU_DET", "R", g(8))
     s.join("BT1", "1", "U2", "1")
     s.join("BT1", "1", "R2", "1")
     s.join("R2", "2", "U2", "3")
     s.junc(*s.pin("U2", "3"))
     s.gnd_pin("U2", "2", "L")
     s.gnd_pin("U2", "5", "D")
-    s.join("U2", "4", "D1", "2")
-    s.join("D1", "1", "C1", "1")
+    s.join("U2", "4", "Q10", "D")
+    s.join("Q10", "S", "C1", "1")
+    s.join("Q10", "G", "Q11", "3")
+    s.join("Q10", "G", "R37", "1")
+    s.junc(*s.pin("Q10", "G"))
+    s.join("R37", "2", "C1", "1")
+    s.gnd_pin("Q11", "1", "D")
+    s.tap_local("U2", "3", "BB_EN", "R", g(6))
+    s.tap_local("Q11", "2", "BB_EN", "L", g(6))
+    s.tap_net("Q8", "D", "5V_PSU", "L", g(6))
+    s.join("Q8", "S", "C1", "1")
+    s.join("Q8", "G", "Q9", "3")
+    s.join("Q8", "G", "R36", "1")
+    s.junc(*s.pin("Q8", "G"))
+    s.join("R36", "2", "C1", "1")
+    s.gnd_pin("Q9", "1", "D")
+    s.tap_local("Q9", "2", "PSU_DET", "L", g(6))
     s.gnd_pin("C1", "2", "D")
+    s.join("C1", "1", "C10", "1")
+    s.gnd_pin("C10", "2", "D")
     c1p = s.pin("C1", "1")
     s.junc(*c1p)
     s.tap_net("C1", "1", "5V_BUS", "R", g(10))
     s.place("power:PWR_FLAG", "#FLG_BUS", "PWR_FLAG", c1p[0] + g(16), c1p[1], 0)
     s.wire(c1p[0], c1p[1], c1p[0] + g(16), c1p[1])
-    s.text("5V_PSU -> Q5 ON -> EN=GND -> backup OFF. Sin PSU -> R2 sube EN a Gel+.", g(32), g(162))
-    s.text("Ajuste 5,4 V. D1 SB560. XL6019 buck-boost auto. No XL6009 (solo boost). No ZK-4KX.", g(32), g(166))
-    s.text("Si el modulo no tiene EN: AO3401 corta Gel+ a VIN.", g(32), g(170))
+    s.text("Hay PSU: Q5/Q9 ON -> backup EN=0, Q8 ON, Q10 OFF.", g(32), g(162))
+    s.text("Sin PSU: Q8 OFF, EN=Gel+, Q11 ON, Q10 ON. Ambos NDP6020P S=BUS D=fuente.", g(32), g(166))
+    s.text("Ajuste XL6019 5,1 V (ya no 5,4: no hay Schottky). No XL6009 / ZK-4KX.", g(32), g(170))
 
-    # --- High-side justo debajo de C1 ---
-    s.text("AO3401 S=5V_BUS. Gate a GND = ON. 2N7000 sube el gate = OFF.", g(32), g(176), 1.50)
-    s.place("Device:Q_PMOS", "Q1", "AO3401", g(160), g(196), 180)
-    s.place("Transistor_FET:2N7000", "Q2", "2N7000", g(188), g(196), 0)
+    # --- High-side: SYS lo maneja el 555 CMOS; modem sigue con inversor (GPIO 3V3) ---
+    s.text("TLC555 HIGH=5V corta Q1. Modem: 74HCT125 DIP (3V3 in, 5V out). Todo THT.", g(32), g(176), 1.50)
+    s.place("Device:Q_PMOS", "Q1", "NDP6020P", g(160), g(196), 180)
     s.place("Device:R", "R3", "100k", g(174), g(220), 0)
-    s.join("Q1", "G", "Q2", "3")
+    s.place("Device:R", "R19", "1k", g(188), g(196), 0)
     s.join("Q1", "G", "R3", "1")
+    s.join("Q1", "G", "R19", "2")
     s.junc(*s.pin("Q1", "G"))
     s.gnd_pin("R3", "2", "D")
-    s.gnd_pin("Q2", "1", "D")
+    s.tap_local("R19", "1", "WDT_PULSE", "R", g(6))
     s.tap_net("Q1", "D", "5V_SYS", "D", g(6))
-    s.tap_local("Q2", "2", "WDT_PULSE", "R", g(6))
-    s.text("Q1 corta 5V_SYS ~2 s. Default ON.", g(32), g(240))
+    s.text("Q1 5V_SYS. 555 idle LOW = ON. Pulso HIGH ~2 s = OFF.", g(32), g(244))
 
-    s.place("Device:Q_PMOS", "Q3", "AO3401", g(210), g(196), 180)
-    s.place("Transistor_FET:2N7000", "Q4", "2N7000", g(238), g(196), 0)
-    s.place("Device:R", "R4", "100k", g(224), g(220), 0)
-    s.place("Device:C_Polarized", "C2", "1000uF/16V", g(268), g(220), 0)
-    s.join("Q3", "G", "Q4", "3")
+    s.place("Device:Q_PMOS", "Q3", "NDP6020P", g(256), g(196), 180)
+    s.place("Module:AHCTBUF", "U13", "74HCT125", g(318), g(196), 0)
+    s.place("Device:R", "R4", "100k", g(268), g(220), 0)
+    s.place("Device:R", "R23", "1k", g(280), g(176), 0)
+    s.place("Device:R", "R24", "100k", g(292), g(220), 0)
+    s.place("Device:C", "C17", "100n", g(332), g(228), 0)
+    s.gnd_rail("U13", ["1", "7", "4", "9", "12"], "L")
+    s.rail("U13", ["14", "6", "10", "13"], "5V_BUS", "R")
+    s.join("U13", "2", "R23", "2")
+    s.join("U13", "2", "R24", "1")
+    s.junc(*s.pin("U13", "2"))
+    s.gnd_pin("R24", "2", "D")
+    s.tap_net("R23", "1", "MODEM_CUT", "L", g(6))
+    s.join("U13", "3", "Q3", "G")
     s.join("Q3", "G", "R4", "1")
     s.junc(*s.pin("Q3", "G"))
     s.gnd_pin("R4", "2", "D")
-    s.gnd_pin("Q4", "1", "D")
-    s.join("Q3", "D", "C2", "1")
-    s.gnd_pin("C2", "2", "D")
-    s.junc(*s.pin("Q3", "D"))
+    s.tap_net("C17", "1", "5V_BUS", "U", g(4))
+    s.gnd_pin("C17", "2", "D")
     s.tap_net("Q3", "D", "5V_MODEM", "D", g(6))
-    s.tap_net("Q4", "2", "MODEM_CUT", "R", g(6))
-    s.text("Q3 5V_MODEM. GPIO de salida (no IO39, no IO2). C2 junto al A7672.", g(120), g(240))
+    s.text("Q3 5V_MODEM. 74HCT125 DIP-14: 1=OE 2=A 3=Y 7=GND 14=VCC. 6/10/13→VCC, 4/9/12→GND.", g(248), g(244))
 
     q1s = s.pin("Q1", "S")
     q3s = s.pin("Q3", "S")
-    bus_y = g(180)
+    q8s = s.pin("Q8", "S")
+    q10s = s.pin("Q10", "S")
+    bus_y = g(168)
     s.wire(c1p[0], c1p[1], c1p[0], bus_y)
     s.wire(q1s[0], q1s[1], q1s[0], bus_y)
     s.wire(q3s[0], q3s[1], q3s[0], bus_y)
-    s.wire(min(c1p[0], q1s[0], q3s[0]), bus_y, max(c1p[0], q1s[0], q3s[0]), bus_y)
+    s.wire(q8s[0], q8s[1], q8s[0], bus_y)
+    s.wire(q10s[0], q10s[1], q10s[0], bus_y)
+    xs = (c1p[0], q1s[0], q3s[0], q8s[0], q10s[0])
+    s.wire(min(xs), bus_y, max(xs), bus_y)
     s.junc(c1p[0], bus_y)
     s.junc(q1s[0], bus_y)
     s.junc(q3s[0], bus_y)
+    s.junc(q8s[0], bus_y)
+    s.junc(q10s[0], bus_y)
 
     # LED PWR al lado de Q1 (5V_SYS), no cruzando Q3
     s.place("Device:R", "R5", "330R", g(128), g(196), 90)
@@ -1102,7 +1180,7 @@ def build_power(lookups) -> Sch:
     s.text("LED PWR de frente, sin ESP.", g(4), g(214))
 
     # --- WDT a la derecha, bloque propio ---
-    s.text("WDT CD4541 (~4-5 min) + NE555 (~2 s) en 5V_BUS", g(300), g(20), 1.50)
+    s.text("WDT CD4541 (~4-5 min) + TLC555 CMOS (~2 s) en 5V_BUS", g(300), g(20), 1.50)
     s.place("Timer:CD4541BE", "U3", "CD4541BE", g(340), g(76), 0)
     p_rtc = s.pin("U3", "1")
     p_ctc = s.pin("U3", "2")
@@ -1122,7 +1200,10 @@ def build_power(lookups) -> Sch:
     s.rail("U3", ["9", "10", "12", "13"], "5V_BUS", "L")
     s.nc(*s.pin("U3", "4"))
     s.nc(*s.pin("U3", "11"))
-    s.text("R8/C4: tunear 4-5 min (2^16). Pin 9 HIGH => Q activo bajo.", g(278), g(108))
+    s.place("Device:C", "C8", "100n", g(368), g(40), 0)
+    s.tap_net("C8", "1", "5V_BUS", "U", g(4))
+    s.gnd_pin("C8", "2", "D")
+    s.text("R8/C4: tunear 4-5 min (2^16). Pin 9 HIGH => Q activo bajo. C8 junto al 4541.", g(278), g(108))
 
     s.place("Device:C", "C5", "100n", g(400), g(38), 90)
     s.place("Device:R", "R10", "100k", g(420), g(54), 0)
@@ -1133,9 +1214,12 @@ def build_power(lookups) -> Sch:
     s.junc(*s.pin("C5", "2"))
     s.gnd_pin("R10", "2", "D")
     s.tap_local("D3", "1", "WDT_MR", "L", g(6))
-    s.text("Patada IO15 acople. No DC a GND en IO15.", g(380), g(78))
+    s.place("Device:R", "R20", "100k", g(356), g(96), 0)
+    s.tap_local("R20", "1", "WDT_MR", "L", g(6))
+    s.gnd_pin("R20", "2", "D")
+    s.text("Patada IO15 acople. No DC a GND en IO15. R20 baja MR.", g(380), g(78))
 
-    s.place("Timer:NE555D", "U4", "NE555P", g(410), g(136), 0)
+    s.place("Timer:NE555D", "U4", "TLC555", g(410), g(136), 0)
     s.place("Device:C", "C6", "10n", g(370), g(120), 0)
     s.place("Device:R", "R11", "22k", g(370), g(154), 0)
     s.place("Device:C_Polarized", "C7", "100uF", g(350), g(170), 0)
@@ -1144,6 +1228,9 @@ def build_power(lookups) -> Sch:
     s.place("Device:R", "R12", "10k", g(340), g(162), 0)
     s.place("Switch:SW_Push", "SW1", "RESET gabinete", g(444), g(170), 0)
     s.tap_net("U4", "8", "5V_BUS", "U", g(4))
+    s.place("Device:C", "C9", "100n", g(430), g(120), 0)
+    s.tap_net("C9", "1", "5V_BUS", "U", g(4))
+    s.gnd_pin("C9", "2", "D")
     s.gnd_pin("U4", "1", "D")
     s.tap_net("U4", "4", "5V_BUS", "L", g(10))
     s.join("U4", "5", "C6", "1")
@@ -1176,7 +1263,20 @@ def build_power(lookups) -> Sch:
     s.tap_net("R12", "1", "5V_BUS", "U", g(6))
     s.gnd_pin("SW1", "2", "D")
     s.tap_net("SW1", "1", "BTN_RESET", "R", g(6))
-    s.text("D5: timeout 4541 baja TRIG. SW1 NA a GND. OUT 555 = WDT_PULSE.", g(292), g(190))
+    s.text("D5: timeout 4541 baja TRIG. SW1 NA a GND. TLC555 OUT a Q1 (no NE555 bipolar).", g(278), g(190))
+
+    s.place("Module:IDC10", "J7", "IDC A→B", g(48), g(280), 0)
+    s.gnd_pin("J7", "1", "R")
+    s.tap_net("J7", "2", "5V_SYS", "R", g(8))
+    s.gnd_pin("J7", "3", "R")
+    s.tap_net("J7", "4", "5V_MODEM", "R", g(8))
+    s.tap_net("J7", "5", "GEL_ADC", "R", g(8))
+    s.tap_net("J7", "6", "IO15", "R", g(8))
+    s.tap_net("J7", "7", "MODEM_CUT", "R", g(8))
+    s.tap_net("J7", "8", "LED_PWR", "R", g(8))
+    s.tap_net("J7", "9", "BTN_RESET", "R", g(8))
+    s.gnd_pin("J7", "10", "R")
+    s.text("Cinta 10: GND en 1/3/10. Polarizada. No enchufar con 5 V. 1000uF del modem va en B.", g(20), g(332))
     return s
 
 
@@ -1186,6 +1286,7 @@ def build_io(lookups) -> Sch:
         "CallOnFail v1 — ESP32 / modem / sensores / campo",
         "WT32-ETH01 + A7672SA-FASE. I2C IO32/IO33. No GPIO21/22. No 5V y 3V3 a la vez en el WT32.",
         f"/{ROOT_UUID}/{IO_UUID}",
+        paper="A1",
     )
     s.pin_lookup = lookups
 
@@ -1214,19 +1315,36 @@ def build_io(lookups) -> Sch:
     s.join("J2", "2", "U5", "5")
     s.join("J2", "3", "U5", "4")
     s.join("J2", "4", "U5", "6")
-    s.text("J2: USB TX->RXD0, USB RX->TXD0, IO0 a GND solo para flash.", g(20), g(112))
+    s.text("J2: USB TX->RXD0, USB RX->TXD0, IO0 a GND solo para flash. No 5V del USB.", g(20), g(112))
+
+    s.place("Device:C", "C11", "100n", g(70), g(50), 0)
+    s.place("Device:C_Polarized", "C15", "10uF", g(86), g(50), 0)
+    s.tap_net("C11", "1", "5V_SYS", "U", g(4))
+    s.gnd_pin("C11", "2", "D")
+    s.tap_net("C15", "1", "5V_SYS", "U", g(4))
+    s.gnd_pin("C15", "2", "D")
 
     s.tap_net("U6", "1", "5V_MODEM", "L", g(6))
     s.gnd_pin("U6", "2", "L")
+    s.place("Device:C_Polarized", "C2", "1000uF/16V", g(230), g(56), 0)
+    s.place("Device:C", "C12", "100n", g(248), g(56), 0)
+    s.tap_net("C2", "1", "5V_MODEM", "U", g(4))
+    s.gnd_pin("C2", "2", "D")
+    s.tap_net("C12", "1", "5V_MODEM", "U", g(4))
+    s.gnd_pin("C12", "2", "D")
     s.join("U5", "9", "U6", "3")
     s.join("U5", "12", "U6", "4")
-    s.join("U5", "8", "U6", "5")
-    s.join("U5", "7", "U6", "6")
+    s.place("Device:R", "R32", "1k", g(148), g(56), 0)
+    s.place("Device:R", "R33", "1k", g(148), g(68), 0)
+    s.join("U5", "8", "R32", "1")
+    s.join("R32", "2", "U6", "5")
+    s.join("U5", "7", "R33", "1")
+    s.join("R33", "2", "U6", "6")
     s.nc(*s.pin("U6", "7"))
     s.tap_net("J3", "1", "MODEM_CUT", "L", g(6))
     s.gnd_pin("J3", "2", "D")
-    s.text("OC IO4/IO2. No >100 nF. No bajar RESET y PWRKEY a la vez.", g(168), g(108))
-    s.text("J3: GPIO de salida TBD (no IO39, no IO2).", g(168), g(132))
+    s.text("OC IO4/IO2 via 1k. No >100 nF. No bajar RESET y PWRKEY a la vez.", g(168), g(108))
+    s.text("J3: GPIO salida TBD (no IO39, no IO2, no strapping). HIGH = corta modem.", g(148), g(132))
 
     s.tap_net("U5", "11", "IO15", "R", g(6))
     s.tap_net("U5", "15", "GEL_ADC", "R", g(6))
@@ -1261,6 +1379,9 @@ def build_io(lookups) -> Sch:
     s.tap_net("U11", "1", "3V3", "L", g(6))
     s.gnd_pin("U11", "2", "L")
     s.gnd_rail("U11", ["5", "6", "7"], "L")
+    s.place("Device:C", "C13", "100n", g(176), g(124), 0)
+    s.tap_net("C13", "1", "3V3", "U", g(4))
+    s.gnd_pin("C13", "2", "D")
 
     for ref, sda_pin, scl_pin in (("U7", "3", "4"), ("U8", "3", "4"), ("U11", "3", "4")):
         s.tap_x(ref, sda_pin, bus_sda)
@@ -1284,54 +1405,72 @@ def build_io(lookups) -> Sch:
     s.text("1-Wire cadena, no estrella. UTP DATA+GND.", g(20), g(244))
 
     s.place("Module:ZMPT", "U10", "ZMPT101B", g(148), g(222), 0)
+    s.place("Device:R", "R34", "1k", g(128), g(214), 0)
+    s.place("Device:C", "C14", "100n", g(168), g(236), 0)
     s.gnd_pin("U10", "2", "L")
     s.tap_local("U5", "16", "ZMPT_ADC", "R", g(8))
-    s.tap_local("U10", "1", "ZMPT_ADC", "L", g(6))
+    s.join("U10", "1", "R34", "1")
+    s.tap_local("R34", "2", "ZMPT_ADC", "L", g(6))
+    s.join("R34", "2", "C14", "1")
+    s.gnd_pin("C14", "2", "D")
     s.nc(*s.pin("U10", "3"))
-    s.text("ZMPT OUT -> IO36.", g(128), g(240))
+    s.text("ZMPT OUT -> 1k -> IO36. No 220 hasta validar.", g(108), g(246))
 
     s.place("Switch:SW_Push", "SW2", "Servicio IO39", g(148), g(254), 0)
+    s.place("Device:R", "R31", "10k", g(128), g(254), 0)
     s.tap_local("U5", "17", "BTN_SVC", "R", g(8))
     s.tap_local("SW2", "1", "BTN_SVC", "L", g(6))
+    s.tap_local("R31", "2", "BTN_SVC", "R", g(6))
+    s.tap_net("R31", "1", "3V3", "U", g(4))
     s.gnd_pin("SW2", "2", "D")
-    s.text("Corta=llamada, larga=OTA.", g(128), g(232))
+    s.text("IO39 sin pull interno. 10k a 3V3. Corta=llamada, larga=OTA.", g(108), g(268))
 
-    # Campo a la derecha del PCF (salidas a la derecha)
-    s.place("Connector_Generic:Conn_01x06", "J4", "Campo IN/OUT", g(268), g(130), 0)
+    # Campo: 2 IN + 2 OUT. P2 spare (pull-up). P3 buzzer. P6 NET, P7 ALARMA.
+    s.place("Connector_Generic:Conn_01x04", "J4", "Campo IN/OUT", g(268), g(130), 0)
     s.place("Connector_Generic:Conn_01x02", "J5", "Campo GND/COM", g(268), g(168), 0)
     s.join("U11", "8", "J4", "1")
     s.join("U11", "9", "J4", "2")
-    s.join("U11", "10", "J4", "3")
-    s.join("U11", "11", "J4", "4")
+    s.place("Device:R", "R27", "10k", g(236), g(108), 90)
+    s.place("Device:R", "R28", "10k", g(244), g(108), 90)
+    s.place("Device:R", "R29", "10k", g(252), g(108), 90)
+    s.join("R27", "2", "J4", "1")
+    s.join("R28", "2", "J4", "2")
+    s.join("R29", "2", "U11", "10")
+    s.tap_net("R27", "1", "3V3", "U", g(4))
+    s.tap_net("R28", "1", "3V3", "U", g(4))
+    s.tap_net("R29", "1", "3V3", "U", g(4))
     s.gnd_pin("J5", "1", "L")
-    s.text("IN1 fuga. Contacto seco a GND.", g(230), g(188))
+    s.text("IN1 fuga, IN2 extra. P2 spare 10k. Contacto seco a GND.", g(210), g(188))
 
     s.place("Transistor_Array:ULN2003", "U12", "ULN2003", g(200), g(230), 0)
-    s.place("Module:RELAY", "K1", "OUT1 sirena", g(268), g(214), 0)
+    s.place("Module:RELAY", "K1", "OUT1", g(268), g(214), 0)
+    s.place("Module:BUZZER", "LS1", "Buzzer 5V activo", g(232), g(198), 0)
     s.place("Module:RELAY", "K2", "OUT2 aux", g(268), g(258), 0)
+    s.tap_local("U11", "11", "BUZZ_DRV", "R", g(6))
     s.tap_local("U11", "12", "OUT1_DRV", "R", g(6))
     s.tap_local("U11", "13", "OUT2_DRV", "R", g(6))
     s.tap_local("U12", "1", "OUT1_DRV", "L", g(6))
     s.tap_local("U12", "2", "OUT2_DRV", "L", g(6))
-    s.gnd_rail("U12", ["3", "4", "5", "6", "7"], "L")
+    s.tap_local("U12", "3", "BUZZ_DRV", "L", g(6))
+    s.gnd_rail("U12", ["4", "5", "6", "7"], "L")
     s.gnd_pin("U12", "8", "D")
     s.nc(*s.pin("U12", "10"))
     s.nc(*s.pin("U12", "11"))
     s.nc(*s.pin("U12", "12"))
     s.nc(*s.pin("U12", "13"))
-    s.nc(*s.pin("U12", "14"))
     s.join("U12", "16", "K1", "2")
     s.join("U12", "15", "K2", "2")
+    s.join("U12", "14", "LS1", "2")
     sys_x = g(244)
-    s.vspine(sys_x, [s.pin("U12", "9"), s.pin("K1", "1"), s.pin("K2", "1")], "5V_SYS", "R")
+    s.vspine(sys_x, [s.pin("U12", "9"), s.pin("K1", "1"), s.pin("K2", "1"), s.pin("LS1", "1")], "5V_SYS", "R")
     s.flyback("D8", "K1")
     s.flyback("D9", "K2")
     s.join("K1", "3", "J5", "2")
     s.join("K2", "3", "J5", "2")
     s.junc(*s.pin("J5", "2"))
-    s.join("K1", "4", "J4", "5")
-    s.join("K2", "4", "J4", "6")
-    s.text("ULN sink + 1N4007. COM ULN a 5V_SYS.", g(188), g(284))
+    s.join("K1", "4", "J4", "3")
+    s.join("K2", "4", "J4", "4")
+    s.text("P3=buzzer O3, P4=K1 O1, P5=K2 O2. P6=NET P7=ALARMA. 2 IN + 2 OUT.", g(188), g(284))
 
     s.place("Connector_Generic:Conn_01x05", "J6", "Panel 5 pin", g(304), g(130), 0)
     s.place("Device:R", "R16", "330R", g(328), g(120), 90)
@@ -1340,23 +1479,34 @@ def build_io(lookups) -> Sch:
     s.place("Device:LED", "D7", "LED ALARMA", g(352), g(138), 180)
     s.gnd_pin("J6", "1", "L")
     s.tap_net("J6", "2", "LED_PWR", "L", g(6))
-    s.join("J6", "3", "R16", "2")
-    s.join("R16", "1", "D6", "2")
+    s.tap_net("R16", "1", "5V_SYS", "U", g(4))
+    s.join("R16", "2", "D6", "2")
     s.tap_local("D6", "1", "LED_NET", "L", g(6))
     s.tap_local("U11", "14", "LED_NET", "R", g(6))
-    s.join("J6", "4", "R17", "2")
-    s.join("R17", "1", "D7", "2")
+    s.tap_net("J6", "3", "LED_NET", "L", g(6))
+    s.tap_net("R17", "1", "5V_SYS", "U", g(4))
+    s.join("R17", "2", "D7", "2")
     s.tap_local("D7", "1", "LED_ALM", "L", g(6))
     s.tap_local("U11", "15", "LED_ALM", "R", g(6))
-    s.join("R16", "1", "R17", "1")
-    s.junc(*s.pin("R16", "1"))
-    s.tap_net("R16", "1", "5V_SYS", "U", g(4))
+    s.tap_net("J6", "4", "LED_ALM", "L", g(6))
     s.tap_net("J6", "5", "BTN_RESET", "L", g(6))
-    s.text("Panel: GND, PWR, NET (P6), ALARMA (P7), RESET.", g(300), g(152))
+    s.text("Panel: GND, PWR, NET (P6), ALARMA (P7), RESET. Buzzer P3, no borne.", g(300), g(152))
+
+    s.place("Module:IDC10", "J8", "IDC B←A", g(48), g(300), 0)
+    s.gnd_pin("J8", "1", "R")
+    s.tap_net("J8", "2", "5V_SYS", "R", g(8))
+    s.gnd_pin("J8", "3", "R")
+    s.tap_net("J8", "4", "5V_MODEM", "R", g(8))
+    s.tap_net("J8", "5", "GEL_ADC", "R", g(8))
+    s.tap_net("J8", "6", "IO15", "R", g(8))
+    s.tap_net("J8", "7", "MODEM_CUT", "R", g(8))
+    s.tap_net("J8", "8", "LED_PWR", "R", g(8))
+    s.tap_net("J8", "9", "BTN_RESET", "R", g(8))
+    s.gnd_pin("J8", "10", "R")
     s.text(
         "GPIO: 0 ETH CLK  2 PWRKEY  4 RESET  5 RX  14 1-Wire  15 WDT  16/18/23 ETH  17 TX  32 SDA  33 SCL  35 gel  36 ZMPT  39 servicio",
         g(20),
-        g(328),
+        g(348),
     )
     return s
 
@@ -1370,8 +1520,8 @@ def build_root() -> str:
 	(paper "A3")
 	(title_block
 		(title "CallOnFail v1")
-		(date "2026-09-09")
-		(rev "1")
+		(date "2026-09-10")
+		(rev "1.2")
 		(company "CallOnFail")
 		(comment 1 "WT32-ETH01 + A7672SA-FASE + gel 6V. Ver docs/HARDWARE_V1.md")
 	)
@@ -1450,9 +1600,10 @@ def build_root() -> str:
 
 
 def write_pro() -> None:
-    text = Path(r"C:\Program Files\KiCad\10.0\share\kicad\template\kicad.kicad_pro").read_text(
-        encoding="utf-8"
-    )
+    if not KICAD_PRO_TEMPLATE.exists():
+        print("skip .kicad_pro (no KiCad template on this machine)")
+        return
+    text = KICAD_PRO_TEMPLATE.read_text(encoding="utf-8")
     text = text.replace('"filename": "kicad.kicad_pro"', f'"filename": "{PROJECT}.kicad_pro"')
     text = text.replace(
         '"sheets": []',

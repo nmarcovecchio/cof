@@ -2,36 +2,41 @@ Qty,Value,Refs,Lib
 1,"Campo GND/COM","J5",Connector_Generic:Conn_01x02
 1,"MODEM_CUT GPIO","J3",Connector_Generic:Conn_01x02
 1,"PSU 5V 5A","J1",Connector_Generic:Conn_01x02
+1,"Campo IN/OUT","J4",Connector_Generic:Conn_01x04
 1,"USB-Serial 3V3","J2",Connector_Generic:Conn_01x04
 1,"Panel 5 pin","J6",Connector_Generic:Conn_01x05
-1,"Campo IN/OUT","J4",Connector_Generic:Conn_01x06
 1,"Gel 6V 7Ah NP7-6","BT1",Device:Battery
-3,"100n","C3 C4 C5",Device:C
+11,"100n","C3 C4 C5 C8 C9 C10 C11 C12 C13 C14 C17",Device:C
 1,"10n","C6",Device:C
 1,"1000uF/16V","C2",Device:C_Polarized
 1,"100uF","C7",Device:C_Polarized
+1,"10uF","C15",Device:C_Polarized
 1,"2200uF/16V","C1",Device:C_Polarized
 2,"1N4007","D8 D9",Device:D
 3,"1N4148","D3 D4 D5",Device:D
-1,"SB560","D1",Device:D_Schottky
 1,"5A 5x20","F1",Device:Fuse
 1,"LED ALARMA","D7",Device:LED
 1,"LED GRN PWR","D2",Device:LED
 1,"LED NET","D6",Device:LED
-2,"AO3401","Q1 Q3",Device:Q_PMOS
-3,"100k","R3 R4 R10",Device:R
-4,"10k","R1 R2 R9 R12",Device:R
+4,"NDP6020P","Q1 Q3 Q8 Q10",Device:Q_PMOS
+8,"100k","R3 R4 R10 R18 R20 R24 R36 R37",Device:R
+8,"10k","R1 R2 R9 R12 R27 R28 R29 R31",Device:R
 1,"1M","R8",Device:R
+5,"1k","R19 R23 R32 R33 R34",Device:R
 2,"22k","R7 R11",Device:R
 3,"330R","R5 R16 R17",Device:R
 1,"47k","R6",Device:R
 3,"4k7","R13 R14 R15",Device:R
 1,"A7672SA-FASE","U6",Module:A7672
+1,"74HCT125","U13",Module:AHCTBUF
 1,"XL6019","U2",Module:BUCKBOOST
+1,"Buzzer 5V activo","LS1",Module:BUZZER
 1,"DS18B20 x4","U9",Module:DS18B20
+1,"IDC A→B","J7",Module:IDC10
+1,"IDC B←A","J8",Module:IDC10
 1,"OLED 0x3C","U7",Module:OLED
 1,"PCF8574","U11",Module:PCF8574
-1,"OUT1 sirena","K1",Module:RELAY
+1,"OUT1","K1",Module:RELAY
 1,"OUT2 aux","K2",Module:RELAY
 1,"SHT31 0x44","U8",Module:SHT31
 1,"WT32-ETH01","U5",Module:WT32
@@ -40,6 +45,6 @@ Qty,Value,Refs,Lib
 1,"RESET gabinete","SW1",Switch:SW_Push
 1,"Servicio IO39","SW2",Switch:SW_Push
 1,"CD4541BE","U3",Timer:CD4541BE
-1,"NE555P","U4",Timer:NE555D
+1,"TLC555","U4",Timer:NE555D
 1,"ULN2003","U12",Transistor_Array:ULN2003
-3,"2N7000","Q2 Q4 Q5",Transistor_FET:2N7000
+3,"2N7000","Q5 Q9 Q11",Transistor_FET:2N7000

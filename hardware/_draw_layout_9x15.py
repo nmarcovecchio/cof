@@ -73,7 +73,7 @@ def main() -> None:
     rounded(d, (bx, my, bx + BB[0], my + BB[1]), "#ddd6fe", "#6d28d9", 6)
     label(d, (bx + BB[0] / 2, my + BB[1] / 2 - 10), "XL6019", 13, "#4c1d95")
     label(d, (bx + BB[0] / 2, my + BB[1] / 2 + 8), "50×30 mm", 11, "#5b21b6")
-    label(d, (bx + BB[0] / 2, my + BB[1] / 2 + 22), "buck-boost 5,4 V", 10, "#5b21b6")
+    label(d, (bx + BB[0] / 2, my + BB[1] / 2 + 22), "buck-boost 5,1 V", 10, "#5b21b6")
 
     y = my + XY[1] + 10  # XY is the taller of the two modules
     zone(
@@ -90,7 +90,7 @@ def main() -> None:
         (ax + 8, y, ax + W - 8, y + 88),
         "#fef3c7",
         "#d97706",
-        "WDT  CD4541 + NE555",
+        "WDT  CD4541 + TLC555",
         ["pasivos, D3/D4/D5, SW RESET vía cinta"],
     )
     y += 96
@@ -100,7 +100,7 @@ def main() -> None:
         "#ffedd5",
         "#ea580c",
         "High-side",
-        ["2× AO3401", "2N7000  caps"],
+        ["2× NDP6020P", "TLC555 → Q1", "74HCT125 DIP"],
     )
     zone(
         d,
@@ -108,10 +108,10 @@ def main() -> None:
         "#dcfce7",
         "#16a34a",
         "GEL_ADC",
-        ["47k / 22k", "SB560"],
+        ["47k / 22k", "Q8/Q10 TO-220"],
     )
     rounded(d, (ax + 8, ay + H - 32, ax + W - 8, ay + H - 8), "#14532d", "#14532d", 6)
-    label(d, (ax + W / 2, ay + H - 20), "cinta 10 pines → B", 13, "white")
+    label(d, (ax + W / 2, ay + H - 20), "IDC-10 → B  GND 5V GND 5V … GND", 11, "white")
 
     # dimension A
     d.line((ax - 28, ay, ax - 28, ay + H), fill="#333", width=2)
@@ -124,9 +124,9 @@ def main() -> None:
     board(d, cx, cy, "PLACA B — I/O", "#efe0c8")
     zone(d, (cx + 8, cy + 10, cx + W / 2 - 4, cy + 130), "#e9d5ff", "#7c3aed", "PCF8574", ["I2C"])
     zone(d, (cx + W / 2 + 4, cy + 10, cx + W - 8, cy + 130), "#ddd6fe", "#6d28d9", "ULN2003", ["sink"])
-    zone(d, (cx + 8, cy + 140, cx + W / 2 - 4, cy + 280), "#fecaca", "#dc2626", "K1 sirena", ["relé 5 V"])
+    zone(d, (cx + 8, cy + 140, cx + W / 2 - 4, cy + 280), "#fecaca", "#dc2626", "K1 + buzzer", ["relé O1", "P3 → O3"])
     zone(d, (cx + W / 2 + 4, cy + 140, cx + W - 8, cy + 280), "#fecaca", "#dc2626", "K2 aux", ["relé 5 V"])
-    zone(d, (cx + 8, cy + 290, cx + W / 2 - 4, cy + 430), "#bfdbfe", "#2563eb", "Campo", ["IN1–4  OUT1–2"])
+    zone(d, (cx + 8, cy + 290, cx + W / 2 - 4, cy + 430), "#bfdbfe", "#2563eb", "Campo", ["IN1–2  OUT1–2"])
     zone(d, (cx + W / 2 + 4, cy + 290, cx + W - 8, cy + 430), "#fde68a", "#ca8a04", "ZMPT / 1-Wire", ["borde"])
     zone(
         d,
@@ -137,7 +137,7 @@ def main() -> None:
         ["los módulos enchufan / cuelgan fuera"],
     )
     rounded(d, (cx + 8, cy + H - 32, cx + W - 8, cy + H - 8), "#14532d", "#14532d", 6)
-    label(d, (cx + W / 2, cy + H - 20), "cinta 10 pines ← A", 13, "white")
+    label(d, (cx + W / 2, cy + H - 20), "IDC-10 ← A  pines 1 y 10 = GND", 11, "white")
     d.line((cx, cy + H + 22, cx + W, cy + H + 22), fill="#333", width=2)
     label(d, (cx + W / 2, cy + H + 36), "9 cm", 13)
 

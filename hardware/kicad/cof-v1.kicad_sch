@@ -1,135 +1,78 @@
 (kicad_sch
-	(version 20260306)
+	(version 20241209)
 	(generator "eeschema")
 	(generator_version "10.0")
 	(uuid "a1111111-1111-4111-8111-111111111111")
 	(paper "A3")
 	(title_block
 		(title "CallOnFail v1")
-		(date "2026-09-09")
-		(rev "1")
+		(date "2026-09-10")
+		(rev "1.2")
 		(company "CallOnFail")
 		(comment 1 "WT32-ETH01 + A7672SA-FASE + gel 6V. Ver docs/HARDWARE_V1.md")
 	)
-	(lib_symbols)
+	(lib_symbols
+	)
 	(text "CallOnFail hardware v1"
 		(exclude_from_sim no)
-		(at 50.8 30.48 0)
-		(effects
-			(font
-				(size 3.81 3.81)
-			)
-			(justify left bottom)
-		)
-		(uuid "141cea29-65db-4eb8-8b5c-e2cf6940fef0")
-	)
-	(text "No 12 V. No ZK-S4. No XL4015. No IRF4905 a 5 V. Gel 6 V 7 Ah, flote 6,85 V."
-		(exclude_from_sim no)
-		(at 50.8 55.88 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "5f4a09bc-684d-4512-8371-00dc396553c5")
+		(at 50.80 30.48 0)
+		(effects (font (size 3.81 3.81)) (justify left bottom))
+		(uuid "7308ea94-1fa1-4f85-b637-99016023c2b0")
 	)
 	(text "Abrir las dos hojas jerarquicas. Nets globales unen alimentacion con I/O."
 		(exclude_from_sim no)
-		(at 50.8 40.64 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "860e6b05-223f-4fa8-a61c-6aa03acf0ec7")
+		(at 50.80 40.64 0)
+		(effects (font (size 1.27 1.27)) (justify left bottom))
+		(uuid "a4545044-297a-430d-8620-b4cb191b7f00")
 	)
 	(text "5V_PSU  5V_BUS  5V_SYS  5V_MODEM  3V3  GEL_P  GEL_ADC  IO15  MODEM_CUT  LED_PWR  BTN_RESET"
 		(exclude_from_sim no)
-		(at 50.8 48.26 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "a58a2f92-34b8-4310-a956-040ab99dbd8c")
+		(at 50.80 48.26 0)
+		(effects (font (size 1.27 1.27)) (justify left bottom))
+		(uuid "b5ad1adf-64a8-4858-b1f4-247f01b0c743")
+	)
+	(text "No 12 V. No ZK-S4. No XL4015. No IRF4905 a 5 V. Gel 6 V 7 Ah, flote 6,85 V."
+		(exclude_from_sim no)
+		(at 50.80 55.88 0)
+		(effects (font (size 1.27 1.27)) (justify left bottom))
+		(uuid "321de858-aa16-41c2-a5e1-6e5499ea3459")
 	)
 	(sheet
-		(at 50.8 76.2)
+		(at 50.80 76.20)
 		(size 71.12 40.64)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 0 0 0 0.0000))
 		(uuid "a2222222-2222-4222-8222-222222222222")
 		(property "Sheetname" "Alimentacion"
-			(at 50.8 75 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left bottom)
-			)
+			(at 50.80 75.00 0)
+			(effects (font (size 1.27 1.27)) (justify left bottom))
 		)
 		(property "Sheetfile" "01-alimentacion.kicad_sch"
-			(at 50.8 117.5 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
+			(at 50.80 117.50 0)
+			(effects (font (size 1.27 1.27)) (justify left top))
 		)
 	)
 	(sheet
-		(at 160.02 76.2)
+		(at 160.02 76.20)
 		(size 81.28 40.64)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 0 0 0 0.0000))
 		(uuid "a3333333-3333-4333-8333-333333333333")
 		(property "Sheetname" "ESP32 modem sensores"
-			(at 160.02 75 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left bottom)
-			)
+			(at 160.02 75.00 0)
+			(effects (font (size 1.27 1.27)) (justify left bottom))
 		)
 		(property "Sheetfile" "02-io.kicad_sch"
-			(at 160.02 117.5 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
+			(at 160.02 117.50 0)
+			(effects (font (size 1.27 1.27)) (justify left top))
 		)
 	)
 	(sheet_instances
@@ -137,4 +80,5 @@
 			(page "1")
 		)
 	)
+	(embedded_fonts no)
 )
