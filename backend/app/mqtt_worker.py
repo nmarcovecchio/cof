@@ -255,7 +255,22 @@ def get_or_create_device(device_uid):
 def store_network_status(device, payload):
     network = payload.get("network")
     if not isinstance(network, dict):
-        return
+        eth = bool(payload.get("ethernet"))
+        wifi = bool(payload.get("wifi"))
+        ip = payload.get("ip") or payload.get("ip_address") or ""
+        if not eth and not wifi and ip in ("", "-", None):
+            return
+        network = {
+            "active": "ethernet" if eth else ("wifi" if wifi else "none"),
+            "ethernet": {"up": eth, "ip": ip if eth else "-"},
+            "wifi": {
+                "configured": wifi,
+                "up": wifi,
+                "ssid": "",
+                "ip": ip if wifi and not eth else "-",
+                "rssi": 0,
+            },
+        }
     discovered = dict(device.discovered or {})
     discovered["network"] = network
     device.discovered = discovered

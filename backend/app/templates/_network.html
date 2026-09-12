@@ -1,0 +1,33 @@
+{% macro network_path(device) %}
+  {% set net = (device.discovered or {}).get('network') if device else none %}
+  {% set active = (net or {}).get('active') %}
+  {% set wifi = (net or {}).get('wifi') or {} %}
+  {% if not device|device_live %}
+    <span class="badge text-bg-secondary">sin reporte</span>
+  {% elif active == 'ethernet' %}
+    <span class="badge text-bg-primary">Ethernet</span>
+  {% elif active == 'wifi' %}
+    <span class="badge text-bg-info">WiFi{% if wifi.get('ssid') %} · {{ wifi.get('ssid') }}{% endif %}</span>
+  {% elif device.ip_address %}
+    <span class="badge text-bg-primary">LAN</span>
+  {% else %}
+    <span class="badge text-bg-secondary">sin Ethernet/WiFi</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro network_path_label(device) %}
+  {% set net = (device.discovered or {}).get('network') if device else none %}
+  {% set active = (net or {}).get('active') %}
+  {% set wifi = (net or {}).get('wifi') or {} %}
+  {% if not device|device_live %}
+    ultimo reporte, no sale ahora
+  {% elif active == 'ethernet' %}
+    Saliendo por Ethernet
+  {% elif active == 'wifi' %}
+    Saliendo por WiFi{% if wifi.get('ssid') %} ({{ wifi.get('ssid') }}){% endif %}
+  {% elif device.ip_address %}
+    Saliendo por LAN
+  {% else %}
+    Sin Ethernet ni WiFi
+  {% endif %}
+{% endmacro %}

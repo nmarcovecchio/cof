@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_alarm_badge.html" import alarm_badge %}
+{% from "_network.html" import network_path %}
 
 {% block title %}Dispositivos - CallOnFail{% endblock %}
 
@@ -29,6 +30,7 @@
           <th>Cliente</th>
           <th>Sitio</th>
           <th>Estado</th>
+          <th>Sale por</th>
           <th>Hardware</th>
           <th>Firmware</th>
           <th>Ultima conexion</th>
@@ -51,6 +53,7 @@
               {{ alarm_badge(state) }}
             {% endif %}
           </td>
+          <td>{{ network_path(device) }}</td>
           <td>{{ device.hardware_profile or '-' }}</td>
           <td>{{ device.firmware_version or '-' }}</td>
           <td>{{ device.last_seen_at|datetime_local }}</td>
@@ -72,7 +75,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="text-muted">Sin dispositivos todavia.</td></tr>
+        <tr><td colspan="10" class="text-muted">Sin dispositivos todavia.</td></tr>
         {% endfor %}
       </tbody>
     </table>
