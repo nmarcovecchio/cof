@@ -1,18 +1,22 @@
 # Hardware v1 — CallOnFail
 
-**Retomar:** Telegram y email ya andan. Falta **probar el ciclo de alarma**.
-Alimentación: fuente 5 V 5 A + gel **6 V 7 Ah** + **XY-SJVA** (3 A / 35 W
-CC/CV, seteo 6,85 V / 0,6 A) + buck-boost 5 A de backup + WDT/RESET.
+**Hardware trabado en rev 1.4** (2026-09-12). No rediseñar alimentación / OR /
+MOSFET / enlace A↔B salvo bug real. Fuente de verdad: `gen_sch.py` + este doc +
+`hardware/COMPRA_V1.md`. El PDF se genera local con `kicad-cli sch export pdf`;
+no va en git.
+
+**Software / lab:** Telegram y email ya andan. Falta **probar el ciclo de alarma**.
+Firmware de I/O, RESET, WDT y LEDs de gabinete todavía no.
 
 Placa: WT32-ETH01 + A7672SA-FASE. Perfil `cof-wt32-a7672-v1`.
 
 Esquemático KiCad 10: `hardware/kicad/cof-v1.kicad_pro`
-(hoja Alimentacion + hoja ESP32/modem/sensores). PDF: `hardware/kicad/cof-v1.pdf`.
-BOM del proto: `hardware/kicad/cof-v1-bom.csv`. Listado de compra:
-`hardware/COMPRA_V1.md` (mismo contenido que el pedido de abajo). Rev **1.2**
-(todo THT: NDP6020P TO-220 + 74HCT125 DIP; sin SOT-23).
+(hoja Alimentacion + hoja ESP32/modem/sensores).
+BOM: `hardware/kicad/cof-v1-bom.csv`. Compra: `hardware/COMPRA_V1.md`. Rev **1.4**
+(THT: 2× NDP6020P + 74HCT14; OR = módulo **LM66200**. Sin 2N7000 / HCT125).
+Proto en dos placas unidas por bornera / Molex (no cinta IDC); después, una sola placa.
 
-**Lab** = ya cableado y en firmware. **v1** = placa a diseñar; firmware de I/O, RESET, WDT y LEDs de gabinete todavía no.
+**Lab** = ya cableado y en firmware. **v1** = placa a armar según este doc.
 
 No usar GPIO21/22 para I2C. No alimentar el WT32 por 5V y 3V3 a la vez.
 
@@ -63,11 +67,10 @@ vivo cuando se corta `5V_SYS`.
           ├── 5V_PSU
           │     ├── XY-SJVA CC/CV (6,85 V / 0,6 A)  [3 A / 35 W]
           │     │         └── Gel 6 V 7 Ah + fusible 3–5 A
-          │     │               └── buck-boost (ajuste 5,1 V) ── NDP6020P Q10 ── 5V_BUS
-          │     │                   (solo si se cortó la 220)
-          │     ├── “hay PSU” → apaga el buck-boost (EN a GND)
-          │     └── NDP6020P Q8 (Rds ~50 mΩ) ────────────────────────────── 5V_BUS
-          │
+          │     │               └── buck-boost (ajuste 5,1 V) ──┐
+          │     │                   (EN=0 si hay PSU)            │
+          │     └────────────────────────────────────────────── LM66200 ── 5V_BUS
+          │                                                       (VIN1=PSU, VIN2=backup)
 5V_BUS  (+2200 µF + 100 nF)
   ├── Supervisor WDT + one-shot RESET     (siempre que haya 5V_BUS)
   │
@@ -82,22 +85,19 @@ vivo cuando se corta `5V_SYS`.
 ```
 
 Hay 220: la fuente de 5 V lleva todo. El XY-SJVA deja la gel en flote a
-6,85 V / 0,6 A. El buck-boost de backup está apagado.
+6,85 V / 0,6 A. El buck-boost de backup está apagado (EN a GND vía 74HCT14).
 
 Se corta la 220: se muere la fuente y el cargador. El EN del buck-boost se
-suelta, Q10 conduce, la gel pasa a 5,1 V en el bus (Rds, no diodo). Q8
-corta para que el bus no alimente la PSU ni el XY-SJVA. El capellón en
-`5V_BUS` tapa el hueco. El ZMPT avisa “se cortó la luz”. Ethernet off,
-LTE si hace falta, ~4 h.
+suelta (pull-up a Gel+), el LM66200 pasa a VIN2, la gel a 5,1 V en el bus.
+El capellón en `5V_BUS` tapa el hueco. El ZMPT avisa “se cortó la luz”.
+Ethernet off, LTE si hace falta, ~4 h.
 
 El XY-SJVA **toma 5V_PSU**, no `5V_BUS` (si no, en backup la gel se carga a
-sí misma). **No unir** las nets con un cable. OR: **Q8** (PSU) y **Q10**
-(backup), ambos NDP6020P, source = `5V_BUS`, drain = la fuente correspondiente.
-Hay PSU → Q9 ON → Q8 ON, EN=0 → Q11 OFF → Q10 OFF.
-Sin PSU → Q8 OFF, EN=Gel+ → Q11 ON → Q10 ON.
-~50 mΩ, ~0,1 W a 1,5 A, no 0,6 W de Schottky. El XY-SJVA no sirve de backup
-(3 A / ~15 W a 5 V). LED verde “lleno” es ~0,1×I; en gel se ignora (flote a
-6,85 V).
+sí misma). **No unir** las nets con un cable. OR: módulo **LM66200** (dual
+ideal-diode, ~2,5 A, pines 2,54). VIN1 = `5V_PSU`, VIN2 = XL6019, VOUT =
+`5V_BUS`. EN del módulo a GND (siempre habilitado). El XY-SJVA no sirve de
+backup (3 A / ~15 W a 5 V). LED verde “lleno” es ~0,1×I; en gel se ignora
+(flote a 6,85 V).
 
 IN− y OUT−: con el tester, módulo apagado. Si están abiertos, **no** los
 unes ni los tires los dos al GND del WT32 (el shunt de CC va en el −).
@@ -107,9 +107,9 @@ está bien.
 ### Cableado de banco
 
 ```text
-Fuente 5V+ ──── 5V_PSU ──── NDP6020P Q8 ──────────────── 5V_BUS
-Fuente 5V− ──── GND
-                 │
+Fuente 5V+ ──── 5V_PSU ──── LM66200 VIN1 ──┐
+Fuente 5V− ──── GND                        ├── VOUT ── 5V_BUS
+                 │                         │
                  ├── XY-SJVA IN+    XY-SJVA IN− ── GND fuente (no puentear OUT−)
                  │         │
                  │         OUT+ ── fusible 3–5 A ── Gel+
@@ -117,14 +117,11 @@ Fuente 5V− ──── GND
                  │
                  │   Gel+ ── buck-boost VIN+
                  │   GND  ── VIN−
-                 │           VOUT+ ── NDP6020P Q10 ──> 5V_BUS
+                 │           VOUT+ ── LM66200 VIN2 ─┘
                  │           VOUT− ── GND
-                 │           EN ── 2N7000 Q11 (HIGH = Q10 ON)
+                 │           EN ── R2 10k a Gel+ ; D10 a 74HCT14 1Y (baja EN si hay PSU)
                  │
-                 └── 10k ── gate 2N7000 (Q5) ── 100k a GND
-                              source GND
-                              drain ── EN del buck-boost
-                     Gel+ ── 10k ── EN     (HIGH = backup ON)
+                 └── 10k ── PSU_DET ── 100k a GND ── 74HCT14 1A
 
 
 5V_BUS ── 2200 µF + 100 nF a GND
@@ -134,8 +131,7 @@ Fuente 5V− ──── GND
 ```
 
 XY-SJVA: **CV 6,85 V / CC 0,6 A** (vacío, después gel). Buck-boost de
-backup: **5,1 V** (antes 5,4 V para compensar el Schottky; ya no hay). Si
-ese módulo no trae EN, el 2N7000 maneja un NDP6020P que corta gel+ al VIN.
+backup: **5,1 V**. EN: pull-up a Gel+; con PSU el HCT14 + D10 lo baja a ~0.
 
 ### Cortes (WDT / RESET / módem)
 
@@ -344,7 +340,7 @@ BTN_RESET (NA a GND) ────────────┴── trigger TLC55
                                             → 5V_SYS OFF ~2 s → ON
 
 MODEM_CUT (GPIO 3,3 V, HIGH=corte) ── 1k + 100k PD
-                      ── 74HCT125 DIP (VCC=5V_BUS, 1OE=GND)
+                      ── 74HCT14 (2A→2Y→3A→3Y, buffer)
                       ── gate Q3 NDP6020P (100k a GND)
                       → 5V_MODEM OFF
 ```
@@ -359,43 +355,38 @@ para bootear y volver a patear.
 ### MOSFET high-side (los dos rieles 5 V)
 
 **`5V_SYS`:** el TLC555 sale a 5 V. 1 k al gate, 100 k a GND (default ON).
-Idle LOW → ON. Pulso HIGH → gate a 5 V → OFF. Sin 2N7000.
+Idle LOW → ON. Pulso HIGH → gate a 5 V → OFF.
 
-**`5V_MODEM`:** el GPIO es 3,3 V. Un shifter de I2C (TXS/BSS138) no sirve
-(open-drain, flojo). Un **buffer HCT a 5 V** sí: entrada TTL (3,3 V = HIGH),
-salida 0/5 V al gate. **74HCT125** DIP-14 (un buffer: pin 1=OE, 2=A, 3=Y,
-7=GND, 14=VCC; OE no usados 6/10/13 a VCC, A no usadas 4/9/12 a GND).
-Reemplaza Q4+Q7. No SOT-23.
+**`5V_MODEM`:** el GPIO es 3,3 V. **74HCT14** DIP-14 (Schmitt): dos
+inversores en serie = buffer 0/5 V al gate. Entrada TTL (3,3 V = HIGH).
+Puertas libres: entradas a GND. Reemplaza el 74HCT125.
 
 ```text
 5V_BUS ── S NDP6020P D ── 5V_SYS
               G ── 100k GND ── 1k ── TLC555 OUT
 
 5V_BUS ── S NDP6020P D ── 5V_MODEM
-              G ── 100k GND ── 1Y (pin 3) 74HCT125
-                               1A (pin 2) ── 1k ── MODEM_CUT ── 100k GND
-                               VCC pin 14 = 5V_BUS   1OE pin 1 = GND
+              G ── 100k GND ── 3Y 74HCT14
+                               3A ← 2Y ; 2A ── 1k ── MODEM_CUT ── 100k GND
+                               VCC=5V_BUS   GND pin 7
 ```
 
-Cinta suelta: A a GND vía 100 k → Y=0 → módem ON. No TXS0102 / módulos
-“I2C 3.3↔5”. Eso no mueve un P-FET de potencia.
+Cinta suelta: A a GND vía 100 k → buffer=0 → módem ON. No TXS0102.
 
-El HCT **no** reemplaza Q5/Q8/Q9/Q10/Q11: eso es corriente de riel, no un
-GPIO.
+Quedan **solo Q1 y Q3** (NDP6020P). El OR lo hace el LM66200.
 
 NDP6020P: Rds ~50 mΩ a Vgs = −4,5 V, aguanta el pico de 2 A del A7672.
 
 ### EN del buck-boost
 
 ```text
-5V_PSU ── 10k ── gate Q5 2N7000 ── 100k a GND
-                   drain ── EN del buck-boost (o gate NDP6020P de corte)
-                   source ── GND
-EN ── 10k a VIN (6 V gel)     HIGH = backup ON
+5V_PSU ── 10k ── PSU_DET ── 100k a GND ── 74HCT14 1A
+Gel+ ── 10k ── EN (HIGH = backup ON)
+EN ──|>|── 1Y   (D10 1N4148: HCT solo baja EN; no pelea el pull-up)
 ```
 
-Hay fuente de 5 V → EN a GND → backup apagado. Sin 5V_PSU → EN a 6 V →
-backup.
+Hay fuente de 5 V → 1Y bajo → EN ≈ 0 → backup apagado. Sin 5V_PSU → EN a
+Gel+ → backup.
 
 Usar la gel en un corte es normal. Lo que la mata es seguir chupando
 cuando ya está vacía (menos de ~5,5 V, sulfato). El convertidor de backup
@@ -416,9 +407,8 @@ Gel+ ── 47 kΩ ──┬── IO35
 tensión, aviso p.ej. bajo 6,0 V. El firmware puede bajar EN bajo 5,5 V;
 si el ESP está muerto, no alcanza.
 
-**LVD (después, en `5V_BUS`):** comparador o TL431 + 2N7000 al mismo EN
-del buck-boost. Gel bajo 5,5 V → EN a GND, sin el ESP. No hace falta
-ADS1115.
+**LVD (después, en `5V_BUS`):** comparador o TL431 al mismo EN del buck-boost
+(bajar EN sin el ESP). Gel bajo 5,5 V → backup off. No hace falta ADS1115.
 
 ---
 
@@ -447,9 +437,18 @@ IO2 / IO4 / IO15 / IO35 / IO39: propuesta de PCB, no están en firmware.
 
 ---
 
-## 11. Cinta A ↔ B (IDC-10)
+## 11. Enlace A ↔ B (proto; después una placa)
 
-Conector polarizado. **GND en 1, 3 y 10** (un desliz de un pin pone 5 V contra GND, no contra GPIO). No enchufar con la fuente prendida.
+Dos placas 9×15: A = fuente / WDT / MOSFET, B = electrónica. Se unen con
+**bornera 5,08** (5 V) y **Molex KK 2,54** o más bornera (señales). **No
+cinta IDC-10.** Cable a cable, pinout marcado en ambos lados. 5 V en
+**0,75 mm²**. Cuando A y B anden, esas nets pasan a pistas en **una sola
+placa** y J7–J10 desaparecen.
+
+`5V_BUS`, `5V_PSU` y el WDT se quedan en A. `3V3` se queda en B (sale del
+WT32). No pasar `GEL+`.
+
+**J7 / J8 — 5 V (bornera 5,08)**
 
 | Pin | Net         | Dirección |
 | --- | ----------- | --------- |
@@ -457,14 +456,17 @@ Conector polarizado. **GND en 1, 3 y 10** (un desliz de un pin pone 5 V contra G
 | 2   | `5V_SYS`    | A → B     |
 | 3   | GND         | —         |
 | 4   | `5V_MODEM`  | A → B     |
-| 5   | `GEL_ADC`   | A → B     |
-| 6   | `IO15`      | B → A     |
-| 7   | `MODEM_CUT` | B → A     |
-| 8   | `LED_PWR`   | A → B     |
-| 9   | `BTN_RESET` | B → A     |
-| 10  | GND         | —         |
 
-`5V_BUS`, `5V_PSU` y el WDT se quedan en A. `3V3` se queda en B (sale del WT32).
+**J9 / J10 — señales (Molex KK o bornera)**
+
+| Pin | Net         | Dirección |
+| --- | ----------- | --------- |
+| 1   | `GEL_ADC`   | A → B     |
+| 2   | `IO15`      | B → A     |
+| 3   | `MODEM_CUT` | B → A     |
+| 4   | `LED_PWR`   | A → B     |
+| 5   | `BTN_RESET` | B → A     |
+| 6   | GND         | —         |
 
 Si un pin de señal queda abierto: el equipo falla (WDT, ADC, corte de módem)
 pero no se quema: gates con 100 k a GND **en A**, `MODEM_CUT` con pull-down
@@ -499,12 +501,12 @@ acá, no China. Fuente **5 V 5 A**: ya comprada.
 | ------------ | ------ | ------------ | ---- |
 | 1 | **XY-SJVA** (o XY-SJVA-4) CC/CV 3 A 35 W, **dos potes** | 1 | Carga gel **6,85 V / 0,6 A** desde `5V_PSU` |
 | 1 | Buck-boost auto **XL6019** (no XL6009 de un pote, no ZK-4KX) | 1 | Backup gel → **5,1 V** |
-| 5–10 | **NDP6020P** TO-220 (alt **IRF5305**) | **4** | Q1 SYS, Q3 módem, Q8 OR PSU, Q10 OR backup. No IRF4905 |
-| pack 50 | **2N7000** TO-92 | **3** | Q5 EN, Q9, Q11. No inversor de módem |
-| 5–10 | **74HCT125** DIP-14 | **1** | 3,3 V → 5 V al gate de Q3. No TXS/BSS138 |
+| 5–10 | **NDP6020P** TO-220 (alt **IRF5305**) | **2** | Q1 SYS, Q3 módem. No IRF4905 |
+| 1 | **LM66200** módulo dual ideal-diode (pines 2,54) | 1 | OR `5V_PSU` + XL6019 → `5V_BUS` |
+| 5–10 | **74HCT14** DIP-14 | **1** | EN backup + buffer MODEM_CUT. No HCT125 |
 | 5–10 | **CD4541BE** DIP-16 | 1 | WDT ~4–5 min |
 | 10 | **TLC555** (7555 / LMC555) DIP-8 **CMOS** | 1 | One-shot ~2 s. **No NE555 bipolar** |
-| pack | **1N4148** | **3** | D3 D4 D5 (WDT) |
+| pack | **1N4148** | **4** | D3 D4 D5 WDT + D10 EN |
 | pack | **1N4007** | **2** | Flyback relés. No en el riel de 5 V |
 | 4 | DS18B20 waterproof | 4 | Temps |
 | 1 | SHT31 I2C | 1 | Humedad |
@@ -519,24 +521,25 @@ acá, no China. Fuente **5 V 5 A**: ya comprada.
 | 20 c/u | LED 5 mm verde / rojo / azul | 3 | PWR / ALARMA / NET |
 | 1 | Pulsador panel NA hundido + táctiles 6×6 | 2 | RESET + servicio |
 | 1 set | Bornera 5,08 mm | — | IN/OUT |
-| 1 set | **IDC-10** ×2 + cinta 10 hilos polarizada | 2 | J7 / J8 |
+| 1 set | **Bornera 5,08** 4 polos ×2 | 2 | J7 / J8 enlace 5 V A↔B. No IDC |
+| 1 set | **Molex KK 2,54** 6p + housing ×2 (o bornera 6) | 2 | J9 / J10 señales A↔B |
 
 
-No ZK-S4. No XL4015. No XL6009 de un pote. No IRF4905/IRF9540. **No SB560**
-(el OR es MOSFET). **No NE555 bipolar**. No 1N4007 en el riel de 5 V. No
-shifter I2C para el módem. No SOT-23 (AO3401 / 74AHCT1G125): este proto es
-THT. 100 nF / 10 nF en paso 2,54 mm, no 0805.
+No ZK-S4. No XL4015. No XL6009 de un pote. No IRF4905/IRF9540. **No cinta IDC**. **No SB560**.
+**No 2N7000** (EN/OR los hace HCT14 + LM66200). **No 74HCT125**. **No NE555 bipolar**.
+No 1N4007 en el riel de 5 V. No shifter I2C para el módem. No SOT-23 suelto en
+proto (salvo el SMD del módulo LM66200). 100 nF / 10 nF en paso 2,54 mm, no 0805.
 
 XY-SJVA: CV **6,85 V**, CC **0,6 A**, vacío primero. No unir IN−/OUT− si el
 tester los ve abiertos. LED verde de “lleno” no vale para gel.
 
-### Seguridad en el proto (rev 1.2)
+### Seguridad en el proto (rev 1.4)
 
-- Gates de MOSFET definidos **en la placa que tiene el FET**, no del otro lado de la cinta.
+- Gates de MOSFET definidos **en la placa que tiene el FET**, no del otro lado del enlace.
 - `MODEM_CUT` y WDT: 1 k serie + 100 k a GND. Default = riel ON. **R20 100 k** baja MR del 4541 (si no, queda en reset).
-- Q5 (EN backup): 100 k a GND. Sin PSU el backup arranca, no queda a medias.
-- Q8 + Q10 NDP6020P: OR de PSU y backup (Rds). Nunca puentear `5V_PSU` con `5V_BUS`.
+- EN backup: R2 a Gel+; HCT14+D10 baja EN si hay PSU. Sin PSU el backup arranca.
+- **LM66200**: OR de PSU y backup. Nunca puentear `5V_PSU` con `5V_BUS`. EN del módulo a GND.
 - 100 nF junto a 4541, 555, PCF, WT32 5 V, A7672; 10 µF en `5V_SYS`; 1000 µF del módem **en B**.
 - IO39 e IN1–2: pull-up 10 k a 3V3 en placa.
 - RESET/PWRKEY del A7672: 1 k serie. ZMPT: 1 k + 100 nF.
-- IDC polarizado, tres GND, no hot-plug. No 5 V y 3V3 a la vez en el WT32.
+- Enlace proto: bornera / Molex, no cinta IDC. Dos GND en 5 V. No hot-plug. No 5 V y 3V3 a la vez en el WT32.

@@ -741,6 +741,34 @@ def create_app() -> Flask:
     def device_command_status_report(device_uid):
         return send_device_command(device_uid, "status_report", "Status report command sent")
 
+    @app.post("/devices/<device_uid>/commands/set-wifi")
+    @login_required
+    def device_command_set_wifi(device_uid):
+        ssid = (request.form.get("ssid") or "").strip()
+        password = request.form.get("password") or ""
+        if not ssid:
+            flash("SSID requerido", "warning")
+            return redirect(url_for("device_detail", device_uid=device_uid))
+        if len(ssid) > 32:
+            flash("SSID demasiado largo", "warning")
+            return redirect(url_for("device_detail", device_uid=device_uid))
+        if len(password) > 64:
+            flash("Password demasiado largo", "warning")
+            return redirect(url_for("device_detail", device_uid=device_uid))
+        flash(f"WiFi enviado: {ssid}", "success")
+        return send_device_command(
+            device_uid,
+            "set_wifi",
+            f"WiFi command sent for {ssid}",
+            extra={"ssid": ssid, "password": password},
+        )
+
+    @app.post("/devices/<device_uid>/commands/clear-wifi")
+    @login_required
+    def device_command_clear_wifi(device_uid):
+        flash("Pedido de olvidar WiFi enviado", "success")
+        return send_device_command(device_uid, "clear_wifi", "WiFi clear command sent")
+
     @app.post("/devices/<device_uid>/commands/test-call")
     @login_required
     def device_command_test_call(device_uid):
@@ -899,7 +927,7 @@ def create_app() -> Flask:
                 type=event_type,
                 severity=severity,
                 message=message,
-                payload=payload,
+                payload=redact_command_secrets(payload),
             )
         )
         db.session.commit()
@@ -1158,6 +1186,13 @@ def first_contact_phone(configs) -> str:
     calling = payload.get("calling") or {}
     phone = normalize_phone(str(calling.get("phone") or ""))
     return phone if is_e164_phone(phone) else ""
+
+
+def redact_command_secrets(payload: dict) -> dict:
+    stored = dict(payload or {})
+    if "password" in stored:
+        stored["password"] = bool(stored.get("password"))
+    return stored
 
 
 def serialize_device(device: Device) -> dict:

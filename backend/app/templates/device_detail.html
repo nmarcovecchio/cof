@@ -87,6 +87,10 @@
         <div class="meta-label">Hardware</div>
         <div class="meta-value">{{ device.hardware_profile or '-' }}</div>
       </div>
+      <div class="col-6 col-md-4 col-xl-2">
+        <div class="meta-label">IP</div>
+        <div class="meta-value"><code>{{ device.ip_address or '-' }}</code></div>
+      </div>
       <div class="col-12 col-md-8 col-xl-3">
         <div class="meta-label">Ultima conexion</div>
         <div class="meta-value">{{ device.last_seen_at|datetime_local }}</div>
@@ -96,6 +100,82 @@
 </div>
 
 {{ cellular_card(device.discovered.get('cellular') if device.discovered else none, device) }}
+
+{% set net = device.discovered.get('network') if device.discovered else none %}
+{% set net_eth = (net.get('ethernet') if net else none) or {} %}
+{% set net_wifi = (net.get('wifi') if net else none) or {} %}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Red</h2>
+        <div class="text-muted small">Ethernet es la ruta principal. WiFi queda de backup si se cae el cable. La clave no se guarda en la config retenida.</div>
+      </div>
+      {% if net and net.get('active') %}
+      <span class="badge text-bg-{{ 'success' if net.get('active') != 'none' else 'secondary' }}">
+        Activa {{ net.get('active') }}
+      </span>
+      {% endif %}
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-md-6">
+        <div class="meta-label">Ethernet</div>
+        <div class="meta-value">
+          {{ 'conectado' if net_eth.get('up') else 'sin link' }}
+          {% if net_eth.get('ip') and net_eth.get('ip') != '-' %}
+            · <code>{{ net_eth.get('ip') }}</code>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="meta-label">WiFi</div>
+        <div class="meta-value">
+          {% if net_wifi.get('up') %}
+            conectado
+          {% elif net_wifi.get('configured') %}
+            configurado, sin IP
+          {% else %}
+            sin configurar
+          {% endif %}
+          {% if net_wifi.get('ssid') %}
+            · {{ net_wifi.get('ssid') }}
+          {% endif %}
+          {% if net_wifi.get('up') and net_wifi.get('ip') and net_wifi.get('ip') != '-' %}
+            · <code>{{ net_wifi.get('ip') }}</code>
+          {% endif %}
+          {% if net_wifi.get('up') and net_wifi.get('rssi') is not none %}
+            · RSSI {{ net_wifi.get('rssi') }}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% if not device.archived_at %}
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+    <form class="row g-2 align-items-end flex-grow-1" method="post" action="{{ url_for('device_command_set_wifi', device_uid=device.device_uid) }}">
+      {{ csrf_field() }}
+      <div class="col-sm-5">
+        <label class="form-label" for="wifi-ssid">SSID</label>
+        <input class="form-control" id="wifi-ssid" name="ssid" type="text" maxlength="32" required placeholder="Red del sitio" value="{{ net_wifi.get('ssid') or '' }}">
+      </div>
+      <div class="col-sm-5">
+        <label class="form-label" for="wifi-password">Password</label>
+        <input class="form-control" id="wifi-password" name="password" type="password" maxlength="64" autocomplete="new-password">
+      </div>
+      <div class="col-sm-2">
+        <button class="btn btn-outline-primary" type="submit">Guardar WiFi</button>
+      </div>
+    </form>
+    {% if net_wifi.get('configured') or net_wifi.get('ssid') %}
+    <form method="post" action="{{ url_for('device_command_clear_wifi', device_uid=device.device_uid) }}">
+      {{ csrf_field() }}
+      <button class="btn btn-outline-secondary" type="submit" onclick="return confirm('Olvidar WiFi de este equipo?');">Olvidar</button>
+    </form>
+    {% endif %}
+    </div>
+    <p class="small text-muted mb-0 mt-2">Primero con cable. El comando va por MQTT, sin retain. El password no queda en el historial.</p>
+    {% endif %}
+  </div>
+</div>
 
 <div class="card mb-4">
   <div class="card-body">

@@ -1,0 +1,15 @@
+﻿# Keep agent context small. PDFs, KiCad dumps, and previews burn tokens.
+*.pdf
+*.kicad_sch
+hardware/kicad/_preview/
+hardware/kicad/__pycache__/
+hardware/kicad/*.svg
+hardware/kicad/*.kicad_prl
+hardware/kicad/erc*.rpt
+hardware/layout-9x15.png
+website/assets/*.png
+**/__pycache__/
+.pio/
+*.elf
+*.map
+.env

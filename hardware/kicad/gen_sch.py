@@ -42,7 +42,6 @@ EXTRACT = {
     "Device:Fuse": ("Device.kicad_sym", "Fuse"),
     "Device:Battery": ("Device.kicad_sym", "Battery"),
     "Device:Q_PMOS": ("Device.kicad_sym", "Q_PMOS"),
-    "Transistor_FET:2N7000": ("Transistor_FET.kicad_sym", "2N7000"),
     "Timer:CD4541BE": ("Timer.kicad_sym", "CD4541BE"),
     "Timer:NE555D": ("Timer.kicad_sym", "NE555D"),
     "Switch:SW_Push": ("Switch.kicad_sym", "SW_Push"),
@@ -322,26 +321,15 @@ BOXES = {
         [("1", "+"), ("2", "-")],
         [],
     ),
-    "Module:IDC10": (
-        "IDC-10 A↔B",
-        [],
-        [
-            ("1", "GND"),
-            ("2", "5V_SYS"),
-            ("3", "GND"),
-            ("4", "5V_MODEM"),
-            ("5", "GEL_ADC"),
-            ("6", "IO15"),
-            ("7", "MODEM_CUT"),
-            ("8", "LED_PWR"),
-            ("9", "BTN_RESET"),
-            ("10", "GND"),
-        ],
+    "Module:HCT14": (
+        "74HCT14",
+        [("1", "1A"), ("3", "2A"), ("5", "3A"), ("9", "4A"), ("11", "5A"), ("13", "6A"), ("7", "GND")],
+        [("2", "1Y"), ("4", "2Y"), ("6", "3Y"), ("8", "4Y"), ("10", "5Y"), ("12", "6Y"), ("14", "VCC")],
     ),
-    "Module:AHCTBUF": (
-        "74HCT125",
-        [("1", "1OE"), ("2", "1A"), ("7", "GND"), ("4", "2A"), ("9", "3A"), ("12", "4A")],
-        [("3", "1Y"), ("14", "VCC"), ("6", "2OE"), ("10", "3OE"), ("13", "4OE")],
+    "Module:LM66200": (
+        "LM66200 dual ideal diode",
+        [("1", "VIN1"), ("2", "VIN2"), ("3", "GND"), ("5", "EN")],
+        [("4", "VOUT"), ("6", "STAT")],
     ),
 }
 
@@ -369,6 +357,10 @@ class Sch:
     def is_ic(self, ref: str) -> bool:
         lib = self.parts[ref]["lib"]
         return lib.startswith(("Module:", "Timer:", "Transistor_Array:"))
+
+    def is_keepout(self, ref: str) -> bool:
+        lib = self.parts[ref]["lib"]
+        return self.is_ic(ref) or lib.startswith(("Device:Q_PMOS", "Transistor_FET:", "Device:Battery"))
 
     def pin(self, ref: str, num: str) -> tuple[float, float]:
         p = self.parts[ref]
@@ -429,7 +421,7 @@ class Sch:
 
     def _hits_ic(self, x1: float, y1: float, x2: float, y2: float) -> bool:
         for ref in self.parts:
-            if not self.is_ic(ref):
+            if not self.is_keepout(ref):
                 continue
             if self._seg_hits_box(x1, y1, x2, y2, self.body_bbox(ref)):
                 return True
@@ -442,7 +434,7 @@ class Sch:
         x = x1
         ya, yb = (y1, y2) if y1 < y2 else (y2, y1)
         for ref in self.parts:
-            if not self.is_ic(ref):
+            if not self.is_keepout(ref):
                 continue
             cols: dict[float, list[float]] = {}
             for num in self.pin_lookup[self.parts[ref]["lib"]]:
@@ -466,7 +458,7 @@ class Sch:
         """Axis-aligned keep-outs along each IC's stub column (x1,y1,x2,y2,axis)."""
         boxes: list[tuple[float, float, float, float, str]] = []
         for ref in self.parts:
-            if not self.is_ic(ref):
+            if not self.is_keepout(ref):
                 continue
             left_ys: list[float] = []
             right_ys: list[float] = []
@@ -537,7 +529,7 @@ class Sch:
         ]
         margin = g(2)
         for ref in self.parts:
-            if not self.is_ic(ref):
+            if not self.is_keepout(ref):
                 continue
             x0, y0, x3, y3 = self.body_bbox(ref)
             top = self._grid(y0 - margin)
@@ -585,19 +577,18 @@ class Sch:
             return None
         return min(candidates, key=self._path_len)
 
-    def route(self, x1: float, y1: float, x2: float, y2: float) -> None:
-        """Short manhattan route that does not cross IC / module bodies."""
+    def route(self, x1: float, y1: float, x2: float, y2: float) -> bool:
+        """Short manhattan route. Never crosses a symbol body or pin column."""
         if abs(x1 - x2) < 0.02 and abs(y1 - y2) < 0.02:
-            return
+            return True
         path = self._best_path(x1, y1, x2, y2)
         if path is not None:
             self._draw_path(path)
-            return
-        # Last resort: walk around the hull of every IC between the two points.
+            return True
         xs = [x1, x2]
         ys = [y1, y2]
         for ref in self.parts:
-            if not self.is_ic(ref):
+            if not self.is_keepout(ref):
                 continue
             x0, y0, x3, y3 = self.body_bbox(ref)
             if max(x1, x2) < x0 - 2 or min(x1, x2) > x3 + 2:
@@ -610,10 +601,13 @@ class Sch:
         hull = [(x1, y1), (x1, top), (x2, top), (x2, y2)]
         if self._path_ok(hull):
             self._draw_path(hull)
-            return
+            return True
         bot = self._grid(max(ys) + g(3))
         hull = [(x1, y1), (x1, bot), (x2, bot), (x2, y2)]
-        self._draw_path(hull)
+        if self._path_ok(hull):
+            self._draw_path(hull)
+            return True
+        return False
 
     def wire(self, x1: float, y1: float, x2: float, y2: float) -> None:
         self.items.append(
@@ -652,19 +646,38 @@ class Sch:
     def _side_vec(self, side: str) -> tuple[float, float]:
         return {"L": (-1.0, 0.0), "R": (1.0, 0.0), "U": (0.0, -1.0), "D": (0.0, 1.0)}[side]
 
-    def join(self, ra: str, pa: str, rb: str, pb: str, mid: float | None = None) -> None:
+    def _label_pair(self, ra: str, pa: str, rb: str, pb: str, x1: float, y1: float, x2: float, y2: float, net: str | None) -> None:
+        """Wire would cross a block: labels, never a cable over a body."""
+        name = net or f"{ra}_{pa}"
+        if self.is_ic(ra):
+            dx, dy = self.escape_dir(ra, pa)
+            rot1 = self._dir_rot(dx, dy)
+        else:
+            rot1 = 0 if x2 >= x1 else 180
+        if self.is_ic(rb):
+            dx, dy = self.escape_dir(rb, pb)
+            rot2 = self._dir_rot(dx, dy)
+        else:
+            rot2 = 180 if x2 >= x1 else 0
+        self.llabel(name, x1, y1, rot1)
+        self.llabel(name, x2, y2, rot2)
+
+    def join(self, ra: str, pa: str, rb: str, pb: str, mid: float | None = None, net: str | None = None) -> None:
         p1 = self.pin(ra, pa)
         p2 = self.pin(rb, pb)
         x1, y1 = self.leave_pin(ra, pa, p2)
         x2, y2 = self.leave_pin(rb, pb, p1)
-        if mid is None:
-            self.route(x1, y1, x2, y2)
-            return
-        path = [(x1, y1), (mid, y1), (mid, y2), (x2, y2)]
-        if self._path_ok(path):
+        path = None
+        if mid is not None:
+            cand = [(x1, y1), (mid, y1), (mid, y2), (x2, y2)]
+            if self._path_ok(cand):
+                path = cand
+        if path is None:
+            path = self._best_path(x1, y1, x2, y2)
+        if path is not None:
             self._draw_path(path)
-        else:
-            self.route(x1, y1, x2, y2)
+            return
+        self._label_pair(ra, pa, rb, pb, x1, y1, x2, y2, net)
 
     def join_via_x(self, ra: str, pa: str, rb: str, pb: str, x: float) -> None:
         p1 = self.pin(ra, pa)
@@ -687,9 +700,12 @@ class Sch:
                 self.junc(x, py)
                 return x, py
             ex, ey = self.leave_pin(ref, pin, dest)
-            self.route(ex, ey, x, py)
-            self.junc(x, py)
-            return x, py
+            if self.route(ex, ey, x, py):
+                self.junc(x, py)
+                return x, py
+            dx, dy = self.escape_dir(ref, pin)
+            self.llabel(f"{ref}_{pin}", ex, ey, self._dir_rot(dx, dy))
+            return ex, ey
         self.wire(px, py, x, py)
         self.junc(x, py)
         return x, py
@@ -825,10 +841,11 @@ class Sch:
         if side is None:
             dx, _dy = self.escape_dir(ref, pins[0]) if self.is_ic(ref) else (-1.0, 0.0)
             side = "L" if dx < 0 else "R"
+        extra = g(6)
         if side == "L":
-            bx = min(x for x, _y in escaped)
+            bx = min(x for x, _y in escaped) - extra
         else:
-            bx = max(x for x, _y in escaped)
+            bx = max(x for x, _y in escaped) + extra
         ys = [y for _x, y in escaped]
         for x, y in escaped:
             if abs(x - bx) > 0.02:
@@ -842,10 +859,11 @@ class Sch:
         if side is None:
             dx, _dy = self.escape_dir(ref, pins[0]) if self.is_ic(ref) else (-1.0, 0.0)
             side = "L" if dx < 0 else "R"
+        extra = g(6)
         if side == "L":
-            bx = min(x for x, _y in escaped)
+            bx = min(x for x, _y in escaped) - extra
         else:
-            bx = max(x for x, _y in escaped)
+            bx = max(x for x, _y in escaped) + extra
         ys = [y for _x, y in escaped]
         for x, y in escaped:
             if abs(x - bx) > 0.02:
@@ -955,8 +973,8 @@ class Sch:
 	(paper "{self.paper}")
 	(title_block
 		(title "{self.title}")
-		(date "2026-09-10")
-		(rev "1.2")
+		(date "2026-09-12")
+		(rev "1.4")
 		(company "CallOnFail")
 		(comment 1 "{self.comment}")
 	)
@@ -1002,6 +1020,45 @@ def fill_lookups(
     for lib_id, txt in box_text.items():
         out[lib_id] = parse_pins(txt)
     return out
+
+
+def _conn_stub(s: Sch, ref: str, pin: str) -> tuple[float, float]:
+    """Straight stub off a connector pin; never along the pin column."""
+    x, y = s.pin(ref, pin)
+    ex = x + ESCAPE
+    s.wire(x, y, ex, y)
+    return ex, y
+
+
+def wire_ab_link(s: Sch, j_pwr: str, j_sig: str) -> None:
+    """Proto A↔B: bornera 5 V + Molex/bornera señales. Same pinout both ends."""
+    gnd_pts = []
+    for pin in ("1", "3"):
+        ex, ey = _conn_stub(s, j_pwr, pin)
+        gnd_pts.append((ex, ey))
+    for pin, net in (("2", "5V_SYS"), ("4", "5V_MODEM")):
+        ex, ey = _conn_stub(s, j_pwr, pin)
+        s.glabel(net, ex, ey, 0)
+    gx = gnd_pts[0][0] + g(6)
+    for ex, ey in gnd_pts:
+        s.wire(ex, ey, gx, ey)
+        s.junc(gx, ey)
+    bot = max(ey for _x, ey in gnd_pts) + g(4)
+    s.wire(gx, min(ey for _x, ey in gnd_pts), gx, bot)
+    s.gnd_at(gx, bot)
+
+    for pin, net in (
+        ("1", "GEL_ADC"),
+        ("2", "IO15"),
+        ("3", "MODEM_CUT"),
+        ("4", "LED_PWR"),
+        ("5", "BTN_RESET"),
+    ):
+        ex, ey = _conn_stub(s, j_sig, pin)
+        s.glabel(net, ex, ey, 0)
+    ex, ey = _conn_stub(s, j_sig, "6")
+    s.wire(ex, ey, ex, ey + g(4))
+    s.gnd_at(ex, ey + g(4))
 
 
 def build_power(lookups) -> Sch:
@@ -1059,51 +1116,34 @@ def build_power(lookups) -> Sch:
     s.tap_net("R6", "2", "GEL_ADC", "R", g(10))
     s.text("~2,2 V @ 6,9 V   ~1,75 V @ 5,5 V  -> IO35", g(220), g(86))
 
-    # --- Backup: U2 debajo/izq de la bateria, VIN corto ---
+    # --- Backup XL6019 + OR LM66200; EN via HCT14 open-drain-ish (D10+R2) ---
     s.place("Device:R", "R1", "10k", g(48), g(108), 0)
-    s.place("Transistor_FET:2N7000", "Q5", "2N7000", g(70), g(124), 0)
     s.place("Device:R", "R18", "100k", g(48), g(140), 0)
-    s.place("Module:BUCKBOOST", "U2", "XL6019", g(130), g(120), 0)
-    s.place("Device:R", "R2", "10k", g(96), g(146), 0)
-    s.place("Device:Q_PMOS", "Q10", "NDP6020P", g(154), g(112), 180)
-    s.place("Transistor_FET:2N7000", "Q11", "2N7000", g(230), g(108), 0)
-    s.place("Device:R", "R37", "100k", g(166), g(128), 0)
-    s.place("Device:Q_PMOS", "Q8", "NDP6020P", g(178), g(96), 180)
-    s.place("Transistor_FET:2N7000", "Q9", "2N7000", g(206), g(96), 0)
-    s.place("Device:R", "R36", "100k", g(190), g(80), 0)
-    s.place("Device:C_Polarized", "C1", "2200uF/16V", g(256), g(120), 0)
-    s.place("Device:C", "C10", "100n", g(278), g(120), 0)
+    s.place("Module:BUCKBOOST", "U2", "XL6019", g(110), g(120), 0)
+    s.place("Device:R", "R2", "10k", g(70), g(150), 0)
+    s.place("Device:D", "D10", "1N4148", g(148), g(136), 0)
+    s.place("Module:LM66200", "U14", "LM66200", g(190), g(120), 0)
+    s.place("Device:C_Polarized", "C1", "2200uF/16V", g(250), g(120), 0)
+    s.place("Device:C", "C10", "100n", g(272), g(120), 0)
     s.tap_net("R1", "1", "5V_PSU", "U", g(6))
-    s.join("R1", "2", "Q5", "2")
     s.join("R1", "2", "R18", "1")
     s.junc(*s.pin("R1", "2"))
     s.gnd_pin("R18", "2", "D")
-    s.gnd_pin("Q5", "1", "D")
-    s.join("Q5", "3", "U2", "3")
     s.tap_local("R1", "2", "PSU_DET", "R", g(8))
-    s.join("BT1", "1", "U2", "1")
-    s.join("BT1", "1", "R2", "1")
+    s.tap_net("U2", "1", "GEL_P", "L", g(6))
+    s.tap_net("R2", "1", "GEL_P", "L", g(6))
     s.join("R2", "2", "U2", "3")
     s.junc(*s.pin("U2", "3"))
     s.gnd_pin("U2", "2", "L")
     s.gnd_pin("U2", "5", "D")
-    s.join("U2", "4", "Q10", "D")
-    s.join("Q10", "S", "C1", "1")
-    s.join("Q10", "G", "Q11", "3")
-    s.join("Q10", "G", "R37", "1")
-    s.junc(*s.pin("Q10", "G"))
-    s.join("R37", "2", "C1", "1")
-    s.gnd_pin("Q11", "1", "D")
     s.tap_local("U2", "3", "BB_EN", "R", g(6))
-    s.tap_local("Q11", "2", "BB_EN", "L", g(6))
-    s.tap_net("Q8", "D", "5V_PSU", "L", g(6))
-    s.join("Q8", "S", "C1", "1")
-    s.join("Q8", "G", "Q9", "3")
-    s.join("Q8", "G", "R36", "1")
-    s.junc(*s.pin("Q8", "G"))
-    s.join("R36", "2", "C1", "1")
-    s.gnd_pin("Q9", "1", "D")
-    s.tap_local("Q9", "2", "PSU_DET", "L", g(6))
+    s.tap_local("D10", "1", "BB_EN", "L", g(6))
+    s.tap_net("U14", "1", "5V_PSU", "L", g(6))
+    s.join("U2", "4", "U14", "2")
+    s.gnd_pin("U14", "3", "D")
+    s.gnd_pin("U14", "5", "L")
+    s.nc(*s.pin("U14", "6"))
+    s.join("U14", "4", "C1", "1")
     s.gnd_pin("C1", "2", "D")
     s.join("C1", "1", "C10", "1")
     s.gnd_pin("C10", "2", "D")
@@ -1112,66 +1152,59 @@ def build_power(lookups) -> Sch:
     s.tap_net("C1", "1", "5V_BUS", "R", g(10))
     s.place("power:PWR_FLAG", "#FLG_BUS", "PWR_FLAG", c1p[0] + g(16), c1p[1], 0)
     s.wire(c1p[0], c1p[1], c1p[0] + g(16), c1p[1])
-    s.text("Hay PSU: Q5/Q9 ON -> backup EN=0, Q8 ON, Q10 OFF.", g(32), g(162))
-    s.text("Sin PSU: Q8 OFF, EN=Gel+, Q11 ON, Q10 ON. Ambos NDP6020P S=BUS D=fuente.", g(32), g(166))
-    s.text("Ajuste XL6019 5,1 V (ya no 5,4: no hay Schottky). No XL6009 / ZK-4KX.", g(32), g(170))
+    s.text("OR: LM66200 (VIN1=PSU, VIN2=XL6019). EN=0 con PSU (HCT14+D10). R2 a Gel+.", g(32), g(188))
+    s.text("Ajuste XL6019 5,1 V. No XL6009 / ZK-4KX. Modulo AE con pines 2,54.", g(32), g(192))
 
-    # --- High-side: SYS lo maneja el 555 CMOS; modem sigue con inversor (GPIO 3V3) ---
-    s.text("TLC555 HIGH=5V corta Q1. Modem: 74HCT125 DIP (3V3 in, 5V out). Todo THT.", g(32), g(176), 1.50)
-    s.place("Device:Q_PMOS", "Q1", "NDP6020P", g(160), g(196), 180)
-    s.place("Device:R", "R3", "100k", g(174), g(220), 0)
-    s.place("Device:R", "R19", "1k", g(188), g(196), 0)
+    # --- High-side Q1/Q3 + 74HCT14 (EN + buffer MODEM_CUT) ---
+    s.text("TLC555->Q1. 74HCT14: 1=EN backup, 2+3=buffer MODEM_CUT. Solo 2x NDP6020P.", g(32), g(200), 1.50)
+    s.place("Device:Q_PMOS", "Q1", "NDP6020P", g(70), g(230), 180)
+    s.place("Device:R", "R3", "100k", g(88), g(252), 0)
+    s.place("Device:R", "R19", "1k", g(104), g(230), 0)
     s.join("Q1", "G", "R3", "1")
     s.join("Q1", "G", "R19", "2")
     s.junc(*s.pin("Q1", "G"))
     s.gnd_pin("R3", "2", "D")
     s.tap_local("R19", "1", "WDT_PULSE", "R", g(6))
     s.tap_net("Q1", "D", "5V_SYS", "D", g(6))
-    s.text("Q1 5V_SYS. 555 idle LOW = ON. Pulso HIGH ~2 s = OFF.", g(32), g(244))
+    s.tap_net("Q1", "S", "5V_BUS", "U", g(6))
+    s.text("Q1 5V_SYS. 555 idle LOW = ON. Pulso HIGH ~2 s = OFF.", g(32), g(272))
 
-    s.place("Device:Q_PMOS", "Q3", "NDP6020P", g(256), g(196), 180)
-    s.place("Module:AHCTBUF", "U13", "74HCT125", g(318), g(196), 0)
-    s.place("Device:R", "R4", "100k", g(268), g(220), 0)
-    s.place("Device:R", "R23", "1k", g(280), g(176), 0)
-    s.place("Device:R", "R24", "100k", g(292), g(220), 0)
-    s.place("Device:C", "C17", "100n", g(332), g(228), 0)
-    s.gnd_rail("U13", ["1", "7", "4", "9", "12"], "L")
-    s.rail("U13", ["14", "6", "10", "13"], "5V_BUS", "R")
-    s.join("U13", "2", "R23", "2")
-    s.join("U13", "2", "R24", "1")
-    s.junc(*s.pin("U13", "2"))
-    s.gnd_pin("R24", "2", "D")
+    s.place("Module:HCT14", "U13", "74HCT14", g(180), g(230), 0)
+    s.place("Device:Q_PMOS", "Q3", "NDP6020P", g(270), g(230), 0)
+    s.place("Device:R", "R4", "100k", g(290), g(252), 0)
+    s.place("Device:R", "R23", "1k", g(148), g(214), 0)
+    s.place("Device:R", "R24", "100k", g(148), g(252), 0)
+    s.place("Device:C", "C17", "100n", g(210), g(260), 0)
+    s.tap_net("U13", "14", "5V_BUS", "R", g(6))
+    s.gnd_pin("U13", "7", "L")
+    s.tap_local("U13", "1", "PSU_DET", "L", g(6))
+    s.join("U13", "2", "D10", "2")
     s.tap_net("R23", "1", "MODEM_CUT", "L", g(6))
-    s.join("U13", "3", "Q3", "G")
+    s.join("R23", "2", "U13", "3")
+    s.join("R23", "2", "R24", "1")
+    s.junc(*s.pin("R23", "2"))
+    s.gnd_pin("R24", "2", "D")
+    s.tap_local("U13", "4", "MC_BUF", "R", g(6))
+    s.tap_local("U13", "5", "MC_BUF", "L", g(6))
+    s.join("U13", "6", "Q3", "G")
     s.join("Q3", "G", "R4", "1")
     s.junc(*s.pin("Q3", "G"))
     s.gnd_pin("R4", "2", "D")
+    s.gnd_pin("U13", "9", "L")
+    s.gnd_pin("U13", "11", "L")
+    s.gnd_pin("U13", "13", "L")
+    s.nc(*s.pin("U13", "8"))
+    s.nc(*s.pin("U13", "10"))
+    s.nc(*s.pin("U13", "12"))
     s.tap_net("C17", "1", "5V_BUS", "U", g(4))
     s.gnd_pin("C17", "2", "D")
-    s.tap_net("Q3", "D", "5V_MODEM", "D", g(6))
-    s.text("Q3 5V_MODEM. 74HCT125 DIP-14: 1=OE 2=A 3=Y 7=GND 14=VCC. 6/10/13→VCC, 4/9/12→GND.", g(248), g(244))
-
-    q1s = s.pin("Q1", "S")
-    q3s = s.pin("Q3", "S")
-    q8s = s.pin("Q8", "S")
-    q10s = s.pin("Q10", "S")
-    bus_y = g(168)
-    s.wire(c1p[0], c1p[1], c1p[0], bus_y)
-    s.wire(q1s[0], q1s[1], q1s[0], bus_y)
-    s.wire(q3s[0], q3s[1], q3s[0], bus_y)
-    s.wire(q8s[0], q8s[1], q8s[0], bus_y)
-    s.wire(q10s[0], q10s[1], q10s[0], bus_y)
-    xs = (c1p[0], q1s[0], q3s[0], q8s[0], q10s[0])
-    s.wire(min(xs), bus_y, max(xs), bus_y)
-    s.junc(c1p[0], bus_y)
-    s.junc(q1s[0], bus_y)
-    s.junc(q3s[0], bus_y)
-    s.junc(q8s[0], bus_y)
-    s.junc(q10s[0], bus_y)
+    s.tap_net("Q3", "S", "5V_BUS", "U", g(6))
+    s.tap_net("Q3", "D", "5V_MODEM", "R", g(6))
+    s.text("Q3 5V_MODEM. HCT14: 2Y->3A = buffer. D10: 1Y baja BB_EN (R2 a Gel+).", g(148), g(276))
 
     # LED PWR al lado de Q1 (5V_SYS), no cruzando Q3
-    s.place("Device:R", "R5", "330R", g(128), g(196), 90)
-    s.place("Device:LED", "D2", "LED GRN PWR", g(108), g(196), 180)
+    s.place("Device:R", "R5", "330R", g(48), g(230), 90)
+    s.place("Device:LED", "D2", "LED GRN PWR", g(28), g(230), 180)
     s.join("Q1", "D", "R5", "1")
     s.join("R5", "2", "D2", "2")
     s.gnd_pin("D2", "1", "D")
@@ -1197,7 +1230,10 @@ def build_power(lookups) -> Sch:
     s.gnd_pin("U3", "5", "L")
     s.gnd_pin("U3", "7", "D")
     s.tap_net("U3", "14", "5V_BUS", "U", g(4))
-    s.rail("U3", ["9", "10", "12", "13"], "5V_BUS", "L")
+    s.tap_net("U3", "9", "5V_BUS", "R", g(6))
+    s.tap_net("U3", "10", "5V_BUS", "R", g(6))
+    s.tap_net("U3", "12", "5V_BUS", "R", g(6))
+    s.tap_net("U3", "13", "5V_BUS", "R", g(6))
     s.nc(*s.pin("U3", "4"))
     s.nc(*s.pin("U3", "11"))
     s.place("Device:C", "C8", "100n", g(368), g(40), 0)
@@ -1265,18 +1301,19 @@ def build_power(lookups) -> Sch:
     s.tap_net("SW1", "1", "BTN_RESET", "R", g(6))
     s.text("D5: timeout 4541 baja TRIG. SW1 NA a GND. TLC555 OUT a Q1 (no NE555 bipolar).", g(278), g(190))
 
-    s.place("Module:IDC10", "J7", "IDC A→B", g(48), g(280), 0)
-    s.gnd_pin("J7", "1", "R")
-    s.tap_net("J7", "2", "5V_SYS", "R", g(8))
-    s.gnd_pin("J7", "3", "R")
-    s.tap_net("J7", "4", "5V_MODEM", "R", g(8))
-    s.tap_net("J7", "5", "GEL_ADC", "R", g(8))
-    s.tap_net("J7", "6", "IO15", "R", g(8))
-    s.tap_net("J7", "7", "MODEM_CUT", "R", g(8))
-    s.tap_net("J7", "8", "LED_PWR", "R", g(8))
-    s.tap_net("J7", "9", "BTN_RESET", "R", g(8))
-    s.gnd_pin("J7", "10", "R")
-    s.text("Cinta 10: GND en 1/3/10. Polarizada. No enchufar con 5 V. 1000uF del modem va en B.", g(20), g(332))
+    s.place("Connector_Generic:Conn_01x04", "J7", "Enlace 5V A", g(48), g(304), 0)
+    s.place("Connector_Generic:Conn_01x06", "J9", "Enlace sig A", g(90), g(304), 0)
+    wire_ab_link(s, "J7", "J9")
+    s.text(
+        "Proto A↔B: J7 bornera 5,08 (GND 5V_SYS GND 5V_MODEM) + J9 Molex KK 2,54 o bornera.",
+        g(20),
+        g(338),
+    )
+    s.text(
+        "No cinta IDC. No 5V_BUS / 3V3 / GEL+. Luego una placa: estas nets son pistas.",
+        g(20),
+        g(344),
+    )
     return s
 
 
@@ -1332,14 +1369,18 @@ def build_io(lookups) -> Sch:
     s.gnd_pin("C2", "2", "D")
     s.tap_net("C12", "1", "5V_MODEM", "U", g(4))
     s.gnd_pin("C12", "2", "D")
-    s.join("U5", "9", "U6", "3")
-    s.join("U5", "12", "U6", "4")
-    s.place("Device:R", "R32", "1k", g(148), g(56), 0)
-    s.place("Device:R", "R33", "1k", g(148), g(68), 0)
-    s.join("U5", "8", "R32", "1")
-    s.join("R32", "2", "U6", "5")
-    s.join("U5", "7", "R33", "1")
-    s.join("R33", "2", "U6", "6")
+    s.tap_local("U5", "9", "UART_RX", "R", g(6))
+    s.tap_local("U6", "3", "UART_RX", "L", g(6))
+    s.tap_local("U5", "12", "UART_TX", "R", g(6))
+    s.tap_local("U6", "4", "UART_TX", "L", g(6))
+    io4 = s.pin("U5", "8")
+    io2 = s.pin("U5", "7")
+    s.place("Device:R", "R32", "1k", g(148), io4[1], 0)
+    s.place("Device:R", "R33", "1k", g(148), io2[1], 0)
+    s.join("U5", "8", "R32", "1", net="A7672_RST")
+    s.join("R32", "2", "U6", "5", net="A7672_RST")
+    s.join("U5", "7", "R33", "1", net="A7672_PKEY")
+    s.join("R33", "2", "U6", "6", net="A7672_PKEY")
     s.nc(*s.pin("U6", "7"))
     s.tap_net("J3", "1", "MODEM_CUT", "L", g(6))
     s.gnd_pin("J3", "2", "D")
@@ -1383,13 +1424,17 @@ def build_io(lookups) -> Sch:
     s.tap_net("C13", "1", "3V3", "U", g(4))
     s.gnd_pin("C13", "2", "D")
 
-    for ref, sda_pin, scl_pin in (("U7", "3", "4"), ("U8", "3", "4"), ("U11", "3", "4")):
+    for ref, sda_pin, scl_pin in (("U7", "3", "4"), ("U8", "3", "4")):
         s.tap_x(ref, sda_pin, bus_sda)
         s.tap_x(ref, scl_pin, bus_scl)
-    i2c_sda_ys = [sda_y, s.pin("U7", "3")[1], s.pin("U8", "3")[1], s.pin("U11", "3")[1]]
-    i2c_scl_ys = [scl_y, s.pin("U7", "4")[1], s.pin("U8", "4")[1], s.pin("U11", "4")[1]]
+    i2c_sda_ys = [sda_y, s.pin("U7", "3")[1], s.pin("U8", "3")[1]]
+    i2c_scl_ys = [scl_y, s.pin("U7", "4")[1], s.pin("U8", "4")[1]]
     s.wire(bus_sda, min(i2c_sda_ys), bus_sda, max(i2c_sda_ys))
     s.wire(bus_scl, min(i2c_scl_ys), bus_scl, max(i2c_scl_ys))
+    s.glabel("I2C_SDA", bus_sda, min(i2c_sda_ys), 90)
+    s.glabel("I2C_SCL", bus_scl, min(i2c_scl_ys), 90)
+    s.tap_net("U11", "3", "I2C_SDA", "L", g(6))
+    s.tap_net("U11", "4", "I2C_SCL", "L", g(6))
     s.text("I2C IO32/IO33. Pull-up 4k7; omitir si el modulo ya las trae. PCF 0x20.", g(20), g(208))
 
     s.place("Module:DS18B20", "U9", "DS18B20 x4", g(90), g(222), 0)
@@ -1428,8 +1473,8 @@ def build_io(lookups) -> Sch:
     # Campo: 2 IN + 2 OUT. P2 spare (pull-up). P3 buzzer. P6 NET, P7 ALARMA.
     s.place("Connector_Generic:Conn_01x04", "J4", "Campo IN/OUT", g(268), g(130), 0)
     s.place("Connector_Generic:Conn_01x02", "J5", "Campo GND/COM", g(268), g(168), 0)
-    s.join("U11", "8", "J4", "1")
-    s.join("U11", "9", "J4", "2")
+    s.join("U11", "8", "J4", "1", net="IN1")
+    s.join("U11", "9", "J4", "2", net="IN2")
     s.place("Device:R", "R27", "10k", g(236), g(108), 90)
     s.place("Device:R", "R28", "10k", g(244), g(108), 90)
     s.place("Device:R", "R29", "10k", g(252), g(108), 90)
@@ -1461,15 +1506,17 @@ def build_io(lookups) -> Sch:
     s.join("U12", "16", "K1", "2")
     s.join("U12", "15", "K2", "2")
     s.join("U12", "14", "LS1", "2")
-    sys_x = g(244)
-    s.vspine(sys_x, [s.pin("U12", "9"), s.pin("K1", "1"), s.pin("K2", "1"), s.pin("LS1", "1")], "5V_SYS", "R")
+    s.tap_net("U12", "9", "5V_SYS", "R", g(6))
+    s.tap_net("K1", "1", "5V_SYS", "L", g(6))
+    s.tap_net("K2", "1", "5V_SYS", "L", g(6))
+    s.tap_net("LS1", "1", "5V_SYS", "L", g(6))
     s.flyback("D8", "K1")
     s.flyback("D9", "K2")
-    s.join("K1", "3", "J5", "2")
-    s.join("K2", "3", "J5", "2")
+    s.join("K1", "3", "J5", "2", net="FIELD_COM")
+    s.join("K2", "3", "J5", "2", net="FIELD_COM")
     s.junc(*s.pin("J5", "2"))
-    s.join("K1", "4", "J4", "3")
-    s.join("K2", "4", "J4", "4")
+    s.join("K1", "4", "J4", "3", net="OUT1")
+    s.join("K2", "4", "J4", "4", net="OUT2")
     s.text("P3=buzzer O3, P4=K1 O1, P5=K2 O2. P6=NET P7=ALARMA. 2 IN + 2 OUT.", g(188), g(284))
 
     s.place("Connector_Generic:Conn_01x05", "J6", "Panel 5 pin", g(304), g(130), 0)
@@ -1483,26 +1530,23 @@ def build_io(lookups) -> Sch:
     s.join("R16", "2", "D6", "2")
     s.tap_local("D6", "1", "LED_NET", "L", g(6))
     s.tap_local("U11", "14", "LED_NET", "R", g(6))
-    s.tap_net("J6", "3", "LED_NET", "L", g(6))
+    s.tap_local("J6", "3", "LED_NET", "L", g(6))
     s.tap_net("R17", "1", "5V_SYS", "U", g(4))
     s.join("R17", "2", "D7", "2")
     s.tap_local("D7", "1", "LED_ALM", "L", g(6))
     s.tap_local("U11", "15", "LED_ALM", "R", g(6))
-    s.tap_net("J6", "4", "LED_ALM", "L", g(6))
+    s.tap_local("J6", "4", "LED_ALM", "L", g(6))
     s.tap_net("J6", "5", "BTN_RESET", "L", g(6))
     s.text("Panel: GND, PWR, NET (P6), ALARMA (P7), RESET. Buzzer P3, no borne.", g(300), g(152))
 
-    s.place("Module:IDC10", "J8", "IDC B←A", g(48), g(300), 0)
-    s.gnd_pin("J8", "1", "R")
-    s.tap_net("J8", "2", "5V_SYS", "R", g(8))
-    s.gnd_pin("J8", "3", "R")
-    s.tap_net("J8", "4", "5V_MODEM", "R", g(8))
-    s.tap_net("J8", "5", "GEL_ADC", "R", g(8))
-    s.tap_net("J8", "6", "IO15", "R", g(8))
-    s.tap_net("J8", "7", "MODEM_CUT", "R", g(8))
-    s.tap_net("J8", "8", "LED_PWR", "R", g(8))
-    s.tap_net("J8", "9", "BTN_RESET", "R", g(8))
-    s.gnd_pin("J8", "10", "R")
+    s.place("Connector_Generic:Conn_01x04", "J8", "Enlace 5V B", g(48), g(300), 0)
+    s.place("Connector_Generic:Conn_01x06", "J10", "Enlace sig B", g(90), g(300), 0)
+    wire_ab_link(s, "J8", "J10")
+    s.text(
+        "Mismo pinout que J7/J9. Cable 0,75 mm2 en 5 V. Molex polarizado o bornera, no IDC.",
+        g(20),
+        g(332),
+    )
     s.text(
         "GPIO: 0 ETH CLK  2 PWRKEY  4 RESET  5 RX  14 1-Wire  15 WDT  16/18/23 ETH  17 TX  32 SDA  33 SCL  35 gel  36 ZMPT  39 servicio",
         g(20),
@@ -1520,8 +1564,8 @@ def build_root() -> str:
 	(paper "A3")
 	(title_block
 		(title "CallOnFail v1")
-		(date "2026-09-10")
-		(rev "1.2")
+		(date "2026-09-12")
+		(rev "1.4")
 		(company "CallOnFail")
 		(comment 1 "WT32-ETH01 + A7672SA-FASE + gel 6V. Ver docs/HARDWARE_V1.md")
 	)
@@ -1533,7 +1577,7 @@ def build_root() -> str:
 		(effects (font (size 3.81 3.81)) (justify left bottom))
 		(uuid "{uid()}")
 	)
-	(text "Abrir las dos hojas jerarquicas. Nets globales unen alimentacion con I/O."
+	(text "Dos hojas: A alimentacion + B I/O. Enlace proto bornera/Molex. Luego una placa."
 		(exclude_from_sim no)
 		(at 50.80 40.64 0)
 		(effects (font (size 1.27 1.27)) (justify left bottom))

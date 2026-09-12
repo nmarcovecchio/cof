@@ -1,6 +1,7 @@
 # A7672 modem docs (lab)
 
-Local copies for CallOnFail voice work. Do not guess AT behavior — read these first.
+Vendor PDFs stay on disk only (gitignored). Do not commit them or attach them
+to an agent chat. Do not guess AT behavior — open the local PDF in a viewer.
 
 Validated module: **A7672SA-FASE** (LatAm: LTE B4/B28, GSM 850/1900).
 

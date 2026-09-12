@@ -1,0 +1,13 @@
+---
+description: Firmware ESP32 — keep token use low
+globs: src/**/*.{cpp,h,ino},platformio.ini,include/**/*
+alwaysApply: false
+---
+
+# Firmware work
+
+- Prefer a **new chat** for firmware; do not continue long hardware/KiCad threads.
+- Point at one file or function; avoid “read the whole firmware”.
+- Never Read/Grep `*.pdf`, `*.kicad_sch`, `_preview/*`, or layout PNGs. They are gitignored and cursorignored.
+- Hardware v1.4 is frozen — GPIO map is in `docs/HARDWARE_V1.md` §10; do not redesign power here.
+- Ask for Agent only when you want code edits; use Ask/cheap model for “how does X work?”.

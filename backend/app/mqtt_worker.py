@@ -136,6 +136,7 @@ def persist_message(topic, payload):
                         water_leak=to_bool_or_none(payload.get("water_leak")),
                     )
                 )
+                store_network_status(device, payload)
                 evaluate_device_rules(device, payload)
                 pump_modem_queue(device)
             elif message_type == "event":
@@ -173,6 +174,7 @@ def persist_message(topic, payload):
                         discovered["cellular"] = cell
                     device.discovered = discovered
                     flag_modified(device, "discovered")
+                store_network_status(device, payload)
             elif message_type == "config/reported":
                 version = to_int(payload.get("config_version"))
                 if version is not None:
@@ -248,6 +250,16 @@ def get_or_create_device(device_uid):
     db.session.add(device)
     db.session.flush()
     return device
+
+
+def store_network_status(device, payload):
+    network = payload.get("network")
+    if not isinstance(network, dict):
+        return
+    discovered = dict(device.discovered or {})
+    discovered["network"] = network
+    device.discovered = discovered
+    flag_modified(device, "discovered")
 
 
 def to_float(value):

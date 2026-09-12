@@ -13,6 +13,7 @@
 #include <Wire.h>
 #include <Adafruit_SHT31.h>
 #include <esp_arduino_version.h>
+#include <esp_netif.h>
 #include <esp_task_wdt.h>
 
 #include "cof_config.h"
@@ -157,6 +158,8 @@ String pendingCommandId = "";
 String pendingCommandName = "";
 String pendingCommandStatus = "";
 String pendingCommandMessage = "";
+bool pendingMqttBounce = false;
+bool pendingNetworkStatusReport = false;
 
 bool csAttached();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
@@ -237,6 +240,54 @@ bool networkConnected() {
   return state.ethernetConnected || state.wifiConnected;
 }
 
+const char* activeNetworkName() {
+  if (state.ethernetConnected) {
+    return "ethernet";
+  }
+  if (state.wifiConnected) {
+    return "wifi";
+  }
+  return "none";
+}
+
+void applyPreferredRoute() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  if (state.ethernetConnected) {
+    ETH.setDefault();
+    Serial.println("[net] default route ETH");
+  } else if (state.wifiConnected) {
+    WiFi.setDefault();
+    Serial.println("[net] default route WiFi");
+  }
+#else
+  esp_netif_t* netif = nullptr;
+  if (state.ethernetConnected) {
+    netif = esp_netif_get_handle_from_ifkey("ETH_DEF");
+  } else if (state.wifiConnected) {
+    netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  }
+  if (netif != nullptr) {
+    esp_err_t err = esp_netif_set_default_netif(netif);
+    Serial.printf("[net] default route %s err=%d\n",
+                  state.ethernetConnected ? "ETH" : "WiFi",
+                  static_cast<int>(err));
+  }
+#endif
+}
+
+void requestMqttBounce(const char* reason) {
+  pendingMqttBounce = true;
+  Serial.printf("[mqtt] bounce requested: %s\n", reason);
+}
+
+void bounceMqttForRouteChange() {
+  if (mqttClient.connected() || state.mqttConnected) {
+    mqttClient.disconnect();
+  }
+  state.mqttConnected = false;
+  lastMqttReconnectMs = 0;
+}
+
 void beginInternalWatchdog() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_task_wdt_config_t config = {
@@ -266,34 +317,57 @@ void onNetworkEvent(WiFiEvent_t event) {
     case ARDUINO_EVENT_ETH_CONNECTED:
       setStatus("ETH cable OK");
       break;
-    case ARDUINO_EVENT_ETH_GOT_IP:
+    case ARDUINO_EVENT_ETH_GOT_IP: {
+      const bool wasEthernet = state.ethernetConnected;
       state.ethernetConnected = true;
       state.ipAddress = ETH.localIP().toString();
+      applyPreferredRoute();
+      if (!wasEthernet) {
+        requestMqttBounce("eth got ip");
+      }
+      pendingNetworkStatusReport = true;
       setStatus("ETH IP " + state.ipAddress);
       break;
+    }
     case ARDUINO_EVENT_ETH_DISCONNECTED:
       state.ethernetConnected = false;
       state.ipAddress = "-";
+      applyPreferredRoute();
+      requestMqttBounce("eth disconnected");
+      pendingNetworkStatusReport = true;
       setStatus("ETH disconnected");
       break;
     case ARDUINO_EVENT_ETH_STOP:
       state.ethernetStarted = false;
       state.ethernetConnected = false;
       state.ipAddress = "-";
+      applyPreferredRoute();
+      requestMqttBounce("eth stopped");
+      pendingNetworkStatusReport = true;
       setStatus("ETH stopped");
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       state.wifiConnected = true;
       state.wifiIpAddress = WiFi.localIP().toString();
+      if (!state.ethernetConnected) {
+        applyPreferredRoute();
+      }
+      pendingNetworkStatusReport = true;
       setStatus("WiFi IP " + state.wifiIpAddress);
       break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+      const bool lostWifiPath = state.wifiConnected && !state.ethernetConnected;
       state.wifiConnected = false;
       state.wifiIpAddress = "-";
+      if (lostWifiPath) {
+        requestMqttBounce("wifi disconnected");
+      }
       if (state.wifiConfigured) {
+        pendingNetworkStatusReport = true;
         setStatus("WiFi disconnected");
       }
       break;
+    }
     default:
       break;
   }
@@ -322,6 +396,7 @@ void connectWiFi(const String& ssid, const String& password, bool saveCredential
   }
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(ssid.c_str(), password.c_str());
   setStatus("WiFi connecting");
   Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
@@ -450,6 +525,23 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestSmsCommandId = pendingCommandId;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test SMS scheduled";
+      } else if (pendingCommandName == "set_wifi") {
+        const String ssid = doc["ssid"] | "";
+        const String password = doc["password"] | "";
+        if (ssid.length() == 0 || ssid.length() > 32) {
+          pendingCommandMessage = "invalid ssid";
+        } else if (password.length() > 64) {
+          pendingCommandMessage = "invalid password";
+        } else {
+          connectWiFi(ssid, password, true);
+          pendingCommandStatus = "accepted";
+          pendingCommandMessage = "WiFi saved, connecting to " + ssid;
+        }
+      } else if (pendingCommandName == "clear_wifi") {
+        clearSavedWiFi();
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "WiFi cleared";
+        pendingNetworkStatusReport = true;
       } else {
         pendingCommandMessage = "unsupported command";
       }
@@ -657,6 +749,19 @@ void fillCellularJson(JsonObject cellular) {
   cellular["gsm_usable"] = !state.skipGsmVoice;
 }
 
+void fillNetworkJson(JsonObject network) {
+  network["active"] = activeNetworkName();
+  JsonObject ethernet = network["ethernet"].to<JsonObject>();
+  ethernet["up"] = state.ethernetConnected;
+  ethernet["ip"] = state.ethernetConnected ? state.ipAddress : "-";
+  JsonObject wifi = network["wifi"].to<JsonObject>();
+  wifi["configured"] = state.wifiConfigured;
+  wifi["up"] = state.wifiConnected;
+  wifi["ssid"] = state.wifiSsid;
+  wifi["ip"] = state.wifiConnected ? state.wifiIpAddress : "-";
+  wifi["rssi"] = state.wifiConnected ? WiFi.RSSI() : 0;
+}
+
 void publishDeviceStatus(const char* status, bool retained = true) {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
@@ -665,6 +770,7 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   doc["ip"] = currentIpAddress();
   doc["ethernet"] = state.ethernetConnected;
   doc["wifi"] = state.wifiConnected;
+  fillNetworkJson(doc["network"].to<JsonObject>());
   doc["modem_ready"] = state.modemReady;
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
@@ -827,6 +933,7 @@ void publishTelemetryNow() {
   doc["ip"] = currentIpAddress();
   doc["ethernet"] = state.ethernetConnected;
   doc["wifi"] = state.wifiConnected;
+  fillNetworkJson(doc["network"].to<JsonObject>());
   if (isnan(state.dsTemperature)) {
     doc["temperature_1"] = nullptr;
   } else {
@@ -858,8 +965,15 @@ void connectMqttIfNeeded() {
   if (state.ethernetConnected && !ETH.linkUp()) {
     Serial.println("[eth] link down while IP was still cached");
     state.ethernetConnected = false;
-    state.mqttConnected = false;
-    mqttClient.disconnect();
+    state.ipAddress = "-";
+    applyPreferredRoute();
+    requestMqttBounce("eth link down");
+    pendingNetworkStatusReport = true;
+  }
+
+  if (pendingMqttBounce) {
+    pendingMqttBounce = false;
+    bounceMqttForRouteChange();
   }
 
   if (!state.mqttConfigured || !networkConnected()) {
@@ -2702,11 +2816,13 @@ void printRuntimeStatus() {
   }
   Serial.println();
   Serial.printf("Ethernet: %s IP=%s\n", state.ethernetConnected ? "OK" : "NO", state.ipAddress.c_str());
-  Serial.printf("WiFi: %s configured=%s SSID=%s IP=%s\n",
+  Serial.printf("WiFi: %s configured=%s SSID=%s IP=%s RSSI=%d\n",
                 state.wifiConnected ? "OK" : "NO",
                 state.wifiConfigured ? "YES" : "NO",
                 state.wifiSsid.c_str(),
-                state.wifiIpAddress.c_str());
+                state.wifiIpAddress.c_str(),
+                state.wifiConnected ? WiFi.RSSI() : 0);
+  Serial.printf("Active network: %s\n", activeNetworkName());
   Serial.printf("MQTT: %s configured=%s host=%s port=%d device=%s\n",
                 state.mqttConnected ? "OK" : "NO",
                 state.mqttConfigured ? "YES" : "NO",
@@ -2962,6 +3078,11 @@ void loop() {
 
   connectMqttIfNeeded();
   enforceMqttSilenceWatchdog();
+
+  if (state.mqttConnected && pendingNetworkStatusReport) {
+    pendingNetworkStatusReport = false;
+    publishDeviceStatus("online", true);
+  }
 
   if (state.mqttConnected && pendingConfigReport) {
     publishConfigReported();

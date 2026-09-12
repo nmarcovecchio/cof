@@ -305,6 +305,19 @@ devices/cof-000001/telemetry
   "firmware": "0.1.4",
   "uptime_seconds": 12345,
   "ip": "192.168.1.10",
+  "ethernet": true,
+  "wifi": true,
+  "network": {
+    "active": "ethernet",
+    "ethernet": { "up": true, "ip": "192.168.1.10" },
+    "wifi": {
+      "configured": true,
+      "up": true,
+      "ssid": "RedDelSitio",
+      "ip": "192.168.1.20",
+      "rssi": -62
+    }
+  },
   "temperature_1": 24.8,
   "temperature_2": 25.1,
   "humidity": 52.0,
@@ -326,8 +339,13 @@ These payloads are retained and event-driven, not high-frequency telemetry.
 Devices publish them:
 
 - when MQTT connects,
+- when Ethernet or WiFi gains or loses an IP,
 - when hardware discovery changes,
 - when the backend sends `status_report`.
+
+Ethernet is the default route when both links are up. WiFi is a backup path.
+Do **not** put WiFi passwords in retained `config/desired`; use the
+`set_wifi` / `clear_wifi` commands.
 
 Example:
 
@@ -336,6 +354,20 @@ Example:
   "device_id": "cof-test",
   "status": "online",
   "firmware": "0.2.4",
+  "ip": "192.168.1.10",
+  "ethernet": true,
+  "wifi": true,
+  "network": {
+    "active": "ethernet",
+    "ethernet": { "up": true, "ip": "192.168.1.10" },
+    "wifi": {
+      "configured": true,
+      "up": true,
+      "ssid": "RedDelSitio",
+      "ip": "192.168.1.20",
+      "rssi": -62
+    }
+  },
   "hardware_profile": "cof-wt32-a7672-v1",
   "capabilities": {
     "ethernet": true,
@@ -473,7 +505,38 @@ maintenance action.
 ```
 
 The device responds with an ACK and publishes a fresh retained `status` message
-including `hardware_profile`, `capabilities`, and `discovered`.
+including `hardware_profile`, `capabilities`, `discovered`, and `network`.
+
+### Set WiFi credentials
+
+Install with Ethernet first, then publish this from the device page. QoS 1, **not
+retained**. The firmware stores SSID/password in NVS (same keys as Serial
+`wifi`) and associates in STA mode. The ACK and the backend Event store the
+SSID only; `password` is stored as a boolean.
+
+```json
+{
+  "command_id": "uuid",
+  "command": "set_wifi",
+  "device_id": "cof-000001",
+  "ssid": "RedDelSitio",
+  "password": "...",
+  "created_at": "2026-09-12T00:00:00Z"
+}
+```
+
+### Clear saved WiFi
+
+```json
+{
+  "command_id": "uuid",
+  "command": "clear_wifi",
+  "device_id": "cof-000001",
+  "created_at": "2026-09-12T00:00:00Z"
+}
+```
+
+The device forgets NVS credentials and disconnects WiFi. Ethernet is unchanged.
 
 ### Test call with audio
 
@@ -542,7 +605,9 @@ devices/cof-000001/ack
 
 The cloud is the source of truth for desired configuration, but devices must
 keep the latest valid config locally and continue critical alarm behavior when
-offline.
+offline. WiFi credentials are an exception: they live only on the device NVS
+and are set with `set_wifi` / `clear_wifi` (or Serial), never in retained
+`config/desired`.
 
 The backend should show:
 

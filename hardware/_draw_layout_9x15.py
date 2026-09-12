@@ -91,7 +91,7 @@ def main() -> None:
         "#fef3c7",
         "#d97706",
         "WDT  CD4541 + TLC555",
-        ["pasivos, D3/D4/D5, SW RESET vía cinta"],
+        ["pasivos, D3/D4/D5, SW RESET vía J7/J9"],
     )
     y += 96
     zone(
@@ -100,18 +100,18 @@ def main() -> None:
         "#ffedd5",
         "#ea580c",
         "High-side",
-        ["2× NDP6020P", "TLC555 → Q1", "74HCT125 DIP"],
+        ["2× NDP6020P", "TLC555 → Q1", "74HCT14 DIP"],
     )
     zone(
         d,
         (ax + W / 2 + 4, y, ax + W - 8, ay + H - 40),
         "#dcfce7",
         "#16a34a",
-        "GEL_ADC",
-        ["47k / 22k", "Q8/Q10 TO-220"],
+        "GEL_ADC + OR",
+        ["47k / 22k", "LM66200"],
     )
     rounded(d, (ax + 8, ay + H - 32, ax + W - 8, ay + H - 8), "#14532d", "#14532d", 6)
-    label(d, (ax + W / 2, ay + H - 20), "IDC-10 → B  GND 5V GND 5V … GND", 11, "white")
+    label(d, (ax + W / 2, ay + H - 20), "J7 bornera 5V + J9 Molex/bornera → B", 11, "white")
 
     # dimension A
     d.line((ax - 28, ay, ax - 28, ay + H), fill="#333", width=2)
@@ -137,7 +137,7 @@ def main() -> None:
         ["los módulos enchufan / cuelgan fuera"],
     )
     rounded(d, (cx + 8, cy + H - 32, cx + W - 8, cy + H - 8), "#14532d", "#14532d", 6)
-    label(d, (cx + W / 2, cy + H - 20), "IDC-10 ← A  pines 1 y 10 = GND", 11, "white")
+    label(d, (cx + W / 2, cy + H - 20), "J8 bornera 5V + J10 Molex/bornera ← A", 11, "white")
     d.line((cx, cy + H + 22, cx + W, cy + H + 22), fill="#333", width=2)
     label(d, (cx + W / 2, cy + H + 36), "9 cm", 13)
 

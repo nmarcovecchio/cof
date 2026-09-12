@@ -409,6 +409,9 @@ wifi-clear
 ```
 
 Nota: por ahora el comando simple no soporta espacios en el SSID o password.
+Desde la ficha web del dispositivo, con Ethernet ya conectado, se puede guardar
+u olvidar WiFi; ahi el password puede tener espacios y no queda en la config
+retenida.
 
 Para configurar MQTT desde Serial:
 
