@@ -316,7 +316,8 @@ devices/cof-000001/telemetry
       "ssid": "RedDelSitio",
       "ip": "192.168.1.20",
       "rssi": -62
-    }
+    },
+    "lte": { "up": false, "ip": "-" }
   },
   "temperature_1": 24.8,
   "temperature_2": 25.1,
@@ -343,7 +344,8 @@ Devices publish them:
 - when hardware discovery changes,
 - when the backend sends `status_report`.
 
-Ethernet is the default route when both links are up. WiFi is a backup path.
+Ethernet is the default route when both LAN links are up. WiFi is a backup
+path. If Ethernet and WiFi are down, MQTT uses LTE data on the A7672.
 Do **not** put WiFi passwords in retained `config/desired`; use the
 `set_wifi` / `clear_wifi` commands.
 
@@ -366,7 +368,8 @@ Example:
       "ssid": "RedDelSitio",
       "ip": "192.168.1.20",
       "rssi": -62
-    }
+    },
+    "lte": { "up": false, "ip": "-" }
   },
   "hardware_profile": "cof-wt32-a7672-v1",
   "capabilities": {

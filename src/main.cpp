@@ -55,6 +55,9 @@ struct RuntimeState {
   bool ethernetConnected = false;
   bool wifiConfigured = false;
   bool wifiConnected = false;
+  bool lteDataUp = false;
+  bool lteMqttTransport = false;
+  uint8_t ltePdpCid = 0;
   bool mqttConfigured = false;
   bool mqttConnected = false;
   bool oledReady = false;
@@ -99,6 +102,7 @@ struct RuntimeState {
   String ipAddress = "-";
   String wifiSsid = "";
   String wifiIpAddress = "-";
+  String lteIpAddress = "-";
   String mqttHost = COF_DEFAULT_MQTT_HOST;
   int mqttPort = COF_DEFAULT_MQTT_PORT;
   String mqttDeviceId = COF_DEFAULT_MQTT_DEVICE_ID;
@@ -160,9 +164,19 @@ String pendingCommandStatus = "";
 String pendingCommandMessage = "";
 bool pendingMqttBounce = false;
 bool pendingNetworkStatusReport = false;
+uint32_t lastLteAttemptMs = 0;
+constexpr uint32_t kLteRetryIntervalMs = 20000;
 
 bool csAttached();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
+void configureMqttClientTransport();
+void maintainLteFallback();
+void releaseLteMqttForModem();
+bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
+void flushModemInput();
+String readModemUntil(uint32_t timeoutMs, const String& token = "");
+bool modemWaitForPrompt(uint32_t timeoutMs);
+void feedWatchdog();
 
 void setStatus(const String& line) {
   state.statusLine = line;
@@ -171,22 +185,6 @@ void setStatus(const String& line) {
 
 bool mqttUsesTls() {
   return state.mqttPort == 8883 || state.mqttPort == 8884;
-}
-
-void configureMqttClientTransport() {
-  if (mqttUsesTls()) {
-    mqttTlsClient.setInsecure();
-    mqttClient.setClient(mqttTlsClient);
-  } else {
-    mqttClient.setClient(mqttPlainClient);
-  }
-  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
-  mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(4096);
-  mqttClient.setKeepAlive(kMqttKeepAliveSeconds);
-  mqttClient.setSocketTimeout(kMqttSocketTimeoutSeconds);
-  mqttPlainClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
-  mqttTlsClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
 }
 
 bool applyDesiredConfig(JsonDocument& doc) {
@@ -236,8 +234,12 @@ bool applyDesiredConfig(JsonDocument& doc) {
   return true;
 }
 
-bool networkConnected() {
+bool lanConnected() {
   return state.ethernetConnected || state.wifiConnected;
+}
+
+bool networkConnected() {
+  return lanConnected() || state.lteDataUp;
 }
 
 const char* activeNetworkName() {
@@ -246,6 +248,9 @@ const char* activeNetworkName() {
   }
   if (state.wifiConnected) {
     return "wifi";
+  }
+  if (state.lteDataUp) {
+    return "lte";
   }
   return "none";
 }
@@ -641,6 +646,9 @@ String currentIpAddress() {
   if (state.wifiConnected) {
     return state.wifiIpAddress;
   }
+  if (state.lteDataUp) {
+    return state.lteIpAddress;
+  }
   return "-";
 }
 
@@ -760,6 +768,9 @@ void fillNetworkJson(JsonObject network) {
   wifi["ssid"] = state.wifiSsid;
   wifi["ip"] = state.wifiConnected ? state.wifiIpAddress : "-";
   wifi["rssi"] = state.wifiConnected ? WiFi.RSSI() : 0;
+  JsonObject lte = network["lte"].to<JsonObject>();
+  lte["up"] = state.lteDataUp;
+  lte["ip"] = state.lteDataUp ? state.lteIpAddress : "-";
 }
 
 void publishDeviceStatus(const char* status, bool retained = true) {
@@ -780,6 +791,7 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   JsonObject capabilities = doc["capabilities"].to<JsonObject>();
   capabilities["ethernet"] = true;
   capabilities["wifi"] = true;
+  capabilities["lte_data"] = true;
   capabilities["modem_a7672"] = true;
   capabilities["phone_calls"] = true;
   capabilities["sms"] = true;
@@ -962,6 +974,8 @@ void publishTelemetryNow() {
 }
 
 void connectMqttIfNeeded() {
+  maintainLteFallback();
+
   if (state.ethernetConnected && !ETH.linkUp()) {
     Serial.println("[eth] link down while IP was still cached");
     state.ethernetConnected = false;
@@ -1060,7 +1074,7 @@ void enforceMqttSilenceWatchdog() {
 }
 
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
-  if (!networkConnected()) {
+  if (!lanConnected()) {
     return false;
   }
 
@@ -1137,7 +1151,7 @@ String readModemUntil(uint32_t timeoutMs, const String& token = "") {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
-    if (state.mqttConnected) {
+    if (state.mqttConnected && !state.lteMqttTransport) {
       mqttClient.loop();
     }
     while (ModemSerial.available()) {
@@ -1167,6 +1181,343 @@ bool sendAT(const String& command, const String& expected = "OK", uint32_t timeo
     *responseOut = response;
   }
   return expected.length() == 0 || response.indexOf(expected) >= 0;
+}
+
+class LteMqttClient : public Client {
+ public:
+  uint8_t sock = 0;
+  bool sockOpen = false;
+  uint8_t rxBuf[512];
+  int rxLen = 0;
+  int rxPos = 0;
+  bool dataInd = false;
+
+  void drainRx() {
+    rxLen = 0;
+    rxPos = 0;
+    dataInd = false;
+  }
+
+  void pumpUrcs() {
+    while (ModemSerial.available()) {
+      String line;
+      const uint32_t start = millis();
+      while (millis() - start < 50) {
+        if (!ModemSerial.available()) {
+          delay(1);
+          continue;
+        }
+        const char c = static_cast<char>(ModemSerial.read());
+        if (c == '\n') {
+          break;
+        }
+        if (c != '\r') {
+          line += c;
+        }
+      }
+      line.trim();
+      if (line.startsWith("+CADATAIND:") || line.startsWith("+CARECV:")) {
+        dataInd = true;
+      } else if (line.startsWith("+CASTATE:") && line.indexOf(",0") > 0) {
+        sockOpen = false;
+      } else if (line.length() > 0) {
+        pendingModemUrcs += line + "\n";
+      }
+    }
+  }
+
+  bool recvChunk() {
+    if (rxPos < rxLen) {
+      return true;
+    }
+    rxLen = 0;
+    rxPos = 0;
+    ModemSerial.print("AT+CARECV=");
+    ModemSerial.print(sock);
+    ModemSerial.print(",512\r\n");
+    String header;
+    const uint32_t startedAt = millis();
+    while (millis() - startedAt < 3000) {
+      feedWatchdog();
+      while (ModemSerial.available()) {
+        const char c = static_cast<char>(ModemSerial.read());
+        header += c;
+        const int tag = header.indexOf("+CARECV:");
+        if (tag >= 0 && header.indexOf('\n', tag) > tag) {
+          const int comma = header.indexOf(',', tag);
+          const int nl = header.indexOf('\n', tag);
+          int n = 0;
+          if (comma > 0 && nl > comma) {
+            n = header.substring(comma + 1, nl).toInt();
+          }
+          if (n <= 0) {
+            dataInd = false;
+            return false;
+          }
+          if (n > static_cast<int>(sizeof(rxBuf))) {
+            n = sizeof(rxBuf);
+          }
+          int got = 0;
+          while (got < n && millis() - startedAt < 3000) {
+            feedWatchdog();
+            if (ModemSerial.available()) {
+              rxBuf[got++] = static_cast<uint8_t>(ModemSerial.read());
+            }
+          }
+          rxLen = got;
+          rxPos = 0;
+          dataInd = false;
+          return rxLen > 0;
+        }
+      }
+      delay(5);
+    }
+    return false;
+  }
+
+  int connect(IPAddress ip, uint16_t port) override {
+    return connect(ip.toString().c_str(), port);
+  }
+
+  int connect(const char* host, uint16_t port) override {
+    stop();
+    if (!state.lteDataUp) {
+      return 0;
+    }
+    const char* proto = mqttUsesTls() ? "SSL" : "TCP";
+    if (mqttUsesTls()) {
+      sendAT("AT+CASSLCFG=0,\"ssl\",1", "OK", 3000);
+    }
+    String cmd = String("AT+CAOPEN=0,") + String(sock) + ",\"" + proto + "\",\"" + host + "\"," + String(port);
+    String resp;
+    if (!sendAT(cmd, "+CAOPEN:", 40000, &resp)) {
+      Serial.println("[lte] CAOPEN fail");
+      sockOpen = false;
+      return 0;
+    }
+    const int tag = resp.indexOf("+CAOPEN:");
+    const int comma = resp.indexOf(',', tag);
+    if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
+      Serial.printf("[lte] CAOPEN err %s\n", resp.c_str());
+      sockOpen = false;
+      return 0;
+    }
+    drainRx();
+    sockOpen = true;
+    Serial.printf("[lte] TCP %s:%u %s\n", host, port, proto);
+    return 1;
+  }
+
+  size_t write(uint8_t b) override {
+    return write(&b, 1);
+  }
+
+  size_t write(const uint8_t* buf, size_t size) override {
+    if (!sockOpen || buf == nullptr || size == 0) {
+      return 0;
+    }
+    size_t sent = 0;
+    while (sent < size) {
+      size_t chunk = size - sent;
+      if (chunk > 1024) {
+        chunk = 1024;
+      }
+      ModemSerial.print("AT+CASEND=");
+      ModemSerial.print(sock);
+      ModemSerial.print(",");
+      ModemSerial.print(static_cast<unsigned>(chunk));
+      ModemSerial.print("\r\n");
+      if (!modemWaitForPrompt(5000)) {
+        sockOpen = false;
+        return sent;
+      }
+      ModemSerial.write(buf + sent, chunk);
+      const String resp = readModemUntil(15000, "OK");
+      if (resp.indexOf("OK") < 0) {
+        sockOpen = false;
+        return sent;
+      }
+      sent += chunk;
+    }
+    return sent;
+  }
+
+  int available() override {
+    if (!sockOpen) {
+      return 0;
+    }
+    if (rxPos < rxLen) {
+      return rxLen - rxPos;
+    }
+    pumpUrcs();
+    if (dataInd) {
+      recvChunk();
+    }
+    return rxLen - rxPos;
+  }
+
+  int read() override {
+    if (available() <= 0) {
+      return -1;
+    }
+    return rxBuf[rxPos++];
+  }
+
+  int read(uint8_t* buf, size_t size) override {
+    if (buf == nullptr || size == 0) {
+      return 0;
+    }
+    int n = 0;
+    while (n < static_cast<int>(size) && available() > 0) {
+      buf[n++] = rxBuf[rxPos++];
+    }
+    return n;
+  }
+
+  int peek() override {
+    if (available() <= 0) {
+      return -1;
+    }
+    return rxBuf[rxPos];
+  }
+
+  void flush() override {}
+
+  void stop() override {
+    if (sockOpen) {
+      sendAT(String("AT+CACLOSE=") + String(sock), "OK", 5000);
+    }
+    sockOpen = false;
+    drainRx();
+  }
+
+  uint8_t connected() override {
+    return sockOpen ? 1 : 0;
+  }
+
+  operator bool() {
+    return connected();
+  }
+};
+
+LteMqttClient lteMqttClient;
+
+bool parseLteIp(const String& resp, String& ipOut) {
+  const int tag = resp.indexOf("+CNACT:");
+  if (tag < 0) {
+    return false;
+  }
+  const int q1 = resp.indexOf('"', tag);
+  const int q2 = resp.indexOf('"', q1 + 1);
+  if (q1 < 0 || q2 < 0 || q2 <= q1 + 1) {
+    return false;
+  }
+  ipOut = resp.substring(q1 + 1, q2);
+  return ipOut.length() >= 7 && ipOut != "0.0.0.0";
+}
+
+bool ensureLtePdp() {
+  if (state.lteDataUp) {
+    return true;
+  }
+  if (!state.modemReady || !state.simReady) {
+    return false;
+  }
+  if (millis() - lastLteAttemptMs < kLteRetryIntervalMs && lastLteAttemptMs != 0) {
+    return false;
+  }
+  lastLteAttemptMs = millis();
+  setStatus("LTE data");
+  sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\",\"" + COF_MODEM_APN_USER + "\",\"" +
+             COF_MODEM_APN_PASS + "\"",
+         "OK", 5000);
+  const uint8_t cids[] = {0, 1};
+  for (uint8_t cid : cids) {
+    feedWatchdog();
+    sendAT(String("AT+CNACT=") + String(cid) + ",1", "OK", 8000);
+    for (int attempt = 0; attempt < 10; attempt++) {
+      feedWatchdog();
+      String resp;
+      sendAT("AT+CNACT?", "OK", 3000, &resp);
+      String ip;
+      if (parseLteIp(resp, ip) && (resp.indexOf(String(cid) + ",1") >= 0 || resp.indexOf(",1,\"") >= 0)) {
+        state.ltePdpCid = cid;
+        state.lteDataUp = true;
+        state.lteIpAddress = ip;
+        setStatus("LTE IP " + ip);
+        Serial.printf("[lte] PDP cid=%u ip=%s\n", cid, ip.c_str());
+        pendingNetworkStatusReport = true;
+        return true;
+      }
+      delay(1500);
+    }
+    sendAT(String("AT+CNACT=") + String(cid) + ",0", "OK", 5000);
+  }
+  setStatus("LTE data fail");
+  return false;
+}
+
+void stopLtePdp() {
+  lteMqttClient.stop();
+  if (state.lteDataUp) {
+    sendAT(String("AT+CNACT=") + String(state.ltePdpCid) + ",0", "OK", 8000);
+  }
+  state.lteDataUp = false;
+  state.lteMqttTransport = false;
+  state.lteIpAddress = "-";
+  pendingNetworkStatusReport = true;
+}
+
+void releaseLteMqttForModem() {
+  if (!state.lteMqttTransport) {
+    return;
+  }
+  mqttClient.disconnect();
+  state.mqttConnected = false;
+  lteMqttClient.stop();
+  lastMqttReconnectMs = 0;
+}
+
+void maintainLteFallback() {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return;
+  }
+  if (lanConnected()) {
+    if (state.lteDataUp || state.lteMqttTransport) {
+      Serial.println("[lte] LAN back, stopping PDP");
+      if (mqttClient.connected()) {
+        mqttClient.disconnect();
+        state.mqttConnected = false;
+      }
+      stopLtePdp();
+      lastMqttReconnectMs = 0;
+    }
+    return;
+  }
+  ensureLtePdp();
+}
+
+void configureMqttClientTransport() {
+  if (!lanConnected() && state.lteDataUp) {
+    mqttClient.setClient(lteMqttClient);
+    state.lteMqttTransport = true;
+    mqttClient.setSocketTimeout(30);
+  } else {
+    state.lteMqttTransport = false;
+    if (mqttUsesTls()) {
+      mqttTlsClient.setInsecure();
+      mqttClient.setClient(mqttTlsClient);
+    } else {
+      mqttClient.setClient(mqttPlainClient);
+    }
+    mqttClient.setSocketTimeout(kMqttSocketTimeoutSeconds);
+  }
+  mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(4096);
+  mqttClient.setKeepAlive(kMqttKeepAliveSeconds);
+  mqttPlainClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
+  mqttTlsClient.setTimeout(kMqttSocketTimeoutSeconds * 1000);
 }
 
 String stopPlaybackAndCollect() {
@@ -1292,6 +1643,8 @@ void drawDisplay() {
     snprintf(line, sizeof(line), "ETH %s", state.ipAddress.c_str());
   } else if (state.wifiConnected) {
     snprintf(line, sizeof(line), "WIFI %s", state.wifiIpAddress.c_str());
+  } else if (state.lteDataUp) {
+    snprintf(line, sizeof(line), "LTE %s", state.lteIpAddress.c_str());
   } else {
     snprintf(line, sizeof(line), "NET NO");
   }
@@ -2594,6 +2947,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
 }
 
 String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioUrl = "", const String& audioFormat = "") {
+  releaseLteMqttForModem();
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
@@ -2689,6 +3043,7 @@ String resolveTestPhone(const String& phoneOverride) {
 }
 
 String transmitSms(const String& phone, const String& body) {
+  releaseLteMqttForModem();
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
     setStatus("SMS mode fail");
     return "SMS mode fail";
@@ -2822,6 +3177,11 @@ void printRuntimeStatus() {
                 state.wifiSsid.c_str(),
                 state.wifiIpAddress.c_str(),
                 state.wifiConnected ? WiFi.RSSI() : 0);
+  Serial.printf("LTE data: %s IP=%s cid=%u mqtt_via_lte=%s\n",
+                state.lteDataUp ? "OK" : "NO",
+                state.lteIpAddress.c_str(),
+                state.ltePdpCid,
+                state.lteMqttTransport ? "YES" : "NO");
   Serial.printf("Active network: %s\n", activeNetworkName());
   Serial.printf("MQTT: %s configured=%s host=%s port=%d device=%s\n",
                 state.mqttConnected ? "OK" : "NO",
@@ -3143,18 +3503,21 @@ void loop() {
   }
 
   if (state.mqttConnected && !state.callInProgress && !state.otaInProgress &&
+      !state.lteMqttTransport &&
       now - lastCellularStatusMs >= kCellularStatusIntervalMs) {
     lastCellularStatusMs = now;
     refreshCellularStatus();
     publishDeviceStatus("online", true);
   }
 
-  if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress) {
+  if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
+      !state.lteMqttTransport) {
     lastModemMs = now;
     pollModem();
   }
 
   if (now - lastSmsPollMs >= kSmsPollIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
+      !state.lteMqttTransport &&
       !pendingTestSmsCommand && !pendingTestCallCommand) {
     lastSmsPollMs = now;
     pollIncomingSms();

@@ -8,6 +8,8 @@
     <span class="badge text-bg-primary">Ethernet</span>
   {% elif active == 'wifi' %}
     <span class="badge text-bg-info">WiFi{% if wifi.get('ssid') %} · {{ wifi.get('ssid') }}{% endif %}</span>
+  {% elif active == 'lte' %}
+    <span class="badge text-bg-warning">LTE</span>
   {% elif device.ip_address %}
     <span class="badge text-bg-primary">LAN</span>
   {% else %}
@@ -25,6 +27,8 @@
     Saliendo por Ethernet
   {% elif active == 'wifi' %}
     Saliendo por WiFi{% if wifi.get('ssid') %} ({{ wifi.get('ssid') }}){% endif %}
+  {% elif active == 'lte' %}
+    Saliendo por LTE
   {% elif device.ip_address %}
     Saliendo por LAN
   {% else %}

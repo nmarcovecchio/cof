@@ -106,7 +106,7 @@
       <button type="button" class="btn btn-sm btn-outline-primary" onclick="addRule()">+ Agregar regla</button>
     </div>
     <div class="card-body">
-      <p class="small text-muted mb-3">Hoy el disparo es en el servidor. Hace falta Ethernet o WiFi. SMS y llamada usan el modem, pero sin internet el equipo no avisa. Email y Telegram no funcionan sin internet. No hay alarma 100% offline todavia.</p>
+      <p class="small text-muted mb-3">Hoy el disparo es en el servidor. Hace falta Ethernet, WiFi o LTE del modem. SMS y llamada usan el modem. Email y Telegram necesitan que el equipo publique por MQTT.</p>
     <div id="rules-container">
       {% if not cfg.rules %}
         <p class="text-muted mb-0" id="no-rules-msg">No hay reglas configuradas. Agregá una.</p>
@@ -161,7 +161,7 @@
       </div>
       <div class="col-12">
         <label class="form-label small mb-1">Acciones</label>
-        <p class="small text-muted mb-2">Hoy el disparo es en el servidor. Hace falta Ethernet o WiFi. SMS y llamada usan el modem, pero sin internet el equipo no avisa. Email y Telegram no funcionan sin internet. No hay alarma 100% offline todavia.</p>
+        <p class="small text-muted mb-2">Hoy el disparo es en el servidor. Hace falta Ethernet, WiFi o LTE del modem. SMS y llamada usan el modem. Email y Telegram necesitan que el equipo publique por MQTT.</p>
         <div class="d-flex flex-column gap-2">
           <div class="form-check">
             <input class="form-check-input rule-action" type="checkbox" value="telegram">

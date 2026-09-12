@@ -108,12 +108,13 @@
 {% set net = device.discovered.get('network') if device.discovered else none %}
 {% set net_eth = (net.get('ethernet') if net else none) or {} %}
 {% set net_wifi = (net.get('wifi') if net else none) or {} %}
+{% set net_lte = (net.get('lte') if net else none) or {} %}
 <div class="card mb-4">
   <div class="card-body">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
         <h2 class="h5 mb-1">Internet (Ethernet / WiFi)</h2>
-        <div class="text-muted small">Da igual el medio: el cliente puede usar cable, WiFi o ambos. Si los dos estan, el equipo sale por Ethernet. La clave no queda en la config retenida.</div>
+        <div class="text-muted small">El cliente puede usar cable, WiFi o ambos. Si no hay Ethernet ni WiFi, el MQTT sale por LTE del modem. Si hay cable y WiFi, prefiere Ethernet. La clave WiFi no queda en la config retenida.</div>
       </div>
       <div class="text-end">
         {{ network_path(device) }}
@@ -121,7 +122,7 @@
       </div>
     </div>
     <div class="row g-3 mb-3">
-      <div class="col-md-6">
+      <div class="col-md-4">
         <div class="meta-label">Ethernet</div>
         <div class="meta-value">
           {{ 'conectado' if net_eth.get('up') else 'sin link' }}
@@ -130,7 +131,7 @@
           {% endif %}
         </div>
       </div>
-      <div class="col-md-6">
+      <div class="col-md-4">
         <div class="meta-label">WiFi</div>
         <div class="meta-value">
           {% if net_wifi.get('up') %}
@@ -148,6 +149,15 @@
           {% endif %}
           {% if net_wifi.get('up') and net_wifi.get('rssi') is not none %}
             · RSSI {{ net_wifi.get('rssi') }}
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="meta-label">LTE (modem)</div>
+        <div class="meta-value">
+          {{ 'datos OK' if net_lte.get('up') else 'en espera' }}
+          {% if net_lte.get('ip') and net_lte.get('ip') != '-' %}
+            · <code>{{ net_lte.get('ip') }}</code>
           {% endif %}
         </div>
       </div>
@@ -187,7 +197,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
         <h2 class="h5 mb-1">Avisos del cliente</h2>
-        <div class="text-muted small">Agenda de {{ device.tenant.name }}. SMS, email y llamadas por contacto. Telegram al grupo del cliente. La llamada solo si este equipo las tiene habilitadas. Email y Telegram necesitan internet. SMS y llamada usan el modem, pero el disparo hoy pasa por el servidor: sin Ethernet/WiFi no se arma la alarma.</div>
+        <div class="text-muted small">Agenda de {{ device.tenant.name }}. SMS, email y llamadas por contacto. Telegram al grupo del cliente. La llamada solo si este equipo las tiene habilitadas. Email y Telegram salen por MQTT (Ethernet, WiFi o LTE). SMS y llamada usan el modem.</div>
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
