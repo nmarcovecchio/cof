@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import redis
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -774,6 +775,29 @@ def create_app() -> Flask:
     @app.post("/devices/<device_uid>/commands/clear-wifi")
     @login_required
     def device_command_clear_wifi(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        discovered = dict(device.discovered or {})
+        network = dict(discovered.get("network") or {})
+        network["wifi"] = {
+            "configured": False,
+            "up": False,
+            "ssid": "",
+            "ip": "-",
+            "rssi": 0,
+        }
+        if network.get("active") == "wifi":
+            eth = network.get("ethernet") or {}
+            lte = network.get("lte") or {}
+            if eth.get("up"):
+                network["active"] = "ethernet"
+            elif lte.get("up"):
+                network["active"] = "lte"
+            else:
+                network["active"] = "none"
+        discovered["network"] = network
+        device.discovered = discovered
+        flag_modified(device, "discovered")
+        db.session.commit()
         flash("Pedido de olvidar WiFi enviado", "success")
         return send_device_command(device_uid, "clear_wifi", "WiFi clear command sent")
 

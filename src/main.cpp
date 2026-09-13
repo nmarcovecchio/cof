@@ -40,7 +40,7 @@ constexpr uint8_t kWifiAuthFailLimit = 3;
 constexpr uint32_t kEthProbeIntervalMs = 4000;
 constexpr uint8_t kEthProbeFailLimit = 2;
 constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
-constexpr uint32_t kMqttSilenceReconnectMs = 3UL * 60UL * 1000UL;
+constexpr uint32_t kMqttSilenceReconnectMs = 20UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
 constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
@@ -144,6 +144,7 @@ uint32_t lastEthProbeMs = 0;
 uint8_t ethProbeFails = 0;
 uint32_t noLanSinceMs = 0;
 uint32_t ethernetUpAtMs = 0;
+IPAddress cachedMqttIp;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -189,6 +190,7 @@ void maintainLteFallback();
 void releaseLteMqttForModem();
 void requestMqttBounce(const char* reason);
 void connectWiFi(const String& ssid, const String& password, bool saveCredentials);
+void forgetWifiRadio();
 void pauseWiFiRadio();
 void startWifiRadio();
 void scheduleWifiBackup(uint32_t delayMs);
@@ -305,6 +307,18 @@ void applyPreferredRoute() {
 #endif
 }
 
+void forgetWifiRadio() {
+  wifiBackupDueMs = 0;
+  wifiAuthFailCount = 0;
+  WiFi.setAutoReconnect(false);
+  WiFi.persistent(true);
+  WiFi.disconnect(false, true);
+  delay(50);
+  WiFi.persistent(false);
+  state.wifiConnected = false;
+  state.wifiIpAddress = "-";
+}
+
 void pauseWiFiRadio() {
   wifiBackupDueMs = 0;
   WiFi.setAutoReconnect(false);
@@ -333,6 +347,7 @@ void startWifiRadio() {
   }
   wifiAuthFailCount = 0;
   state.wifiSsid = ssid;
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
@@ -375,24 +390,23 @@ void pollEthernetPath() {
   if (ethernetUpAtMs != 0 && static_cast<int32_t>(now - ethernetUpAtMs) < 8000) {
     return;
   }
-  if (state.mqttHost.length() == 0) {
-    return;
-  }
-  if (!state.mqttConnected && !mqttClient.connected()) {
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
     return;
   }
 
   WiFiClient probe;
-  probe.setTimeout(2000);
   feedWatchdog();
-  const bool ok = probe.connect(state.mqttHost.c_str(), state.mqttPort);
+  const int ok = probe.connect(cachedMqttIp, state.mqttPort, 1500);
   probe.stop();
   if (ok) {
     ethProbeFails = 0;
     return;
   }
   ethProbeFails++;
-  Serial.printf("[eth] path probe fail %u/%u\n", ethProbeFails, kEthProbeFailLimit);
+  Serial.printf("[eth] path probe fail %u/%u ip=%s\n",
+                ethProbeFails,
+                kEthProbeFailLimit,
+                cachedMqttIp.toString().c_str());
   if (ethProbeFails >= kEthProbeFailLimit) {
     markEthernetDown("path probe");
   }
@@ -429,6 +443,7 @@ void markEthernetDown(const char* reason) {
   requestMqttBounce(reason);
   pendingNetworkStatusReport = true;
   setStatus("ETH down");
+  lastLteAttemptMs = 0;
   startWifiRadio();
 }
 
@@ -502,8 +517,15 @@ void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
       markEthernetDown("stopped");
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      if (!state.wifiConfigured) {
+        Serial.printf("[wifi] ignoring unsolicited IP %s\n", WiFi.localIP().toString().c_str());
+        forgetWifiRadio();
+        pendingNetworkStatusReport = true;
+        break;
+      }
       wifiAuthFailCount = 0;
       state.wifiConnected = true;
+      state.wifiSsid = WiFi.SSID();
       state.wifiIpAddress = WiFi.localIP().toString();
       if (!state.ethernetConnected) {
         applyPreferredRoute();
@@ -542,6 +564,8 @@ void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 void beginEthernet() {
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
   WiFi.onEvent(onNetworkEvent);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ETH.begin(kEthPhyType, kEthPhyAddr, kEthMdcPin, kEthMdioPin, kEthPowerPin, kEthClockMode);
@@ -574,6 +598,7 @@ void beginSavedWiFi() {
 
   if (!state.wifiConfigured) {
     Serial.println("[wifi] no saved credentials");
+    forgetWifiRadio();
     return;
   }
 
@@ -581,16 +606,12 @@ void beginSavedWiFi() {
 }
 
 void clearSavedWiFi() {
-  wifiBackupDueMs = 0;
-  wifiAuthFailCount = 0;
   preferences.remove("wifiSsid");
   preferences.remove("wifiPass");
   state.wifiConfigured = false;
-  state.wifiConnected = false;
   state.wifiSsid = "";
-  state.wifiIpAddress = "-";
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(true, true);
+  forgetWifiRadio();
+  pendingNetworkStatusReport = true;
   setStatus("WiFi cleared");
 }
 
@@ -1205,6 +1226,11 @@ void connectMqttIfNeeded() {
   }
 
   lanMqttFailCount = 0;
+
+  if (!state.lteMqttTransport) {
+    cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
+    Serial.printf("[mqtt] path ip=%s\n", cachedMqttIp.toString().c_str());
+  }
 
   state.mqttConnected = true;
   mqttClient.subscribe(mqttTopic("config/desired").c_str(), 1);
@@ -3647,8 +3673,8 @@ void loop() {
     drawDisplay();
   }
 
-  connectMqttIfNeeded();
   pollEthernetPath();
+  connectMqttIfNeeded();
   maintainWifiBackup();
   enforceMqttSilenceWatchdog();
 

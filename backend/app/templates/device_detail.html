@@ -137,8 +137,10 @@
       <div class="col-md-4">
         <div class="meta-label">WiFi</div>
         <div class="meta-value">
-          {% if net_wifi.get('up') %}
+          {% if net_wifi.get('up') and device|device_live %}
             conectado
+          {% elif net_wifi.get('up') %}
+            ultimo: conectado
           {% elif net_wifi.get('configured') %}
             configurado, sin IP
           {% else %}
@@ -147,10 +149,10 @@
           {% if net_wifi.get('ssid') %}
             · {{ net_wifi.get('ssid') }}
           {% endif %}
-          {% if net_wifi.get('up') and net_wifi.get('ip') and net_wifi.get('ip') != '-' %}
+          {% if net_wifi.get('up') and device|device_live and net_wifi.get('ip') and net_wifi.get('ip') != '-' %}
             · <code>{{ net_wifi.get('ip') }}</code>
           {% endif %}
-          {% if net_wifi.get('up') and net_wifi.get('rssi') is not none %}
+          {% if net_wifi.get('up') and device|device_live and net_wifi.get('rssi') is not none %}
             · RSSI {{ net_wifi.get('rssi') }}
           {% endif %}
         </div>
