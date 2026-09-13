@@ -1483,8 +1483,20 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
     while (ModemSerial.available()) {
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
-      if (token.length() > 0 && response.indexOf(token) >= 0) {
+      if (token.length() == 0) {
+        continue;
+      }
+      const int tagAt = response.indexOf(token);
+      if (tagAt < 0) {
+        continue;
+      }
+      if (!token.endsWith(":")) {
         return response;
+      }
+      for (int i = tagAt + token.length(); i < response.length(); i++) {
+        if (response[i] == '\n' || response[i] == '\r') {
+          return response;
+        }
       }
     }
     delay(10);
@@ -1507,6 +1519,42 @@ bool sendAT(const String& command, const String& expected, uint32_t timeoutMs, S
     *responseOut = response;
   }
   return expected.length() == 0 || response.indexOf(expected) >= 0;
+}
+
+String lastQuoted(const String& text) {
+  const int last = text.lastIndexOf('"');
+  const int prev = last > 0 ? text.lastIndexOf('"', last - 1) : -1;
+  if (prev < 0 || last <= prev + 1) {
+    return "";
+  }
+  return text.substring(prev + 1, last);
+}
+
+String resolveLteMqttPeer(const char* host) {
+  if (cachedMqttIp != IPAddress((uint32_t)0)) {
+    return cachedMqttIp.toString();
+  }
+  String resp;
+  if (sendAT(String("AT+CDNSGIP=\"") + host + "\"", "+CDNSGIP:", 10000, &resp)) {
+    const String ip = lastQuoted(resp);
+    if (ip.length() >= 7 && ip.indexOf('.') > 0 && ip != "0.0.0.0") {
+      Serial.println("[lte] DNS " + ip);
+      return ip;
+    }
+  }
+  return String(host);
+}
+
+int atUrcCode(const String& resp, const char* tag) {
+  const int tagAt = resp.indexOf(tag);
+  if (tagAt < 0) {
+    return -1;
+  }
+  const int comma = resp.indexOf(',', tagAt);
+  if (comma >= 0) {
+    return resp.substring(comma + 1).toInt();
+  }
+  return resp.substring(tagAt + static_cast<int>(strlen(tag))).toInt();
 }
 
 class LteMqttClient : public Client {
@@ -1663,21 +1711,23 @@ class LteMqttClient : public Client {
     }
     String resp;
     if (useNetopen()) {
-      sendAT("AT+CIPMODE=0", "OK", 2000);
+      sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 5000);
       sendAT("AT+CIPRXGET=1", "OK", 3000);
-      String cmd = String("AT+CIPOPEN=") + String(sock) + ",\"TCP\",\"" + host + "\"," + String(port);
-      if (!sendAT(cmd, "+CIPOPEN:", 40000, &resp)) {
+      const String peer = resolveLteMqttPeer(host);
+      String cmd = String("AT+CIPOPEN=") + String(sock) + ",\"TCP\",\"" + peer + "\"," + String(port);
+      if (!sendAT(cmd, "+CIPOPEN:", 25000, &resp)) {
         Serial.println("[lte] CIPOPEN fail");
         sockOpen = false;
         return 0;
       }
-      const int tag = resp.indexOf("+CIPOPEN:");
-      const int comma = resp.indexOf(',', tag);
-      if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
-        Serial.printf("[lte] CIPOPEN err %s\n", resp.c_str());
+      const int err = atUrcCode(resp, "+CIPOPEN:");
+      if (err != 0) {
+        Serial.printf("[lte] CIPOPEN err %d %s\n", err, resp.c_str());
+        sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 5000);
         sockOpen = false;
         return 0;
       }
+      Serial.printf("[lte] TCP %s:%u via %s NETOPEN\n", host, port, peer.c_str());
     } else {
       const char* proto = mqttUsesTls() ? "SSL" : "TCP";
       if (mqttUsesTls()) {
@@ -1685,23 +1735,16 @@ class LteMqttClient : public Client {
       }
       String cmd = String("AT+CAOPEN=0,") + String(sock) + ",\"" + proto + "\",\"" + host + "\"," +
                    String(port);
-      if (!sendAT(cmd, "+CAOPEN:", 40000, &resp)) {
-        Serial.println("[lte] CAOPEN fail");
-        sockOpen = false;
-        return 0;
-      }
-      const int tag = resp.indexOf("+CAOPEN:");
-      const int comma = resp.indexOf(',', tag);
-      if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
+      if (!sendAT(cmd, "+CAOPEN:", 25000, &resp) || atUrcCode(resp, "+CAOPEN:") != 0) {
         Serial.printf("[lte] CAOPEN err %s\n", resp.c_str());
         sockOpen = false;
         return 0;
       }
+      Serial.printf("[lte] TCP %s:%u %s CNACT\n", host, port, proto);
     }
     drainRx();
     sockOpen = true;
     lastRxPollMs = millis();
-    Serial.printf("[lte] TCP %s:%u stack=%s\n", host, port, useNetopen() ? "NETOPEN" : "CNACT");
     return 1;
   }
 
@@ -2057,9 +2100,11 @@ void maintainLteFallback() {
     return;
   }
 
-  if (lanConnected() && !state.lteDataUp && lanMqttFailCount == 0 && !ethernetHoldoffActive()) {
+  if (lanConnected()) {
     noLanSinceMs = 0;
-    lastLteFail = false;
+    if (!state.lteDataUp) {
+      lastLteFail = false;
+    }
     return;
   }
 
