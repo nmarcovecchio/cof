@@ -115,6 +115,9 @@
       <div>
         <h2 class="h5 mb-1">Internet (Ethernet / WiFi)</h2>
         <div class="text-muted small">El cliente puede usar cable, WiFi o ambos. Si no hay Ethernet ni WiFi, el MQTT sale por LTE del modem. Si hay cable y WiFi, prefiere Ethernet. La clave WiFi no queda en la config retenida.</div>
+        {% if not device|device_live %}
+        <div class="text-warning small mt-1">Sin MQTT ahora. Lo de abajo es el ultimo reporte, no el camino actual.</div>
+        {% endif %}
       </div>
       <div class="text-end">
         {{ network_path(device) }}
@@ -125,7 +128,7 @@
       <div class="col-md-4">
         <div class="meta-label">Ethernet</div>
         <div class="meta-value">
-          {{ 'conectado' if net_eth.get('up') else 'sin link' }}
+          {{ 'conectado' if net_eth.get('up') and device|device_live else ('ultimo: conectado' if net_eth.get('up') else 'sin link') }}
           {% if net_eth.get('ip') and net_eth.get('ip') != '-' %}
             · <code>{{ net_eth.get('ip') }}</code>
           {% endif %}

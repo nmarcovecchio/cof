@@ -34,6 +34,7 @@ constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kMqttKeepAliveSeconds = 20;
 constexpr uint32_t kMqttSocketTimeoutSeconds = 8;
+constexpr uint8_t kLanMqttFailLimit = 2;
 constexpr uint32_t kMqttSilenceReconnectMs = 3UL * 60UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
@@ -131,6 +132,7 @@ uint32_t lastModemMs = 0;
 uint32_t lastSmsPollMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastMqttOkMs = 0;
+uint8_t lanMqttFailCount = 0;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -174,6 +176,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length);
 void configureMqttClientTransport();
 void maintainLteFallback();
 void releaseLteMqttForModem();
+void requestMqttBounce(const char* reason);
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
@@ -284,6 +287,47 @@ void applyPreferredRoute() {
 #endif
 }
 
+void markEthernetUp(const char* reason) {
+  const bool wasEthernet = state.ethernetConnected;
+  state.ethernetConnected = true;
+  state.ipAddress = ETH.localIP().toString();
+  lanMqttFailCount = 0;
+  applyPreferredRoute();
+  if (!wasEthernet) {
+    requestMqttBounce(reason);
+  }
+  pendingNetworkStatusReport = true;
+  setStatus("ETH IP " + state.ipAddress);
+  Serial.printf("[eth] up (%s) ip=%s\n", reason, state.ipAddress.c_str());
+}
+
+void markEthernetDown(const char* reason) {
+  if (!state.ethernetConnected) {
+    return;
+  }
+  Serial.printf("[eth] down (%s)\n", reason);
+  state.ethernetConnected = false;
+  state.ipAddress = "-";
+  applyPreferredRoute();
+  requestMqttBounce(reason);
+  pendingNetworkStatusReport = true;
+  setStatus("ETH down");
+}
+
+void noteLanMqttFailure(const char* reason) {
+  if (state.lteMqttTransport || !state.ethernetConnected) {
+    return;
+  }
+  lanMqttFailCount++;
+  Serial.printf("[eth] mqtt fail %u/%u (%s)\n",
+                lanMqttFailCount,
+                kLanMqttFailLimit,
+                reason);
+  if (lanMqttFailCount >= kLanMqttFailLimit) {
+    markEthernetDown(reason);
+  }
+}
+
 void requestMqttBounce(const char* reason) {
   pendingMqttBounce = true;
   Serial.printf("[mqtt] bounce requested: %s\n", reason);
@@ -325,41 +369,26 @@ void onNetworkEvent(WiFiEvent_t event) {
       break;
     case ARDUINO_EVENT_ETH_CONNECTED:
       setStatus("ETH cable OK");
-      break;
-    case ARDUINO_EVENT_ETH_GOT_IP: {
-      const bool wasEthernet = state.ethernetConnected;
-      state.ethernetConnected = true;
-      state.ipAddress = ETH.localIP().toString();
-      applyPreferredRoute();
-      if (!wasEthernet) {
-        requestMqttBounce("eth got ip");
+      if (ETH.localIP() != IPAddress((uint32_t)0)) {
+        markEthernetUp("cable");
       }
-      pendingNetworkStatusReport = true;
-      setStatus("ETH IP " + state.ipAddress);
       break;
-    }
+    case ARDUINO_EVENT_ETH_GOT_IP:
+      markEthernetUp("got ip");
+      break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
-      state.ethernetConnected = false;
-      state.ipAddress = "-";
-      applyPreferredRoute();
-      requestMqttBounce("eth disconnected");
-      pendingNetworkStatusReport = true;
-      setStatus("ETH disconnected");
+      markEthernetDown("disconnected");
       break;
     case ARDUINO_EVENT_ETH_STOP:
       state.ethernetStarted = false;
-      state.ethernetConnected = false;
-      state.ipAddress = "-";
-      applyPreferredRoute();
-      requestMqttBounce("eth stopped");
-      pendingNetworkStatusReport = true;
-      setStatus("ETH stopped");
+      markEthernetDown("stopped");
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       state.wifiConnected = true;
       state.wifiIpAddress = WiFi.localIP().toString();
       if (!state.ethernetConnected) {
         applyPreferredRoute();
+        requestMqttBounce("wifi got ip");
       }
       pendingNetworkStatusReport = true;
       setStatus("WiFi IP " + state.wifiIpAddress);
@@ -718,9 +747,11 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = fa
   (void)qos;
   if (ok) {
     lastMqttOkMs = millis();
+    lanMqttFailCount = 0;
   } else {
     state.mqttConnected = false;
     mqttClient.disconnect();
+    noteLanMqttFailure("publish");
   }
   return ok;
 }
@@ -981,12 +1012,7 @@ void connectMqttIfNeeded() {
   maintainLteFallback();
 
   if (state.ethernetConnected && !ETH.linkUp()) {
-    Serial.println("[eth] link down while IP was still cached");
-    state.ethernetConnected = false;
-    state.ipAddress = "-";
-    applyPreferredRoute();
-    requestMqttBounce("eth link down");
-    pendingNetworkStatusReport = true;
+    markEthernetDown("link bit");
   }
 
   if (pendingMqttBounce) {
@@ -999,8 +1025,14 @@ void connectMqttIfNeeded() {
   }
 
   if (mqttClient.connected()) {
-    state.mqttConnected = true;
-    mqttClient.loop();
+    if (!mqttClient.loop()) {
+      state.mqttConnected = false;
+      if (state.ethernetConnected && !state.lteMqttTransport) {
+        markEthernetDown("mqtt loop");
+      }
+    } else {
+      state.mqttConnected = true;
+    }
     return;
   }
 
@@ -1039,8 +1071,11 @@ void connectMqttIfNeeded() {
   if (!ok) {
     Serial.printf("[mqtt] connect failed state=%d\n", mqttClient.state());
     setStatus("MQTT fail");
+    noteLanMqttFailure("connect");
     return;
   }
+
+  lanMqttFailCount = 0;
 
   state.mqttConnected = true;
   mqttClient.subscribe(mqttTopic("config/desired").c_str(), 1);
