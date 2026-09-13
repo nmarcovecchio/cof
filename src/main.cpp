@@ -32,11 +32,14 @@ constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
-constexpr uint32_t kMqttKeepAliveSeconds = 20;
-constexpr uint32_t kMqttSocketTimeoutSeconds = 8;
-constexpr uint8_t kLanMqttFailLimit = 2;
-constexpr uint32_t kWifiBackupDelayMs = 4000;
+constexpr uint32_t kMqttKeepAliveSeconds = 10;
+constexpr uint32_t kMqttSocketTimeoutSeconds = 3;
+constexpr uint8_t kLanMqttFailLimit = 1;
+constexpr uint32_t kWifiBackupDelayMs = 1500;
 constexpr uint8_t kWifiAuthFailLimit = 3;
+constexpr uint32_t kEthProbeIntervalMs = 4000;
+constexpr uint8_t kEthProbeFailLimit = 2;
+constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
 constexpr uint32_t kMqttSilenceReconnectMs = 3UL * 60UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
@@ -137,6 +140,10 @@ uint32_t lastMqttOkMs = 0;
 uint8_t lanMqttFailCount = 0;
 uint32_t wifiBackupDueMs = 0;
 uint8_t wifiAuthFailCount = 0;
+uint32_t lastEthProbeMs = 0;
+uint8_t ethProbeFails = 0;
+uint32_t noLanSinceMs = 0;
+uint32_t ethernetUpAtMs = 0;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -186,6 +193,8 @@ void pauseWiFiRadio();
 void startWifiRadio();
 void scheduleWifiBackup(uint32_t delayMs);
 void maintainWifiBackup();
+void pollEthernetPath();
+void markEthernetDown(const char* reason);
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
@@ -309,12 +318,17 @@ void pauseWiFiRadio() {
 }
 
 void startWifiRadio() {
-  if (!state.wifiConfigured || state.ethernetConnected) {
+  if (!state.wifiConfigured) {
     return;
   }
   const String ssid = preferences.getString("wifiSsid", "");
   const String password = preferences.getString("wifiPass", "");
   if (ssid.length() == 0) {
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == ssid) {
+    state.wifiConnected = true;
+    state.wifiIpAddress = WiFi.localIP().toString();
     return;
   }
   wifiAuthFailCount = 0;
@@ -347,12 +361,54 @@ void maintainWifiBackup() {
   startWifiRadio();
 }
 
+void pollEthernetPath() {
+  if (!state.ethernetConnected || state.callInProgress || state.otaInProgress ||
+      state.lteMqttTransport) {
+    ethProbeFails = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  if (lastEthProbeMs != 0 && now - lastEthProbeMs < kEthProbeIntervalMs) {
+    return;
+  }
+  lastEthProbeMs = now == 0 ? 1 : now;
+  if (ethernetUpAtMs != 0 && static_cast<int32_t>(now - ethernetUpAtMs) < 8000) {
+    return;
+  }
+  if (state.mqttHost.length() == 0) {
+    return;
+  }
+  if (!state.mqttConnected && !mqttClient.connected()) {
+    return;
+  }
+
+  WiFiClient probe;
+  probe.setTimeout(2000);
+  feedWatchdog();
+  const bool ok = probe.connect(state.mqttHost.c_str(), state.mqttPort);
+  probe.stop();
+  if (ok) {
+    ethProbeFails = 0;
+    return;
+  }
+  ethProbeFails++;
+  Serial.printf("[eth] path probe fail %u/%u\n", ethProbeFails, kEthProbeFailLimit);
+  if (ethProbeFails >= kEthProbeFailLimit) {
+    markEthernetDown("path probe");
+  }
+}
+
 void markEthernetUp(const char* reason) {
   const bool wasEthernet = state.ethernetConnected;
   state.ethernetConnected = true;
   state.ipAddress = ETH.localIP().toString();
   lanMqttFailCount = 0;
-  pauseWiFiRadio();
+  ethProbeFails = 0;
+  noLanSinceMs = 0;
+  ethernetUpAtMs = millis();
+  if (ethernetUpAtMs == 0) {
+    ethernetUpAtMs = 1;
+  }
   applyPreferredRoute();
   if (!wasEthernet) {
     requestMqttBounce(reason);
@@ -373,7 +429,7 @@ void markEthernetDown(const char* reason) {
   requestMqttBounce(reason);
   pendingNetworkStatusReport = true;
   setStatus("ETH down");
-  scheduleWifiBackup(300);
+  startWifiRadio();
 }
 
 void noteLanMqttFailure(const char* reason) {
@@ -468,8 +524,7 @@ void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
         pendingNetworkStatusReport = true;
         setStatus("WiFi disconnected");
       }
-      if (!state.ethernetConnected && (reason == 2 || reason == 15 || reason == 202 ||
-                                      reason == 203 || reason == 204)) {
+      if (reason == 2 || reason == 15 || reason == 202 || reason == 203 || reason == 204) {
         wifiAuthFailCount++;
         Serial.printf("[wifi] auth/handshake fail %u/%u reason=%u\n",
                       wifiAuthFailCount, kWifiAuthFailLimit, reason);
@@ -508,14 +563,7 @@ void connectWiFi(const String& ssid, const String& password, bool saveCredential
     preferences.putString("wifiPass", password);
   }
 
-  if (state.ethernetConnected) {
-    pauseWiFiRadio();
-    pendingNetworkStatusReport = true;
-    setStatus("WiFi saved");
-    Serial.printf("[wifi] saved %s as backup; ethernet stays primary\n", ssid.c_str());
-    return;
-  }
-
+  pendingNetworkStatusReport = true;
   startWifiRadio();
 }
 
@@ -529,7 +577,7 @@ void beginSavedWiFi() {
     return;
   }
 
-  scheduleWifiBackup(kWifiBackupDelayMs);
+  startWifiRadio();
 }
 
 void clearSavedWiFi() {
@@ -1605,6 +1653,7 @@ void maintainLteFallback() {
     return;
   }
   if (lanConnected()) {
+    noLanSinceMs = 0;
     if (state.lteDataUp || state.lteMqttTransport) {
       Serial.println("[lte] LAN back, stopping PDP");
       if (mqttClient.connected()) {
@@ -1614,6 +1663,18 @@ void maintainLteFallback() {
       stopLtePdp();
       lastMqttReconnectMs = 0;
     }
+    return;
+  }
+  if (noLanSinceMs == 0) {
+    noLanSinceMs = millis();
+    if (noLanSinceMs == 0) {
+      noLanSinceMs = 1;
+    }
+  }
+  const bool waitingWifi = state.wifiConfigured && !state.wifiConnected &&
+                           wifiAuthFailCount < kWifiAuthFailLimit;
+  if (waitingWifi && static_cast<int32_t>(millis() - noLanSinceMs) < static_cast<int32_t>(kWifiGraceBeforeLteMs)) {
+    startWifiRadio();
     return;
   }
   ensureLtePdp();
@@ -1753,41 +1814,67 @@ void drawDisplay() {
     return;
   }
 
-  char line[32];
+  char line[24];
   display.clearBuffer();
   display.setFont(u8g2_font_5x8_tf);
 
   display.drawStr(0, 8, "CallOnFail");
-  snprintf(line, sizeof(line), "FW %s", COF_FIRMWARE_VERSION);
-  display.drawStr(72, 8, line);
+  snprintf(line, sizeof(line), "%s", COF_FIRMWARE_VERSION);
+  display.drawStr(92, 8, line);
 
+  const char* active = activeNetworkName();
   if (state.ethernetConnected) {
-    snprintf(line, sizeof(line), "ETH %s", state.ipAddress.c_str());
-  } else if (state.wifiConnected) {
-    snprintf(line, sizeof(line), "WIFI %s", state.wifiIpAddress.c_str());
-  } else if (state.lteDataUp) {
-    snprintf(line, sizeof(line), "LTE %s", state.lteIpAddress.c_str());
+    snprintf(line, sizeof(line), "E %s%s", state.ipAddress.c_str(),
+             strcmp(active, "ethernet") == 0 ? " *" : "");
   } else {
-    snprintf(line, sizeof(line), "NET NO");
+    snprintf(line, sizeof(line), "E --");
   }
-  display.drawStr(0, 19, line);
+  display.drawStr(0, 16, line);
+
+  if (state.wifiConnected) {
+    snprintf(line, sizeof(line), "W %s%s", state.wifiIpAddress.c_str(),
+             strcmp(active, "wifi") == 0 ? " *" : "");
+  } else if (state.wifiConfigured) {
+    String ssid = state.wifiSsid;
+    if (ssid.length() > 12) {
+      ssid = ssid.substring(0, 12);
+    }
+    if (wifiAuthFailCount >= kWifiAuthFailLimit) {
+      snprintf(line, sizeof(line), "W auth %s", ssid.c_str());
+    } else {
+      snprintf(line, sizeof(line), "W ... %s", ssid.c_str());
+    }
+  } else {
+    snprintf(line, sizeof(line), "W --");
+  }
+  display.drawStr(0, 24, line);
+
+  if (state.lteDataUp) {
+    snprintf(line, sizeof(line), "L %s%s", state.lteIpAddress.c_str(),
+             strcmp(active, "lte") == 0 ? " *" : "");
+  } else if (state.modemReady && state.simReady) {
+    snprintf(line, sizeof(line), "L wait");
+  } else {
+    snprintf(line, sizeof(line), "L --");
+  }
+  display.drawStr(0, 32, line);
 
   if (state.sht31Ready && !isnan(state.shtTemperature) && !isnan(state.shtHumidity)) {
     snprintf(line, sizeof(line), "SHT %.1fC %.0f%%", state.shtTemperature, state.shtHumidity);
   } else {
     snprintf(line, sizeof(line), "SHT --");
   }
-  display.drawStr(0, 30, line);
+  display.drawStr(0, 40, line);
 
   if (state.ds18b20Ready && !isnan(state.dsTemperature)) {
     snprintf(line, sizeof(line), "DS18 %.1fC", state.dsTemperature);
   } else {
     snprintf(line, sizeof(line), "DS18 --");
   }
-  display.drawStr(0, 41, line);
+  display.drawStr(0, 48, line);
 
   snprintf(line, sizeof(line), "ADC %d MQTT %s", state.zmptRaw, state.mqttConnected ? "OK" : "--");
-  display.drawStr(0, 52, line);
+  display.drawStr(0, 56, line);
 
   String footer = state.statusLine;
   if (footer.length() > 21) {
@@ -3561,6 +3648,7 @@ void loop() {
   }
 
   connectMqttIfNeeded();
+  pollEthernetPath();
   maintainWifiBackup();
   enforceMqttSilenceWatchdog();
 
