@@ -14,7 +14,9 @@
 #include <Adafruit_SHT31.h>
 #include <esp_arduino_version.h>
 #include <esp_netif.h>
+#include <esp_netif_net_stack.h>
 #include <esp_task_wdt.h>
+#include "lwip/netif.h"
 
 #include "cof_config.h"
 
@@ -272,10 +274,12 @@ void applyPreferredRoute() {
     netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
   }
   if (netif != nullptr) {
-    esp_err_t err = esp_netif_set_default_netif(netif);
-    Serial.printf("[net] default route %s err=%d\n",
-                  state.ethernetConnected ? "ETH" : "WiFi",
-                  static_cast<int>(err));
+    auto* lwipIf = static_cast<struct netif*>(esp_netif_get_netif_impl(netif));
+    if (lwipIf != nullptr) {
+      netif_set_default(lwipIf);
+      Serial.printf("[net] default route %s\n",
+                    state.ethernetConnected ? "ETH" : "WiFi");
+    }
   }
 #endif
 }
@@ -1146,7 +1150,7 @@ String takePendingCallUrcs() {
   return out;
 }
 
-String readModemUntil(uint32_t timeoutMs, const String& token = "") {
+String readModemUntil(uint32_t timeoutMs, const String& token) {
   String response;
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
@@ -1166,7 +1170,7 @@ String readModemUntil(uint32_t timeoutMs, const String& token = "") {
   return response;
 }
 
-bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr) {
+bool sendAT(const String& command, const String& expected, uint32_t timeoutMs, String* responseOut) {
   flushModemInput();
   Serial.println("[modem] >> " + command);
   appendModemLog('>', command);
