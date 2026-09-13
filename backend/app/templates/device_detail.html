@@ -604,8 +604,8 @@
       <div class="px-3 py-2 small text-muted border-top">{{ modem_trace_event.message }}</div>
       {% else %}
       <div class="p-3 text-muted small">
-        Traza AT de la ultima prueba de llamada o del intento LTE (firmware 0.2.49+).
-        Si no hay Ethernet/WiFi el dump llega cuando MQTT vuelve (cable o LTE).
+        Traza AT de la ultima prueba de llamada o del intento LTE.
+        Si MQTT estaba caido, el dump se publica cuando el broker vuelve (cable o LTE).
         En llamadas, el corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>.
         No se publica en vivo: un dump al terminar, para no saturar MQTT.
       </div>

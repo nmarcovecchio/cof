@@ -643,7 +643,12 @@ def create_app() -> Flask:
         modem_trace_event = next(
             (
                 event
-                for event in recent_events
+                for event in (
+                    Event.query.filter_by(device_id=device.id)
+                    .order_by(Event.started_at.desc())
+                    .limit(80)
+                    .all()
+                )
                 if isinstance(event.payload, dict) and event.payload.get("modem_log")
             ),
             None,

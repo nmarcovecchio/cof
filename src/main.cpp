@@ -44,6 +44,7 @@ constexpr uint32_t kEthProbeIntervalMs = 3000;
 constexpr uint8_t kEthProbeFailLimit = 1;
 constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
 constexpr uint32_t kLteBootGraceMs = 15000;
+constexpr uint32_t kEthernetHoldoffMs = 20000;
 constexpr uint32_t kMqttSilenceReconnectMs = 20UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
@@ -148,6 +149,7 @@ uint32_t lastEthProbeMs = 0;
 uint8_t ethProbeFails = 0;
 uint32_t noLanSinceMs = 0;
 uint32_t ethernetUpAtMs = 0;
+uint32_t ethernetHoldoffUntilMs = 0;
 IPAddress cachedMqttIp;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
@@ -208,6 +210,9 @@ void scheduleWifiBackup(uint32_t delayMs);
 void maintainWifiBackup();
 void pollEthernetPath();
 void markEthernetDown(const char* reason);
+void feedWatchdog();
+bool probeMqttOverEthernet();
+bool ethernetHoldoffActive();
 void refreshCellularStatus();
 bool initModem();
 bool refreshSimReady();
@@ -409,6 +414,22 @@ void maintainWifiBackup() {
   startWifiRadio();
 }
 
+bool ethernetHoldoffActive() {
+  return ethernetHoldoffUntilMs != 0 &&
+         static_cast<int32_t>(millis() - ethernetHoldoffUntilMs) < 0;
+}
+
+bool probeMqttOverEthernet() {
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    return false;
+  }
+  WiFiClient probe;
+  feedWatchdog();
+  const int ok = probe.connect(cachedMqttIp, state.mqttPort, 1500);
+  probe.stop();
+  return ok != 0;
+}
+
 void pollEthernetPath() {
   if (!state.ethernetConnected || state.callInProgress || state.otaInProgress ||
       state.lteMqttTransport) {
@@ -431,11 +452,7 @@ void pollEthernetPath() {
     return;
   }
 
-  WiFiClient probe;
-  feedWatchdog();
-  const int ok = probe.connect(cachedMqttIp, state.mqttPort, 1500);
-  probe.stop();
-  if (ok) {
+  if (probeMqttOverEthernet()) {
     ethProbeFails = 0;
     return;
   }
@@ -450,6 +467,18 @@ void pollEthernetPath() {
 }
 
 void markEthernetUp(const char* reason) {
+  if (ethernetHoldoffActive()) {
+    const bool probed = probeMqttOverEthernet();
+    if (!probed) {
+      Serial.printf("[eth] ignore up (%s) holdoff probe=%s ip=%s\n",
+                    reason,
+                    cachedMqttIp == IPAddress((uint32_t)0) ? "no-ip" : "fail",
+                    ETH.localIP().toString().c_str());
+      return;
+    }
+    ethernetHoldoffUntilMs = 0;
+  }
+
   const bool wasEthernet = state.ethernetConnected;
   state.ethernetConnected = true;
   state.ipAddress = ETH.localIP().toString();
@@ -471,6 +500,10 @@ void markEthernetUp(const char* reason) {
 }
 
 void markEthernetDown(const char* reason) {
+  ethernetHoldoffUntilMs = millis() + kEthernetHoldoffMs;
+  if (ethernetHoldoffUntilMs == 0) {
+    ethernetHoldoffUntilMs = 1;
+  }
   if (!state.ethernetConnected) {
     return;
   }
@@ -1139,7 +1172,7 @@ void publishLteDataTrace() {
   if (!pendingLteTracePublish || !state.mqttConnected) {
     return;
   }
-  pendingLteTracePublish = false;
+
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
@@ -1149,7 +1182,17 @@ void publishLteDataTrace() {
   if (lteTraceLog.length() > 0) {
     doc["modem_log"] = lteTraceLog;
   }
-  publishMqttJson("event", doc, false, 1);
+  if (publishMqttJson("event", doc, false, 1)) {
+    pendingLteTracePublish = false;
+    return;
+  }
+  if (lteTraceLog.length() <= 900) {
+    return;
+  }
+  doc["modem_log"] = lteTraceLog.substring(lteTraceLog.length() - 900);
+  if (publishMqttJson("event", doc, false, 1)) {
+    pendingLteTracePublish = false;
+  }
 }
 
 void finishLteAttempt(bool ok, const String& message) {
@@ -1289,9 +1332,19 @@ void connectMqttIfNeeded() {
       willPayload.c_str());
 
   if (!ok) {
-    Serial.printf("[mqtt] connect failed state=%d\n", mqttClient.state());
+    Serial.printf("[mqtt] connect failed state=%d lte=%s\n",
+                  mqttClient.state(),
+                  state.lteMqttTransport ? "yes" : "no");
     setStatus("MQTT fail");
-    noteLanMqttFailure("connect");
+    if (state.lteMqttTransport) {
+      lteTraceLog = modemCallLog;
+      pendingLteTraceMessage = "LTE MQTT fail";
+      pendingLteTraceOk = false;
+      pendingLteTracePublish = true;
+      reportLteProgress = false;
+    } else {
+      noteLanMqttFailure("connect");
+    }
     return;
   }
 
@@ -1300,6 +1353,12 @@ void connectMqttIfNeeded() {
   if (!state.lteMqttTransport) {
     cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
     Serial.printf("[mqtt] path ip=%s\n", cachedMqttIp.toString().c_str());
+  } else {
+    lteTraceLog = modemCallLog;
+    pendingLteTraceMessage = "LTE MQTT OK";
+    pendingLteTraceOk = true;
+    pendingLteTracePublish = true;
+    reportLteProgress = false;
   }
 
   state.mqttConnected = true;
@@ -1984,21 +2043,26 @@ void maintainLteFallback() {
   if (static_cast<int32_t>(millis()) < static_cast<int32_t>(kLteBootGraceMs)) {
     return;
   }
-  if (lanConnected()) {
+
+  const bool lanMqttOk = state.mqttConnected && !state.lteMqttTransport && lanConnected();
+  if (lanMqttOk) {
     noLanSinceMs = 0;
     lastLteFail = false;
     lastLteAttemptMs = 0;
     if (state.lteDataUp || state.lteMqttTransport) {
-      Serial.println("[lte] LAN back, stopping PDP");
-      if (mqttClient.connected()) {
-        mqttClient.disconnect();
-        state.mqttConnected = false;
-      }
+      Serial.println("[lte] LAN MQTT ok, stopping PDP");
       stopLtePdp();
       lastMqttReconnectMs = 0;
     }
     return;
   }
+
+  if (lanConnected() && !state.lteDataUp && lanMqttFailCount == 0 && !ethernetHoldoffActive()) {
+    noLanSinceMs = 0;
+    lastLteFail = false;
+    return;
+  }
+
   if (noLanSinceMs == 0) {
     noLanSinceMs = millis();
     if (noLanSinceMs == 0) {
@@ -2006,7 +2070,7 @@ void maintainLteFallback() {
     }
   }
   const bool waitingWifi = state.wifiConfigured && !state.wifiConnected &&
-                           wifiAuthFailCount < kWifiAuthFailLimit;
+                           wifiAuthFailCount < kWifiAuthFailLimit && !state.lteDataUp;
   if (waitingWifi && static_cast<int32_t>(millis() - noLanSinceMs) < static_cast<int32_t>(kWifiGraceBeforeLteMs)) {
     startWifiRadio();
     return;
@@ -2015,10 +2079,12 @@ void maintainLteFallback() {
 }
 
 void configureMqttClientTransport() {
-  if (!lanConnected() && state.lteDataUp) {
+  const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive();
+  if (state.lteDataUp && !lanLooksUsable) {
     mqttClient.setClient(lteMqttClient);
     state.lteMqttTransport = true;
     mqttClient.setSocketTimeout(30);
+    reportLteProgress = true;
   } else {
     state.lteMqttTransport = false;
     if (mqttUsesTls()) {
