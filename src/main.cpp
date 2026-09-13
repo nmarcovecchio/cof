@@ -42,6 +42,7 @@ constexpr uint8_t kWifiAuthFailLimit = 3;
 constexpr uint32_t kEthProbeIntervalMs = 4000;
 constexpr uint8_t kEthProbeFailLimit = 2;
 constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
+constexpr uint32_t kLteBootGraceMs = 15000;
 constexpr uint32_t kMqttSilenceReconnectMs = 20UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
@@ -206,6 +207,7 @@ void pollEthernetPath();
 void markEthernetDown(const char* reason);
 void refreshCellularStatus();
 bool initModem();
+bool refreshSimReady();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
@@ -1666,29 +1668,27 @@ bool ensureLtePdp() {
     return false;
   }
   lastLteAttemptMs = millis();
+  if (!state.modemReady) {
+    initModem();
+    if (!state.modemReady) {
+      finishLteAttempt(false, "LTE no AT");
+      return false;
+    }
+  }
+  if (!state.simReady && !refreshSimReady()) {
+    return false;
+  }
+
   reportLteProgress = true;
   modemCallLog = "";
   setStatus("LTE data");
-
-  if (!state.modemReady || !state.simReady) {
-    initModem();
-  }
-  if (!state.modemReady) {
-    finishLteAttempt(false, "LTE no AT");
-    return false;
-  }
-  if (!state.simReady) {
-    finishLteAttempt(false, "LTE no SIM");
-    return false;
-  }
-
-  sendAT("AT+CGATT=1", "OK", 15000);
   refreshCellularStatus();
   if (!state.networkRegistered) {
     finishLteAttempt(false, "LTE not registered");
     return false;
   }
 
+  sendAT("AT+CGATT=1", "OK", 15000);
   sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\",\"" + COF_MODEM_APN_USER + "\",\"" +
              COF_MODEM_APN_PASS + "\",3",
          "OK", 5000);
@@ -1736,6 +1736,9 @@ void releaseLteMqttForModem() {
 
 void maintainLteFallback() {
   if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return;
+  }
+  if (static_cast<int32_t>(millis()) < static_cast<int32_t>(kLteBootGraceMs)) {
     return;
   }
   if (lanConnected()) {
@@ -1941,7 +1944,7 @@ void drawDisplay() {
   } else if (!state.modemReady) {
     snprintf(line, sizeof(line), "L no AT");
   } else if (!state.simReady) {
-    snprintf(line, sizeof(line), "L no SIM");
+    snprintf(line, sizeof(line), millis() < 30000 ? "L SIM..." : "L no SIM");
   } else if (lastLteFail) {
     snprintf(line, sizeof(line), "L fail");
   } else {
@@ -2243,6 +2246,32 @@ void configureCellularApn() {
   setStatus("Network wait");
 }
 
+bool cpinResponseReady(const String& response) {
+  const int idx = response.indexOf("+CPIN:");
+  if (idx < 0) {
+    return false;
+  }
+  return response.indexOf("NOT READY", idx) < 0 && response.indexOf("READY", idx) >= 0;
+}
+
+bool refreshSimReady() {
+  if (!state.modemReady) {
+    return false;
+  }
+  String response;
+  if (!sendAT("AT+CPIN?", "OK", 3000, &response)) {
+    return state.simReady;
+  }
+  if (!cpinResponseReady(response)) {
+    return false;
+  }
+  if (!state.simReady) {
+    state.simReady = true;
+    configureCellularApn();
+  }
+  return true;
+}
+
 bool initModem() {
   ModemSerial.begin(115200, SERIAL_8N1, COF_PIN_MODEM_RX, COF_PIN_MODEM_TX);
   delay(300);
@@ -2271,8 +2300,15 @@ bool initModem() {
   if (sendAT("AT+CGMM", "OK", 2000, &response)) {
     state.modemModel = firstNonEmptyAtLine(response);
   }
-  if (sendAT("AT+CPIN?", "OK", 2000, &response)) {
-    state.simReady = response.indexOf("READY") >= 0;
+
+  state.simReady = false;
+  for (int attempt = 0; attempt < 12; attempt++) {
+    feedWatchdog();
+    if (sendAT("AT+CPIN?", "OK", 2000, &response) && cpinResponseReady(response)) {
+      state.simReady = true;
+      break;
+    }
+    waitWithWatchdog(500);
   }
 
   state.modemAudioPlaybackSupported = sendAT("AT+CCMXPLAY=?", "OK", 3000);
@@ -2281,7 +2317,7 @@ bool initModem() {
   if (state.simReady) {
     configureCellularApn();
   } else {
-    setStatus("Modem OK no SIM");
+    setStatus("Wait SIM");
   }
   return true;
 }
@@ -2388,6 +2424,12 @@ void pollModem() {
   if (!state.modemReady) {
     initModem();
     return;
+  }
+  if (!state.simReady) {
+    refreshSimReady();
+    if (!state.simReady) {
+      return;
+    }
   }
 
   const bool wasRegistered = state.networkRegistered;
@@ -3260,6 +3302,12 @@ String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = 
     return "Calls off cfg";
   }
 
+  if (!state.modemReady) {
+    initModem();
+  }
+  if (!state.simReady) {
+    refreshSimReady();
+  }
   if (!state.modemReady || !state.simReady) {
     setStatus("No modem/SIM");
     return "No modem/SIM";
@@ -3381,6 +3429,19 @@ String transmitSms(const String& phone, const String& body) {
 }
 
 String sendTestSms(const String& phoneOverride, const String& text) {
+  if (!state.modemReady) {
+    initModem();
+  }
+  if (!state.simReady) {
+    const uint32_t startedAt = millis();
+    while (!state.simReady && millis() - startedAt < 20000) {
+      feedWatchdog();
+      if (refreshSimReady()) {
+        break;
+      }
+      waitWithWatchdog(1000);
+    }
+  }
   if (!state.modemReady || !state.simReady) {
     setStatus("No modem/SIM");
     return "No modem/SIM";
