@@ -18,6 +18,7 @@
 #include <esp_task_wdt.h>
 #include "lwip/netif.h"
 
+#include <cstring>
 #include "cof_config.h"
 
 constexpr uint8_t kEthPhyAddr = 1;
@@ -39,8 +40,8 @@ constexpr uint32_t kMqttSocketTimeoutSeconds = 3;
 constexpr uint8_t kLanMqttFailLimit = 1;
 constexpr uint32_t kWifiBackupDelayMs = 1500;
 constexpr uint8_t kWifiAuthFailLimit = 3;
-constexpr uint32_t kEthProbeIntervalMs = 4000;
-constexpr uint8_t kEthProbeFailLimit = 2;
+constexpr uint32_t kEthProbeIntervalMs = 3000;
+constexpr uint8_t kEthProbeFailLimit = 1;
 constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
 constexpr uint32_t kLteBootGraceMs = 15000;
 constexpr uint32_t kMqttSilenceReconnectMs = 20UL * 1000UL;
@@ -186,6 +187,8 @@ bool pendingNetworkStatusReport = false;
 uint32_t lastLteAttemptMs = 0;
 bool reportLteProgress = false;
 bool lastLteFail = false;
+enum LteIpStack : uint8_t { kLteStackUnknown = 0, kLteStackNetopen, kLteStackCnact };
+LteIpStack lteIpStack = kLteStackUnknown;
 String lteTraceLog;
 String pendingLteTraceMessage;
 bool pendingLteTracePublish = false;
@@ -279,6 +282,9 @@ bool networkConnected() {
 }
 
 const char* activeNetworkName() {
+  if (state.lteMqttTransport && state.lteDataUp) {
+    return "lte";
+  }
   if (state.ethernetConnected) {
     return "ethernet";
   }
@@ -289,6 +295,22 @@ const char* activeNetworkName() {
     return "lte";
   }
   return "none";
+}
+
+const char* mqttPathLetter() {
+  if (!state.mqttConnected) {
+    return "--";
+  }
+  if (state.lteMqttTransport) {
+    return "L";
+  }
+  if (state.ethernetConnected) {
+    return "E";
+  }
+  if (state.wifiConnected) {
+    return "W";
+  }
+  return "?";
 }
 
 void applyPreferredRoute() {
@@ -438,6 +460,7 @@ void markEthernetUp(const char* reason) {
   if (ethernetUpAtMs == 0) {
     ethernetUpAtMs = 1;
   }
+  lastLteFail = false;
   applyPreferredRoute();
   if (!wasEthernet) {
     requestMqttBounce(reason);
@@ -1442,6 +1465,23 @@ class LteMqttClient : public Client {
     dataInd = false;
   }
 
+  uint32_t lastRxPollMs = 0;
+
+  bool useNetopen() const {
+    return lteIpStack != kLteStackCnact;
+  }
+
+  void noteUrc(const String& line) {
+    if (line.startsWith("+CADATAIND:") || line.startsWith("+CARECV:") ||
+        line.startsWith("+CIPRXGET: 1")) {
+      dataInd = true;
+    } else if ((line.startsWith("+CASTATE:") && line.indexOf(",0") > 0) ||
+               line.startsWith("+IPCLOSE:") ||
+               line.startsWith("+CIPEVENT:")) {
+      sockOpen = false;
+    }
+  }
+
   void pumpUrcs() {
     while (ModemSerial.available()) {
       String line;
@@ -1460,13 +1500,22 @@ class LteMqttClient : public Client {
         }
       }
       line.trim();
-      if (line.startsWith("+CADATAIND:") || line.startsWith("+CARECV:")) {
-        dataInd = true;
-      } else if (line.startsWith("+CASTATE:") && line.indexOf(",0") > 0) {
-        sockOpen = false;
-      } else if (line.length() > 0) {
+      if (line.length() == 0) {
+        continue;
+      }
+      noteUrc(line);
+      if (!line.startsWith("+CIPRXGET: 1") && !line.startsWith("+CADATAIND:") &&
+          !line.startsWith("+CARECV:")) {
         pendingModemUrcs += line + "\n";
       }
+    }
+    if (pendingModemUrcs.indexOf("+CIPRXGET: 1") >= 0 ||
+        pendingModemUrcs.indexOf("+CADATAIND:") >= 0) {
+      dataInd = true;
+    }
+    if (pendingModemUrcs.indexOf("+IPCLOSE:") >= 0 ||
+        pendingModemUrcs.indexOf("+CIPEVENT:") >= 0) {
+      sockOpen = false;
     }
   }
 
@@ -1476,23 +1525,43 @@ class LteMqttClient : public Client {
     }
     rxLen = 0;
     rxPos = 0;
-    ModemSerial.print("AT+CARECV=");
-    ModemSerial.print(sock);
-    ModemSerial.print(",512\r\n");
+    const bool netopen = useNetopen();
+    if (netopen) {
+      ModemSerial.print("AT+CIPRXGET=2,");
+      ModemSerial.print(sock);
+      ModemSerial.print(",512\r\n");
+    } else {
+      ModemSerial.print("AT+CARECV=");
+      ModemSerial.print(sock);
+      ModemSerial.print(",512\r\n");
+    }
     String header;
     const uint32_t startedAt = millis();
+    const char* tag = netopen ? "+CIPRXGET: 2," : "+CARECV:";
     while (millis() - startedAt < 3000) {
       feedWatchdog();
       while (ModemSerial.available()) {
         const char c = static_cast<char>(ModemSerial.read());
         header += c;
-        const int tag = header.indexOf("+CARECV:");
-        if (tag >= 0 && header.indexOf('\n', tag) > tag) {
-          const int comma = header.indexOf(',', tag);
-          const int nl = header.indexOf('\n', tag);
+        const int tagAt = header.indexOf(tag);
+        const int nl = tagAt >= 0 ? header.indexOf('\n', tagAt) : -1;
+        if (tagAt >= 0 && nl > tagAt) {
+          const String line = header.substring(tagAt, nl);
           int n = 0;
-          if (comma > 0 && nl > comma) {
-            n = header.substring(comma + 1, nl).toInt();
+          if (netopen) {
+            const int c1 = line.indexOf(',');
+            const int c2 = c1 >= 0 ? line.indexOf(',', c1 + 1) : -1;
+            const int c3 = c2 >= 0 ? line.indexOf(',', c2 + 1) : -1;
+            if (c2 >= 0 && c3 > c2) {
+              n = line.substring(c2 + 1, c3).toInt();
+            } else if (c2 >= 0) {
+              n = line.substring(c2 + 1).toInt();
+            }
+          } else {
+            const int comma = line.indexOf(',');
+            if (comma >= 0) {
+              n = line.substring(comma + 1).toInt();
+            }
           }
           if (n <= 0) {
             dataInd = false;
@@ -1513,9 +1582,14 @@ class LteMqttClient : public Client {
           dataInd = false;
           return rxLen > 0;
         }
+        if (header.indexOf("ERROR") >= 0) {
+          dataInd = false;
+          return false;
+        }
       }
       delay(5);
     }
+    dataInd = false;
     return false;
   }
 
@@ -1528,27 +1602,47 @@ class LteMqttClient : public Client {
     if (!state.lteDataUp) {
       return 0;
     }
-    const char* proto = mqttUsesTls() ? "SSL" : "TCP";
-    if (mqttUsesTls()) {
-      sendAT("AT+CASSLCFG=0,\"ssl\",1", "OK", 3000);
-    }
-    String cmd = String("AT+CAOPEN=0,") + String(sock) + ",\"" + proto + "\",\"" + host + "\"," + String(port);
     String resp;
-    if (!sendAT(cmd, "+CAOPEN:", 40000, &resp)) {
-      Serial.println("[lte] CAOPEN fail");
-      sockOpen = false;
-      return 0;
-    }
-    const int tag = resp.indexOf("+CAOPEN:");
-    const int comma = resp.indexOf(',', tag);
-    if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
-      Serial.printf("[lte] CAOPEN err %s\n", resp.c_str());
-      sockOpen = false;
-      return 0;
+    if (useNetopen()) {
+      sendAT("AT+CIPMODE=0", "OK", 2000);
+      sendAT("AT+CIPRXGET=1", "OK", 3000);
+      String cmd = String("AT+CIPOPEN=") + String(sock) + ",\"TCP\",\"" + host + "\"," + String(port);
+      if (!sendAT(cmd, "+CIPOPEN:", 40000, &resp)) {
+        Serial.println("[lte] CIPOPEN fail");
+        sockOpen = false;
+        return 0;
+      }
+      const int tag = resp.indexOf("+CIPOPEN:");
+      const int comma = resp.indexOf(',', tag);
+      if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
+        Serial.printf("[lte] CIPOPEN err %s\n", resp.c_str());
+        sockOpen = false;
+        return 0;
+      }
+    } else {
+      const char* proto = mqttUsesTls() ? "SSL" : "TCP";
+      if (mqttUsesTls()) {
+        sendAT("AT+CASSLCFG=0,\"ssl\",1", "OK", 3000);
+      }
+      String cmd = String("AT+CAOPEN=0,") + String(sock) + ",\"" + proto + "\",\"" + host + "\"," +
+                   String(port);
+      if (!sendAT(cmd, "+CAOPEN:", 40000, &resp)) {
+        Serial.println("[lte] CAOPEN fail");
+        sockOpen = false;
+        return 0;
+      }
+      const int tag = resp.indexOf("+CAOPEN:");
+      const int comma = resp.indexOf(',', tag);
+      if (comma < 0 || resp.substring(comma + 1).toInt() != 0) {
+        Serial.printf("[lte] CAOPEN err %s\n", resp.c_str());
+        sockOpen = false;
+        return 0;
+      }
     }
     drainRx();
     sockOpen = true;
-    Serial.printf("[lte] TCP %s:%u %s\n", host, port, proto);
+    lastRxPollMs = millis();
+    Serial.printf("[lte] TCP %s:%u stack=%s\n", host, port, useNetopen() ? "NETOPEN" : "CNACT");
     return 1;
   }
 
@@ -1566,7 +1660,11 @@ class LteMqttClient : public Client {
       if (chunk > 1024) {
         chunk = 1024;
       }
-      ModemSerial.print("AT+CASEND=");
+      if (useNetopen()) {
+        ModemSerial.print("AT+CIPSEND=");
+      } else {
+        ModemSerial.print("AT+CASEND=");
+      }
       ModemSerial.print(sock);
       ModemSerial.print(",");
       ModemSerial.print(static_cast<unsigned>(chunk));
@@ -1576,8 +1674,10 @@ class LteMqttClient : public Client {
         return sent;
       }
       ModemSerial.write(buf + sent, chunk);
-      const String resp = readModemUntil(15000, "OK");
-      if (resp.indexOf("OK") < 0) {
+      const String token = useNetopen() ? "+CIPSEND:" : "OK";
+      const String resp = readModemUntil(15000, token);
+      if (resp.indexOf("ERROR") >= 0 || (useNetopen() && resp.indexOf("+CIPSEND:") < 0) ||
+          (!useNetopen() && resp.indexOf("OK") < 0)) {
         sockOpen = false;
         return sent;
       }
@@ -1594,6 +1694,10 @@ class LteMqttClient : public Client {
       return rxLen - rxPos;
     }
     pumpUrcs();
+    if (!dataInd && useNetopen() && millis() - lastRxPollMs >= 250) {
+      lastRxPollMs = millis();
+      dataInd = true;
+    }
     if (dataInd) {
       recvChunk();
     }
@@ -1629,7 +1733,11 @@ class LteMqttClient : public Client {
 
   void stop() override {
     if (sockOpen) {
-      sendAT(String("AT+CACLOSE=") + String(sock), "OK", 5000);
+      if (useNetopen()) {
+        sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 8000);
+      } else {
+        sendAT(String("AT+CACLOSE=") + String(sock), "OK", 5000);
+      }
     }
     sockOpen = false;
     drainRx();
@@ -1646,18 +1754,153 @@ class LteMqttClient : public Client {
 
 LteMqttClient lteMqttClient;
 
+bool looksLikeIp(const String& ip) {
+  return ip.length() >= 7 && ip != "0.0.0.0" && ip.indexOf('.') > 0;
+}
+
 bool parseLteIp(const String& resp, String& ipOut) {
-  const int tag = resp.indexOf("+CNACT:");
+  const char* tags[] = {"+IPADDR:", "+CNACT:", "+CGPADDR:"};
+  for (uint8_t i = 0; i < 3; i++) {
+    const int idx = resp.indexOf(tags[i]);
+    if (idx < 0) {
+      continue;
+    }
+    const int q1 = resp.indexOf('"', idx);
+    const int q2 = q1 >= 0 ? resp.indexOf('"', q1 + 1) : -1;
+    if (q1 >= 0 && q2 > q1 + 1) {
+      ipOut = resp.substring(q1 + 1, q2);
+    } else {
+      int start = idx + static_cast<int>(strlen(tags[i]));
+      while (start < static_cast<int>(resp.length()) &&
+             (resp[start] == ' ' || resp[start] == ':')) {
+        start++;
+      }
+      int end = start;
+      while (end < static_cast<int>(resp.length()) && resp[end] != '\r' && resp[end] != '\n' &&
+             resp[end] != ',') {
+        end++;
+      }
+      ipOut = resp.substring(start, end);
+      ipOut.trim();
+    }
+    ipOut.replace("\"", "");
+    if (looksLikeIp(ipOut)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void detectLteIpStack() {
+  if (lteIpStack != kLteStackUnknown) {
+    return;
+  }
+  sendAT("AT+CMEE=2", "OK", 2000);
+  String resp;
+  if (sendAT("AT+NETOPEN?", "OK", 3000, &resp) && resp.indexOf("+NETOPEN:") >= 0) {
+    lteIpStack = kLteStackNetopen;
+    Serial.println("[lte] stack=NETOPEN");
+    return;
+  }
+  if (sendAT("AT+CNACT=?", "OK", 3000)) {
+    lteIpStack = kLteStackCnact;
+    Serial.println("[lte] stack=CNACT");
+    return;
+  }
+  lteIpStack = kLteStackNetopen;
+  Serial.println("[lte] stack=NETOPEN (default)");
+}
+
+bool netopenIsActive() {
+  String resp;
+  sendAT("AT+NETOPEN?", "OK", 3000, &resp);
+  return resp.indexOf("+NETOPEN: 1") >= 0;
+}
+
+bool queryLteIp(String& ipOut) {
+  String resp;
+  if (sendAT("AT+IPADDR", "OK", 4000, &resp) && parseLteIp(resp, ipOut)) {
+    return true;
+  }
+  if (sendAT("AT+CGPADDR=1", "OK", 4000, &resp) && parseLteIp(resp, ipOut)) {
+    return true;
+  }
+  if (sendAT("AT+CNACT?", "OK", 3000, &resp) && parseLteIp(resp, ipOut)) {
+    return true;
+  }
+  return false;
+}
+
+bool netopenResultOk(const String& resp) {
+  if (resp.indexOf("already opened") >= 0) {
+    return true;
+  }
+  const int tag = resp.lastIndexOf("+NETOPEN:");
   if (tag < 0) {
     return false;
   }
-  const int q1 = resp.indexOf('"', tag);
-  const int q2 = resp.indexOf('"', q1 + 1);
-  if (q1 < 0 || q2 < 0 || q2 <= q1 + 1) {
+  return resp.substring(tag + 9).toInt() == 0;
+}
+
+bool activateNetopenPdp(String& ipOut) {
+  sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 5000);
+  sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"",
+         "OK", 3000);
+  sendAT("AT+CSOCKSETPN=1", "OK", 3000);
+  sendAT("AT+CIPMODE=0", "OK", 2000);
+  sendAT("AT+CIPTIMEOUT=30000,20000,15000", "OK", 3000);
+
+  auto tryOpen = [&]() -> bool {
+    if (netopenIsActive()) {
+      return queryLteIp(ipOut);
+    }
+    String resp;
+    sendAT("AT+NETOPEN", "+NETOPEN:", 25000, &resp);
+    if (!netopenResultOk(resp) && !netopenIsActive()) {
+      return false;
+    }
+    for (int attempt = 0; attempt < 6; attempt++) {
+      feedWatchdog();
+      if (queryLteIp(ipOut)) {
+        return true;
+      }
+      waitWithWatchdog(1000);
+    }
     return false;
+  };
+
+  if (tryOpen()) {
+    return true;
   }
-  ipOut = resp.substring(q1 + 1, q2);
-  return ipOut.length() >= 7 && ipOut != "0.0.0.0";
+
+  sendAT("AT+NETCLOSE", "+NETCLOSE:", 12000);
+  sendAT("AT+CGAUTH=1,0", "OK", 3000);
+  return tryOpen();
+}
+
+bool activateCnactPdp(String& ipOut) {
+  sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\"", "OK", 5000);
+  sendAT("AT+CNACT=0,1", "OK", 20000);
+  for (int attempt = 0; attempt < 8; attempt++) {
+    feedWatchdog();
+    String resp;
+    sendAT("AT+CNACT?", "OK", 3000, &resp);
+    if (parseLteIp(resp, ipOut) && (resp.indexOf("0,1") >= 0 || resp.indexOf(",1,\"") >= 0)) {
+      return true;
+    }
+    waitWithWatchdog(1000);
+  }
+  sendAT("AT+CNACT=0,0", "OK", 5000);
+  return false;
+}
+
+bool markLtePdpUp(const String& ip, uint8_t cid) {
+  state.ltePdpCid = cid;
+  state.lteDataUp = true;
+  state.lteIpAddress = ip;
+  pendingNetworkStatusReport = true;
+  finishLteAttempt(true, "LTE IP " + ip);
+  return true;
 }
 
 bool ensureLtePdp() {
@@ -1688,34 +1931,34 @@ bool ensureLtePdp() {
     return false;
   }
 
+  sendAT("AT+CMEE=2", "OK", 2000);
   sendAT("AT+CGATT=1", "OK", 15000);
-  sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\",\"" + COF_MODEM_APN_USER + "\",\"" +
-             COF_MODEM_APN_PASS + "\",3",
-         "OK", 5000);
-  sendAT("AT+CNACT=0,1", "OK", 20000);
-  for (int attempt = 0; attempt < 8; attempt++) {
-    feedWatchdog();
-    String resp;
-    sendAT("AT+CNACT?", "OK", 3000, &resp);
-    String ip;
-    if (parseLteIp(resp, ip) && (resp.indexOf("0,1") >= 0 || resp.indexOf(",1,\"") >= 0)) {
-      state.ltePdpCid = 0;
-      state.lteDataUp = true;
-      state.lteIpAddress = ip;
-      pendingNetworkStatusReport = true;
-      finishLteAttempt(true, "LTE IP " + ip);
-      return true;
-    }
-    waitWithWatchdog(1000);
+  detectLteIpStack();
+
+  String ip;
+  if (lteIpStack != kLteStackCnact && activateNetopenPdp(ip)) {
+    return markLtePdpUp(ip, 1);
   }
-  sendAT("AT+CNACT=0,0", "OK", 5000);
+  if (activateCnactPdp(ip)) {
+    lteIpStack = kLteStackCnact;
+    return markLtePdpUp(ip, 0);
+  }
+  if (lteIpStack == kLteStackCnact && activateNetopenPdp(ip)) {
+    lteIpStack = kLteStackNetopen;
+    return markLtePdpUp(ip, 1);
+  }
+
   finishLteAttempt(false, "LTE PDP fail");
   return false;
 }
 
 void stopLtePdp() {
   lteMqttClient.stop();
-  if (state.lteDataUp) {
+  if (state.lteDataUp || lteIpStack == kLteStackNetopen) {
+    sendAT("AT+CIPCLOSE=0", "OK", 5000);
+    sendAT("AT+NETCLOSE", "+NETCLOSE:", 12000);
+  }
+  if (state.lteDataUp || lteIpStack == kLteStackCnact) {
     sendAT(String("AT+CNACT=") + String(state.ltePdpCid) + ",0", "OK", 8000);
   }
   state.lteDataUp = false;
@@ -1743,6 +1986,8 @@ void maintainLteFallback() {
   }
   if (lanConnected()) {
     noLanSinceMs = 0;
+    lastLteFail = false;
+    lastLteAttemptMs = 0;
     if (state.lteDataUp || state.lteMqttTransport) {
       Serial.println("[lte] LAN back, stopping PDP");
       if (mqttClient.connected()) {
@@ -1911,18 +2156,15 @@ void drawDisplay() {
   snprintf(line, sizeof(line), "%s", COF_FIRMWARE_VERSION);
   display.drawStr(92, 8, line);
 
-  const char* active = activeNetworkName();
   if (state.ethernetConnected) {
-    snprintf(line, sizeof(line), "E %s%s", state.ipAddress.c_str(),
-             strcmp(active, "ethernet") == 0 ? " *" : "");
+    snprintf(line, sizeof(line), "E %s", state.ipAddress.c_str());
   } else {
     snprintf(line, sizeof(line), "E --");
   }
   display.drawStr(0, 16, line);
 
   if (state.wifiConnected) {
-    snprintf(line, sizeof(line), "W %s%s", state.wifiIpAddress.c_str(),
-             strcmp(active, "wifi") == 0 ? " *" : "");
+    snprintf(line, sizeof(line), "W %s", state.wifiIpAddress.c_str());
   } else if (state.wifiConfigured) {
     String ssid = state.wifiSsid;
     if (ssid.length() > 12) {
@@ -1939,16 +2181,19 @@ void drawDisplay() {
   display.drawStr(0, 24, line);
 
   if (state.lteDataUp) {
-    snprintf(line, sizeof(line), "L %s%s", state.lteIpAddress.c_str(),
-             strcmp(active, "lte") == 0 ? " *" : "");
+    snprintf(line, sizeof(line), "L %s", state.lteIpAddress.c_str());
   } else if (!state.modemReady) {
     snprintf(line, sizeof(line), "L no AT");
   } else if (!state.simReady) {
     snprintf(line, sizeof(line), millis() < 30000 ? "L SIM..." : "L no SIM");
+  } else if (lanConnected()) {
+    snprintf(line, sizeof(line), "L --");
+  } else if (reportLteProgress) {
+    snprintf(line, sizeof(line), "L try");
   } else if (lastLteFail) {
     snprintf(line, sizeof(line), "L fail");
   } else {
-    snprintf(line, sizeof(line), "L wait");
+    snprintf(line, sizeof(line), "L ...");
   }
   display.drawStr(0, 32, line);
 
@@ -1966,7 +2211,7 @@ void drawDisplay() {
   }
   display.drawStr(0, 48, line);
 
-  snprintf(line, sizeof(line), "ADC %d MQTT %s", state.zmptRaw, state.mqttConnected ? "OK" : "--");
+  snprintf(line, sizeof(line), "ADC %d MQTT %s", state.zmptRaw, mqttPathLetter());
   display.drawStr(0, 56, line);
 
   String footer = state.statusLine;
