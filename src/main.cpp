@@ -35,6 +35,8 @@ constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kMqttKeepAliveSeconds = 20;
 constexpr uint32_t kMqttSocketTimeoutSeconds = 8;
 constexpr uint8_t kLanMqttFailLimit = 2;
+constexpr uint32_t kWifiBackupDelayMs = 4000;
+constexpr uint8_t kWifiAuthFailLimit = 3;
 constexpr uint32_t kMqttSilenceReconnectMs = 3UL * 60UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
@@ -133,6 +135,8 @@ uint32_t lastSmsPollMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastMqttOkMs = 0;
 uint8_t lanMqttFailCount = 0;
+uint32_t wifiBackupDueMs = 0;
+uint8_t wifiAuthFailCount = 0;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -177,6 +181,11 @@ void configureMqttClientTransport();
 void maintainLteFallback();
 void releaseLteMqttForModem();
 void requestMqttBounce(const char* reason);
+void connectWiFi(const String& ssid, const String& password, bool saveCredentials);
+void pauseWiFiRadio();
+void startWifiRadio();
+void scheduleWifiBackup(uint32_t delayMs);
+void maintainWifiBackup();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
@@ -287,11 +296,63 @@ void applyPreferredRoute() {
 #endif
 }
 
+void pauseWiFiRadio() {
+  wifiBackupDueMs = 0;
+  WiFi.setAutoReconnect(false);
+  if (WiFi.getMode() == WIFI_OFF) {
+    return;
+  }
+  WiFi.disconnect(false);
+  state.wifiConnected = false;
+  state.wifiIpAddress = "-";
+  Serial.println("[wifi] paused (ethernet primary)");
+}
+
+void startWifiRadio() {
+  if (!state.wifiConfigured || state.ethernetConnected) {
+    return;
+  }
+  const String ssid = preferences.getString("wifiSsid", "");
+  const String password = preferences.getString("wifiPass", "");
+  if (ssid.length() == 0) {
+    return;
+  }
+  wifiAuthFailCount = 0;
+  state.wifiSsid = ssid;
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  setStatus("WiFi connecting");
+  Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+}
+
+void scheduleWifiBackup(uint32_t delayMs) {
+  if (!state.wifiConfigured || state.ethernetConnected) {
+    wifiBackupDueMs = 0;
+    return;
+  }
+  const uint32_t due = millis() + delayMs;
+  wifiBackupDueMs = due == 0 ? 1 : due;
+}
+
+void maintainWifiBackup() {
+  if (state.ethernetConnected || wifiBackupDueMs == 0) {
+    return;
+  }
+  if (static_cast<int32_t>(millis() - wifiBackupDueMs) < 0) {
+    return;
+  }
+  wifiBackupDueMs = 0;
+  startWifiRadio();
+}
+
 void markEthernetUp(const char* reason) {
   const bool wasEthernet = state.ethernetConnected;
   state.ethernetConnected = true;
   state.ipAddress = ETH.localIP().toString();
   lanMqttFailCount = 0;
+  pauseWiFiRadio();
   applyPreferredRoute();
   if (!wasEthernet) {
     requestMqttBounce(reason);
@@ -312,6 +373,7 @@ void markEthernetDown(const char* reason) {
   requestMqttBounce(reason);
   pendingNetworkStatusReport = true;
   setStatus("ETH down");
+  scheduleWifiBackup(300);
 }
 
 void noteLanMqttFailure(const char* reason) {
@@ -360,7 +422,7 @@ void feedWatchdog() {
   esp_task_wdt_reset();
 }
 
-void onNetworkEvent(WiFiEvent_t event) {
+void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
       state.ethernetStarted = true;
@@ -384,6 +446,7 @@ void onNetworkEvent(WiFiEvent_t event) {
       markEthernetDown("stopped");
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      wifiAuthFailCount = 0;
       state.wifiConnected = true;
       state.wifiIpAddress = WiFi.localIP().toString();
       if (!state.ethernetConnected) {
@@ -394,6 +457,7 @@ void onNetworkEvent(WiFiEvent_t event) {
       setStatus("WiFi IP " + state.wifiIpAddress);
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+      const uint8_t reason = info.wifi_sta_disconnected.reason;
       const bool lostWifiPath = state.wifiConnected && !state.ethernetConnected;
       state.wifiConnected = false;
       state.wifiIpAddress = "-";
@@ -403,6 +467,17 @@ void onNetworkEvent(WiFiEvent_t event) {
       if (state.wifiConfigured) {
         pendingNetworkStatusReport = true;
         setStatus("WiFi disconnected");
+      }
+      if (!state.ethernetConnected && (reason == 2 || reason == 15 || reason == 202 ||
+                                      reason == 203 || reason == 204)) {
+        wifiAuthFailCount++;
+        Serial.printf("[wifi] auth/handshake fail %u/%u reason=%u\n",
+                      wifiAuthFailCount, kWifiAuthFailLimit, reason);
+        if (wifiAuthFailCount >= kWifiAuthFailLimit) {
+          WiFi.setAutoReconnect(false);
+          WiFi.disconnect(false);
+          setStatus("WiFi auth fail");
+        }
       }
       break;
     }
@@ -433,16 +508,19 @@ void connectWiFi(const String& ssid, const String& password, bool saveCredential
     preferences.putString("wifiPass", password);
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(ssid.c_str(), password.c_str());
-  setStatus("WiFi connecting");
-  Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+  if (state.ethernetConnected) {
+    pauseWiFiRadio();
+    pendingNetworkStatusReport = true;
+    setStatus("WiFi saved");
+    Serial.printf("[wifi] saved %s as backup; ethernet stays primary\n", ssid.c_str());
+    return;
+  }
+
+  startWifiRadio();
 }
 
 void beginSavedWiFi() {
   const String ssid = preferences.getString("wifiSsid", "");
-  const String password = preferences.getString("wifiPass", "");
   state.wifiConfigured = ssid.length() > 0;
   state.wifiSsid = ssid;
 
@@ -451,16 +529,19 @@ void beginSavedWiFi() {
     return;
   }
 
-  connectWiFi(ssid, password, false);
+  scheduleWifiBackup(kWifiBackupDelayMs);
 }
 
 void clearSavedWiFi() {
+  wifiBackupDueMs = 0;
+  wifiAuthFailCount = 0;
   preferences.remove("wifiSsid");
   preferences.remove("wifiPass");
   state.wifiConfigured = false;
   state.wifiConnected = false;
   state.wifiSsid = "";
   state.wifiIpAddress = "-";
+  WiFi.setAutoReconnect(false);
   WiFi.disconnect(true, true);
   setStatus("WiFi cleared");
 }
@@ -1116,6 +1197,8 @@ bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
   if (!lanConnected()) {
     return false;
   }
+
+  applyPreferredRoute();
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -2282,6 +2365,8 @@ bool performOta(const String& url, const String& newVersion) {
   if (!networkConnected()) {
     return false;
   }
+
+  applyPreferredRoute();
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -3476,6 +3561,7 @@ void loop() {
   }
 
   connectMqttIfNeeded();
+  maintainWifiBackup();
   enforceMqttSilenceWatchdog();
 
   if (state.mqttConnected && pendingNetworkStatusReport) {

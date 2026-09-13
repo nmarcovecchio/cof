@@ -723,6 +723,14 @@ def create_app() -> Flask:
     @app.post("/devices/<device_uid>/commands/ota-check")
     @login_required
     def device_command_ota_check(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        if not device_is_live(device):
+            flash(
+                "Sin MQTT: el OTA no llega al equipo. Enchufá Ethernet. "
+                "Si el WiFi tiene clave mala, pulsá Olvidar y después OTA.",
+                "warning",
+            )
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
         return send_device_command(device_uid, "ota_check", "OTA check command sent")
 
     @app.get("/ota/firmware.bin")
