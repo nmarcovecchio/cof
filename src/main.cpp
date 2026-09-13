@@ -30,6 +30,8 @@ constexpr eth_phy_type_t kEthPhyType = ETH_PHY_LAN8720;
 constexpr uint32_t kDisplayIntervalMs = 1000;
 constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
+constexpr uint32_t kModemRetryNoLanMs = 5000;
+constexpr uint32_t kLteRetryIntervalMs = 10000;
 constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kMqttKeepAliveSeconds = 10;
@@ -181,7 +183,12 @@ String pendingCommandMessage = "";
 bool pendingMqttBounce = false;
 bool pendingNetworkStatusReport = false;
 uint32_t lastLteAttemptMs = 0;
-constexpr uint32_t kLteRetryIntervalMs = 20000;
+bool reportLteProgress = false;
+bool lastLteFail = false;
+String lteTraceLog;
+String pendingLteTraceMessage;
+bool pendingLteTracePublish = false;
+bool pendingLteTraceOk = false;
 
 bool csAttached();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
@@ -197,6 +204,8 @@ void scheduleWifiBackup(uint32_t delayMs);
 void maintainWifiBackup();
 void pollEthernetPath();
 void markEthernetDown(const char* reason);
+void refreshCellularStatus();
+bool initModem();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
@@ -391,6 +400,10 @@ void pollEthernetPath() {
     return;
   }
   if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    if (!state.mqttConnected && ethernetUpAtMs != 0 &&
+        static_cast<int32_t>(now - ethernetUpAtMs) >= 15000) {
+      markEthernetDown("no mqtt path");
+    }
     return;
   }
 
@@ -847,14 +860,17 @@ bool modemLineInteresting(const String& line) {
 }
 
 void appendModemLog(char direction, const String& text) {
-  if (!state.callInProgress && !reportTestCallProgress) {
+  if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress) {
     return;
   }
   String line = text;
   line.replace("\r", " ");
   line.replace("\n", " | ");
   line.trim();
-  if (line.length() == 0 || !modemLineInteresting(line)) {
+  if (line.length() == 0) {
+    return;
+  }
+  if (!reportLteProgress && !modemLineInteresting(line)) {
     return;
   }
   String entry = String(direction == '>' ? ">> " : "<< ") + line;
@@ -1094,6 +1110,35 @@ void publishTestCallResult(const String& result, bool ok, const String& commandI
   publishMqttJson("event", doc, false, 1);
 }
 
+void publishLteDataTrace() {
+  if (!pendingLteTracePublish || !state.mqttConnected) {
+    return;
+  }
+  pendingLteTracePublish = false;
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["type"] = "lte_data";
+  doc["severity"] = pendingLteTraceOk ? "info" : "warning";
+  doc["message"] = withFirmware(pendingLteTraceMessage);
+  if (lteTraceLog.length() > 0) {
+    doc["modem_log"] = lteTraceLog;
+  }
+  publishMqttJson("event", doc, false, 1);
+}
+
+void finishLteAttempt(bool ok, const String& message) {
+  reportLteProgress = false;
+  lastLteFail = !ok;
+  lteTraceLog = modemCallLog;
+  pendingLteTraceMessage = message;
+  pendingLteTraceOk = ok;
+  pendingLteTracePublish = true;
+  setStatus(message);
+  Serial.println("[lte] " + message);
+  publishLteDataTrace();
+}
+
 void waitWithWatchdog(uint32_t ms) {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < ms) {
@@ -1237,6 +1282,7 @@ void connectMqttIfNeeded() {
   mqttClient.subscribe(mqttTopic("command").c_str(), 1);
   publishDeviceStatus("online", true);
   publishTelemetryNow();
+  publishLteDataTrace();
   lastCellularStatusMs = millis();
   setStatus("MQTT OK");
 }
@@ -1616,40 +1662,54 @@ bool ensureLtePdp() {
   if (state.lteDataUp) {
     return true;
   }
-  if (!state.modemReady || !state.simReady) {
-    return false;
-  }
   if (millis() - lastLteAttemptMs < kLteRetryIntervalMs && lastLteAttemptMs != 0) {
     return false;
   }
   lastLteAttemptMs = millis();
+  reportLteProgress = true;
+  modemCallLog = "";
   setStatus("LTE data");
-  sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\",\"" + COF_MODEM_APN_USER + "\",\"" +
-             COF_MODEM_APN_PASS + "\"",
-         "OK", 5000);
-  const uint8_t cids[] = {0, 1};
-  for (uint8_t cid : cids) {
-    feedWatchdog();
-    sendAT(String("AT+CNACT=") + String(cid) + ",1", "OK", 8000);
-    for (int attempt = 0; attempt < 10; attempt++) {
-      feedWatchdog();
-      String resp;
-      sendAT("AT+CNACT?", "OK", 3000, &resp);
-      String ip;
-      if (parseLteIp(resp, ip) && (resp.indexOf(String(cid) + ",1") >= 0 || resp.indexOf(",1,\"") >= 0)) {
-        state.ltePdpCid = cid;
-        state.lteDataUp = true;
-        state.lteIpAddress = ip;
-        setStatus("LTE IP " + ip);
-        Serial.printf("[lte] PDP cid=%u ip=%s\n", cid, ip.c_str());
-        pendingNetworkStatusReport = true;
-        return true;
-      }
-      delay(1500);
-    }
-    sendAT(String("AT+CNACT=") + String(cid) + ",0", "OK", 5000);
+
+  if (!state.modemReady || !state.simReady) {
+    initModem();
   }
-  setStatus("LTE data fail");
+  if (!state.modemReady) {
+    finishLteAttempt(false, "LTE no AT");
+    return false;
+  }
+  if (!state.simReady) {
+    finishLteAttempt(false, "LTE no SIM");
+    return false;
+  }
+
+  sendAT("AT+CGATT=1", "OK", 15000);
+  refreshCellularStatus();
+  if (!state.networkRegistered) {
+    finishLteAttempt(false, "LTE not registered");
+    return false;
+  }
+
+  sendAT(String("AT+CNCFG=0,1,\"") + COF_MODEM_APN + "\",\"" + COF_MODEM_APN_USER + "\",\"" +
+             COF_MODEM_APN_PASS + "\",3",
+         "OK", 5000);
+  sendAT("AT+CNACT=0,1", "OK", 20000);
+  for (int attempt = 0; attempt < 8; attempt++) {
+    feedWatchdog();
+    String resp;
+    sendAT("AT+CNACT?", "OK", 3000, &resp);
+    String ip;
+    if (parseLteIp(resp, ip) && (resp.indexOf("0,1") >= 0 || resp.indexOf(",1,\"") >= 0)) {
+      state.ltePdpCid = 0;
+      state.lteDataUp = true;
+      state.lteIpAddress = ip;
+      pendingNetworkStatusReport = true;
+      finishLteAttempt(true, "LTE IP " + ip);
+      return true;
+    }
+    waitWithWatchdog(1000);
+  }
+  sendAT("AT+CNACT=0,0", "OK", 5000);
+  finishLteAttempt(false, "LTE PDP fail");
   return false;
 }
 
@@ -1878,10 +1938,14 @@ void drawDisplay() {
   if (state.lteDataUp) {
     snprintf(line, sizeof(line), "L %s%s", state.lteIpAddress.c_str(),
              strcmp(active, "lte") == 0 ? " *" : "");
-  } else if (state.modemReady && state.simReady) {
-    snprintf(line, sizeof(line), "L wait");
+  } else if (!state.modemReady) {
+    snprintf(line, sizeof(line), "L no AT");
+  } else if (!state.simReady) {
+    snprintf(line, sizeof(line), "L no SIM");
+  } else if (lastLteFail) {
+    snprintf(line, sizeof(line), "L fail");
   } else {
-    snprintf(line, sizeof(line), "L --");
+    snprintf(line, sizeof(line), "L wait");
   }
   display.drawStr(0, 32, line);
 
@@ -3682,6 +3746,7 @@ void loop() {
     pendingNetworkStatusReport = false;
     publishDeviceStatus("online", true);
   }
+  publishLteDataTrace();
 
   if (state.mqttConnected && pendingConfigReport) {
     publishConfigReported();
@@ -3749,7 +3814,8 @@ void loop() {
     publishDeviceStatus("online", true);
   }
 
-  if (now - lastModemMs >= kModemIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
+  const uint32_t modemEvery = lanConnected() ? kModemIntervalMs : kModemRetryNoLanMs;
+  if (now - lastModemMs >= modemEvery && !state.callInProgress && !state.audioSyncInProgress &&
       !state.lteMqttTransport) {
     lastModemMs = now;
     pollModem();
