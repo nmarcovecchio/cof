@@ -82,10 +82,23 @@ without a successful publish, and reconnects after `kMqttSilenceReconnectMs`
 Notes:
 
 - `kMqttSilenceReconnectMs` **must stay above** the largest accepted telemetry
-  interval (60 s, enforced in `loadSavedMqttConfig`). It used to be 20 s, which
-  is below the 60 s telemetry period, so the watchdog declared the link dead
-  every cycle, forced a reconnect, and the reconnect republishes status +
-  telemetry - producing a permanent ~20 s telemetry cadence on every path.
+  interval. It used to be 20 s, which is below the 60 s telemetry period, so the
+  watchdog declared the link dead every cycle, forced a reconnect, and the
+  reconnect republishes status + telemetry - producing a permanent ~20 s
+  telemetry cadence on every path.
+
+  The interval ceiling is now `kTelemetryIntervalMaxSeconds` (300 s) in the
+  firmware and `TELEMETRY_INTERVAL_MAX_SECONDS` (300 s) in `backend/app/main.py`,
+  and the backend form and its POST handler both reject anything above it. Before
+  that cap existed the config path accepted 3600 s while this comment claimed
+  60 s, so a stored interval above the 90 s watchdog re-created the reconnect
+  loop the fix was meant to remove. `loadSavedMqttConfig()` clamps on load too, so
+  a device that already stored a larger value recovers on boot. Keep the firmware
+  and backend constants in sync.
+
+  The same cap keeps the interval comfortably under `DEVICE_LIVE_SECONDS` (600 s):
+  telemetry is what refreshes `last_seen_at`, so a longer interval would render a
+  healthy device as `offline` for part of every cycle.
 - `PubSubClient::loop()` returns `true` when the connection is idle and `false`
   only when the socket died or a `PINGRESP` never arrived. From the outside the
   library also emits `PINGREQ` itself once the keepalive elapses, so `loop()` is
@@ -103,7 +116,6 @@ Notes:
   is a new sleep that neither pumps nor uses `waitWithWatchdog()`.
 
 ## What polls, and what it costs
-
 `loop()` runs continuously and ends with `delay(20)`, so a pass is ~20 ms plus
 whatever blocking work that pass did. `mqttClient.connected()` is a state compare
 and `mqttClient.loop()` on Ethernet/WiFi is a non-blocking socket read, so calling
@@ -150,6 +162,38 @@ correct.
 
 Link and internet dropouts reuse the normal alarm pipeline. The firmware publishes
 flat flags in every telemetry frame and status message:
+
+| Flag | Meaning |
+|---|---|
+| `network_ethernet_ok` | Ethernet is up **and** reaches the broker |
+| `network_wifi_ok` | WiFi is up **and** reaches the broker |
+| `network_internet_ok` | Any LAN path reaches the broker, or LTE data is up |
+
+These report link **health**, not link presence. A cable plugged into a router
+with no uplink still raises PHY and gets a DHCP lease, so reporting presence here
+would keep the "ethernet down" alarm quiet in exactly the outage it exists to
+catch. The ethernet flag deliberately does not honour the Ethernet holdoff: the
+holdoff is a routing-preference delay, so reporting off it would flap the alarm on
+every brief unplug.
+
+## Backend liveness
+
+The dashboard's "online" badge and the alarm module's "device recently seen"
+check share one threshold: `DEVICE_LIVE_SECONDS` in `backend/app/alarms.py`,
+imported by `backend/app/main.py` so the two cannot drift into disagreeing.
+
+Two rules matter when changing it:
+
+- It must stay **above** `TELEMETRY_INTERVAL_MAX_SECONDS`, because a telemetry
+  frame is what refreshes `last_seen_at`. While this was a hardcoded 180 s against
+  an interval that could be set to 3600 s, a healthy device rendered `offline` for
+  most of every cycle.
+- An explicit `status == "offline"` outranks the timestamp. The firmware
+  publishes that as a retained Last Will, and `mqtt_worker.persist_message()`
+  deliberately does not refresh `last_seen_at` for it. Before that, the broker's
+  LWT marked a dead device `online` for the whole window, and because retained
+  messages are re-delivered on every subscribe, each backend restart re-marked
+  every device - including ones dead for weeks - online again.
 
 | Field | Meaning |
 |---|---|

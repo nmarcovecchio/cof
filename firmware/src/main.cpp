@@ -60,9 +60,16 @@ constexpr uint32_t kPathRecoverProbeIntervalMs = 60UL * 1000UL;
 // tearing the PDP down, so a flapping link cannot cause a reconnect storm.
 constexpr uint32_t kPathPreemptSettleMs = 3000;
 // Publishing liveness. This MUST stay above the largest telemetry interval we
-// accept (60 s, enforced in loadSavedMqttConfig) or it forces a disconnect and
-// reconnect every cycle - and each reconnect republishes telemetry, which is
-// what produced the observed ~20 s cadence.
+// accept or it forces a disconnect and reconnect every cycle - and each reconnect
+// republishes telemetry, which is what produced the observed ~20 s cadence.
+//
+// kTelemetryIntervalMaxSeconds below is the number that matters here, and the
+// previous comment claimed 60 s while the config path actually accepted 3600 s.
+// The backend form now caps the interval at the same 300 s and rejects anything
+// above it at save time, so a config above this watchdog can no longer be stored.
+// Keep the two in sync when either changes.
+constexpr uint32_t kTelemetryIntervalMinSeconds = 10;
+constexpr uint32_t kTelemetryIntervalMaxSeconds = 300;
 constexpr uint32_t kMqttSilenceReconnectMs = 90UL * 1000UL;
 constexpr uint32_t kSilenceProbeIntervalMs = 45UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
@@ -328,7 +335,8 @@ bool applyDesiredConfig(JsonDocument& doc) {
   pendingConfigError = "";
 
   int telemetrySeconds = doc["telemetry_interval_seconds"] | 60;
-  if (telemetrySeconds < 10 || telemetrySeconds > 3600) {
+  if (telemetrySeconds < static_cast<int>(kTelemetryIntervalMinSeconds) ||
+      telemetrySeconds > static_cast<int>(kTelemetryIntervalMaxSeconds)) {
     pendingConfigError = "telemetry_interval_seconds out of range";
     return false;
   }
@@ -1324,7 +1332,14 @@ void loadSavedMqttConfig() {
   state.reportedConfigVersion = preferences.getInt("cfgVer", preferences.getInt("reportedCfgVersion", 0));
   state.reportedConfigHash = preferences.getString("cfgHash", preferences.getString("reportedCfgHash", ""));
   const int telemetrySeconds = preferences.getInt("telemetrySec", 60);
-  state.telemetryIntervalMs = static_cast<uint32_t>(constrain(telemetrySeconds, 10, 3600)) * 1000UL;
+  // Clamp on load too, not just on config apply: a device that already stored a
+  // value above the cap (the old 3600 ceiling was reachable from the form) would
+  // otherwise keep reconnecting every cycle forever, because this interval lands
+  // above kMqttSilenceReconnectMs.
+  state.telemetryIntervalMs =
+      static_cast<uint32_t>(constrain(telemetrySeconds,
+                                     static_cast<int>(kTelemetryIntervalMinSeconds),
+                                     static_cast<int>(kTelemetryIntervalMaxSeconds))) * 1000UL;
   state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", COF_ENABLE_CALLS != 0));
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.observedVoicePath = preferences.getString("voiceOk", "");
