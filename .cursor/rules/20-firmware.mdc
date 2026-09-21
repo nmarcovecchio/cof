@@ -29,3 +29,21 @@ Flask serves `https://app.callonfail.com.ar/ota/firmware.bin` from `ota/` (`OTA_
 The device reads the GitHub manifest, then downloads that VPS URL.
 
 `scripts/push.sh` / `push.ps1` are git-only. Firmware releases use `release-fw`.
+
+## OTA safety (remote devices)
+
+The device is often only reachable over the network, so an OTA that bricks it
+cannot be recovered by hand. Two guard rails exist in `performOta`:
+
+- **sha256 check**: the image is hashed while streaming to flash and the slot is
+  only committed if it matches `firmware.sha256` in the manifest. A manifest
+  without a valid 64-char sha256 is refused outright.
+- **Rollback**: `initOtaRollbackGuard` / `serviceOtaRollbackGuard` call
+  `esp_ota_mark_app_valid_cancel_rollback()` only after the new image proves it
+  works (MQTT connected + `kOtaConfirmMinUptimeMs` uptime). If it never gets
+  healthy, the device reboots and the bootloader falls back to the old slot.
+  This relies on `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` in the core sdkconfig.
+
+**Pending**: `performOta` uses `client.setInsecure()`, so TLS is not verified.
+Integrity is covered by the sha256, but the transport is not authenticated.
+Fixing this means pinning the Let's Encrypt chain in the firmware.

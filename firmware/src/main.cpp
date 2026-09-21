@@ -15,7 +15,9 @@
 #include <esp_arduino_version.h>
 #include <esp_netif.h>
 #include <esp_netif_net_stack.h>
+#include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
+#include <mbedtls/sha256.h>
 #include "lwip/netif.h"
 
 #include <cstring>
@@ -52,6 +54,15 @@ constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWatchdogTimeoutSeconds = 60;
+
+// After an OTA the bootloader holds the new image in ESP_OTA_IMG_PENDING_VERIFY
+// (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y). If we never confirm, the next reset
+// rolls back to the previous slot. That is the safety net for a remote device
+// we cannot reach physically, so only confirm once the device proves it works:
+// MQTT connected (which implies link + broker reachable) plus a minimum uptime
+// so we do not confirm during a flapping reconnect.
+constexpr uint32_t kOtaConfirmMinUptimeMs = 20UL * 1000UL;
+constexpr uint32_t kOtaConfirmTimeoutMs = 5UL * 60UL * 1000UL;
 
 HardwareSerial ModemSerial(2);
 WiFiClient mqttPlainClient;
@@ -129,6 +140,7 @@ struct RuntimeState {
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   String manifestFirmwareVersion = "";
   String manifestFirmwareUrl = "";
+  String manifestFirmwareSha256 = "";
   String manifestAudioVersion = "";
   String manifestAudioUrl = "";
   String manifestPhoneNumber = COF_PHONE_NUMBER;
@@ -221,6 +233,8 @@ void flushModemInput();
 String readModemUntil(uint32_t timeoutMs, const String& token = "");
 bool modemWaitForPrompt(uint32_t timeoutMs);
 void feedWatchdog();
+void initOtaRollbackGuard();
+void serviceOtaRollbackGuard();
 
 void setStatus(const String& line) {
   state.statusLine = line;
@@ -562,6 +576,58 @@ void beginInternalWatchdog() {
 
 void feedWatchdog() {
   esp_task_wdt_reset();
+}
+
+// --- OTA rollback guard -----------------------------------------------------
+// Runs once per boot. See kOtaConfirm* constants for the policy.
+bool otaConfirmPending = false;
+uint32_t otaConfirmBootMs = 0;
+bool otaConfirmedThisBoot = false;
+
+void initOtaRollbackGuard() {
+  otaConfirmBootMs = millis();
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == nullptr) {
+    return;
+  }
+  esp_ota_img_states_t otaState = ESP_OTA_IMG_UNDEFINED;
+  if (esp_ota_get_state_partition(running, &otaState) != ESP_OK) {
+    return;
+  }
+  if (otaState == ESP_OTA_IMG_PENDING_VERIFY) {
+    otaConfirmPending = true;
+    Serial.println("[ota] new image pending verify; will confirm once healthy");
+  }
+}
+
+// Confirm the slot when the device proves it works. Never confirm early: doing
+// so would silently disable the rollback that protects us.
+void serviceOtaRollbackGuard() {
+  if (!otaConfirmPending) {
+    return;
+  }
+  const uint32_t uptime = millis() - otaConfirmBootMs;
+
+  if (state.mqttConnected && uptime >= kOtaConfirmMinUptimeMs) {
+    const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err == ESP_OK) {
+      otaConfirmPending = false;
+      otaConfirmedThisBoot = true;
+      Serial.println("[ota] image confirmed valid; rollback cancelled");
+    } else {
+      Serial.printf("[ota] confirm failed: %d\n", static_cast<int>(err));
+    }
+    return;
+  }
+
+  if (uptime >= kOtaConfirmTimeoutMs) {
+    // We never got healthy in time. Do not confirm. The watchdog will reset us
+    // and the bootloader will fall back to the previous working image.
+    Serial.println("[ota] image never became healthy; rebooting to roll back");
+    setStatus("OTA rollback");
+    delay(200);
+    ESP.restart();
+  }
 }
 
 void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -2936,8 +3002,18 @@ String uploadAudioToModem(const String& url, const String& modemPath, const Stri
   return "TTS modem upload fail";
 }
 
-bool performOta(const String& url, const String& newVersion) {
+// Stream the image into flash while hashing it, then refuse to commit unless the
+// digest matches the manifest. Downloading and flashing without an integrity
+// check is unforgivable on a device we cannot reach physically.
+bool performOta(const String& url, const String& newVersion, const String& expectedSha256) {
   if (!networkConnected()) {
+    return false;
+  }
+
+  if (expectedSha256.length() != 64) {
+    Serial.printf("[ota] refusing update: bad sha256 in manifest (len=%u)\n",
+                  static_cast<unsigned>(expectedSha256.length()));
+    setStatus("OTA no sha256");
     return false;
   }
 
@@ -2975,10 +3051,58 @@ bool performOta(const String& url, const String& newVersion) {
     return false;
   }
 
+  mbedtls_sha256_context shaCtx;
+  mbedtls_sha256_init(&shaCtx);
+  mbedtls_sha256_starts_ret(&shaCtx, 0);  // 0 = SHA-256, not SHA-224
+
   WiFiClient& stream = http.getStream();
-  const size_t written = Update.writeStream(stream);
-  if (written != static_cast<size_t>(size)) {
+  uint8_t buffer[1024];
+  size_t written = 0;
+  bool writeFailed = false;
+
+  while (written < static_cast<size_t>(size)) {
+    const size_t remaining = static_cast<size_t>(size) - written;
+    const size_t chunk = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+    const int read = stream.readBytes(buffer, chunk);
+    if (read <= 0) {
+      writeFailed = true;
+      break;
+    }
+    if (Update.write(buffer, static_cast<size_t>(read)) != static_cast<size_t>(read)) {
+      writeFailed = true;
+      break;
+    }
+    mbedtls_sha256_update_ret(&shaCtx, buffer, static_cast<size_t>(read));
+    written += static_cast<size_t>(read);
+    feedWatchdog();
+  }
+
+  if (writeFailed || written != static_cast<size_t>(size)) {
     Serial.printf("[ota] incomplete write: %u/%d\n", static_cast<unsigned>(written), size);
+    mbedtls_sha256_free(&shaCtx);
+    Update.abort();
+    http.end();
+    state.otaInProgress = false;
+    return false;
+  }
+
+  uint8_t digest[32];
+  mbedtls_sha256_finish_ret(&shaCtx, digest);
+  mbedtls_sha256_free(&shaCtx);
+
+  char hex[65];
+  for (size_t i = 0; i < sizeof(digest); ++i) {
+    snprintf(hex + (i * 2), 3, "%02x", digest[i]);
+  }
+  hex[64] = '\0';
+  String actual(hex);
+  String expected = expectedSha256;
+  expected.trim();
+  expected.toLowerCase();
+
+  if (actual != expected) {
+    Serial.printf("[ota] sha256 mismatch: got %s want %s\n", actual.c_str(), expected.c_str());
+    setStatus("OTA bad hash");
     Update.abort();
     http.end();
     state.otaInProgress = false;
@@ -3018,6 +3142,7 @@ void checkManifest(bool allowFirmwareUpdate) {
 
   state.manifestFirmwareVersion = doc["firmware"]["version"] | "";
   state.manifestFirmwareUrl = doc["firmware"]["url"] | "";
+  state.manifestFirmwareSha256 = doc["firmware"]["sha256"] | "";
   state.manifestAudioVersion = doc["audio"]["version"] | "";
   state.manifestAudioUrl = doc["audio"]["url"] | "";
   state.modemAudioPath = doc["audio"]["modem_path"] | COF_MODEM_AUDIO_PATH;
@@ -3026,7 +3151,8 @@ void checkManifest(bool allowFirmwareUpdate) {
   if (allowFirmwareUpdate && state.manifestFirmwareVersion.length() > 0 &&
       state.manifestFirmwareUrl.length() > 0 &&
       compareVersions(state.manifestFirmwareVersion, COF_FIRMWARE_VERSION) > 0) {
-    performOta(state.manifestFirmwareUrl, state.manifestFirmwareVersion);
+    performOta(state.manifestFirmwareUrl, state.manifestFirmwareVersion,
+               state.manifestFirmwareSha256);
     return;
   }
 
@@ -4109,6 +4235,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   beginInternalWatchdog();
+  initOtaRollbackGuard();
   Serial.println();
   Serial.println("CallOnFail boot");
   Serial.println("Firmware " COF_FIRMWARE_VERSION);
@@ -4142,6 +4269,7 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   feedWatchdog();
+  serviceOtaRollbackGuard();
   handleSerialInput();
 
   if (now - lastSensorMs >= kSensorIntervalMs) {
