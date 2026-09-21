@@ -29,6 +29,10 @@ CONFIG_H = FIRMWARE / "include" / "cof_config.h"
 MANIFEST = ROOT / "ota" / "manifest.json"
 PIO_BIN = FIRMWARE / ".pio" / "build" / "wt32-eth01" / "firmware.bin"
 OTA_BIN = ROOT / "ota" / "firmware.bin"
+# Devices flashed before the ota/ move still poll the old path. Keep both
+# manifests byte-identical until the fleet has been updated. Remove this once
+# every device runs a firmware whose COF_MANIFEST_URL points at ota/.
+LEGACY_MANIFEST = ROOT / "actual_version" / "manifest.json"
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -95,11 +99,19 @@ def main() -> int:
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Updated {MANIFEST.relative_to(ROOT)} -> {version}", flush=True)
 
+    # Keep the pre-move path working for devices still polling actual_version/.
+    if LEGACY_MANIFEST.parent.is_dir():
+        LEGACY_MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        print(f"Mirrored {LEGACY_MANIFEST.relative_to(ROOT)} -> {version}", flush=True)
+
     if args.no_push:
         print("Skipping git (--no-push).")
         return 0
 
-    run(["git", "add", str(OTA_BIN.relative_to(ROOT)), str(MANIFEST.relative_to(ROOT))])
+    paths_to_add = [str(OTA_BIN.relative_to(ROOT)), str(MANIFEST.relative_to(ROOT))]
+    if LEGACY_MANIFEST.is_file():
+        paths_to_add.append(str(LEGACY_MANIFEST.relative_to(ROOT)))
+    run(["git", "add", *paths_to_add])
     run(["git", "status", "--short"])
 
     message = args.message or f"Release firmware {version}"
