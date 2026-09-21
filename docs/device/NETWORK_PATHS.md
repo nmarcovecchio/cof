@@ -90,6 +90,13 @@ Notes:
   only when the socket died or a `PINGRESP` never arrived. From the outside the
   library also emits `PINGREQ` itself once the keepalive elapses, so `loop()` is
   already a real liveness probe. Do not call `ping()` / `publish()` for this.
+- Verified against the vendored `PubSubClient.cpp` (2.8.x): when
+  `pingOutstanding` is set and `keepAlive` elapses again, `loop()` sets
+  `MQTT_CONNECTION_TIMEOUT`, stops the client and returns `false`. `keepAlive` is
+  `kMqttKeepAliveSeconds` = **10 s**, so any code path that can block the loop for
+  more than 10 s without pumping `mqttClient.loop()` will drop the connection.
+  This is why `readModemUntil()` and `waitForRadioService()` pump MQTT while they
+  spin on the modem, and why long operations must not use a bare `delay()`.
 
 ## Alarms
 
