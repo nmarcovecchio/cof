@@ -37,12 +37,21 @@ alwaysApply: false
 The agent compiles and publishes `ota/`; the user only presses **Forzar chequeo OTA**.
 Never ask for a USB reflash for a normal firmware drop.
 
+Known process holes in this flow (VPS never auto-syncs, raw GitHub caching, no
+"OTA rejected" signal) are listed in `docs/ops/BACKLOG.md` §P0. Read it before
+touching `scripts/release-fw.*`.
+
 1. Bump `COF_FIRMWARE_VERSION` in `firmware/include/cof_config.h` above the version
    currently in `ota/manifest.json`.
 2. Publish (compiles, copies bin, updates sha256, commits, pushes):
    - Linux: `./scripts/release-fw.sh -y`
    - Windows: `powershell -ExecutionPolicy Bypass -File scripts\release-fw.ps1 -y`
 3. On the VPS **before** OTA: `cd /opt/callonfail && git pull`
+
+> The VPS checkout is what serves `firmware.bin`; nothing syncs it automatically.
+> Skipping the pull makes the device reject the update on sha256. See
+> `docs/ops/BACKLOG.md` §P0.
+
 
 Flask serves `https://app.callonfail.com.ar/ota/firmware.bin` from `ota/` (`OTA_DIR`).
 The device reads the GitHub manifest, then downloads that VPS URL.

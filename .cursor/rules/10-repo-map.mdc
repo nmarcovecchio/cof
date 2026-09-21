@@ -15,6 +15,16 @@ alwaysApply: true
 | `docs/` | `hardware/ device/ ops/ voice/ modem/` | |
 | `deploy/` | Caddy + Mosquitto config | |
 
+## Where the pending work lives
+
+| File | Answers |
+|---|---|
+| `docs/ops/BACKLOG.md` | What is pending: bugs, debt, process holes, hardening. |
+| `docs/ROADMAP.md` | Product features that do **not** exist yet and can't be sold. |
+
+Read `docs/ops/BACKLOG.md` first when picking up work in a fresh chat. Do not
+re-derive the pending list from the firmware.
+
 ## Don't burn tokens
 
 - **Never** Read/Grep binaries or generated bulk: `*.pdf`, `*.kicad_sch`, `_preview/*`,

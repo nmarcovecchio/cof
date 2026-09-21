@@ -4,6 +4,9 @@ This file is the shared source of truth for VPS setup and operations. Update it
 whenever the server, deployment, DNS, MQTT, TLS, backups, or Docker layout
 changes.
 
+Pending infra work (auto-sync of the checkout, MQTT TLS cutover, backups) is
+tracked in `docs/ops/BACKLOG.md`, not here.
+
 ## Current goal
 
 Run CallOnFail on a single AWS Lightsail VPS (2 vCPU / 2 GB) using Docker

@@ -11,6 +11,9 @@ Regla: mientras una funcion figure aca, **no** se puede vender ni documentar
 como capacidad presente. El sitio debe decir "proximamente" / "en desarrollo"
 y este archivo es la fuente de verdad del estado.
 
+Este archivo es **solo producto**. Los bugs, la deuda tecnica y el hardening de
+proceso (OTA, TLS, alarmas) viven en `docs/ops/BACKLOG.md`.
+
 Hoy el producto si tiene: sensores (temp, humedad, agua, luz/tension),
 contactos secos digitales, rele, LTE + bateria, y avisos por llamada / SMS /
 Telegram / email con escalamiento (`docs/ops/NOTIFICATIONS.md`).
