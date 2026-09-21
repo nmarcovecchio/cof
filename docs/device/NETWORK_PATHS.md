@@ -69,9 +69,21 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
   `kPathRecoverProbeIntervalMs` (60 s). `serviceNetworkPaths()` then waits
   `kPathPreemptSettleMs` (3 s) of *stable* recovery before tearing the PDP down,
   so a flapping link cannot cause a reconnect storm.
+- `applyPreferredRoute()` decides the lwIP default route. Note the deliberate
+  asymmetry in the `Auto` branch: Ethernet is gated on `ethInternetUp`, WiFi is
+  gated only on `state.wifiConnected`. Gating WiFi on `wifiInternetUp` too would
+  look more consistent and would achieve nothing: a demoted health flag is not
+  proof that the interface is dead (it is set by two missed probes), and if both
+  flags are false there is no other default route to pick, so all this would do
+  is remove a route that might still work for OTA, NTP and audio downloads. The
+  case that actually mattered - a dead Ethernet holding the port - is handled by
+  the Ethernet gate plus `lanHasInternet()` in the MQTT/LTE decision. An earlier
+  version of this document claimed WiFi was gated as well; it never was.
 - When Ethernet is demoted, `applyPreferredRoute()` will not fall back to a WiFi
-  that is itself unhealthy, otherwise every new TCP connection (including the
-  MQTT reconnect) leaves through a dead path.
+  that has no link, otherwise every new TCP connection (including the MQTT
+  reconnect) leaves through a dead path. If WiFi is associated but its own health
+  flag is down, MQTT still refuses it (via `lanHasInternet()`) and LTE carries the
+  broker while the default route stays on WiFi as a best effort.
 
 ## Publishing liveness
 
@@ -106,8 +118,8 @@ Notes:
 - Verified against the vendored `PubSubClient.cpp` (2.8.x): when
   `pingOutstanding` is set and `keepAlive` elapses again, `loop()` sets
   `MQTT_CONNECTION_TIMEOUT`, stops the client and returns `false`. `keepAlive` is
-  `kMqttKeepAliveSeconds` = **10 s**, so any code path that can block MQTT for
-  more than 10 s without pumping `mqttClient.loop()` will drop the connection.
+  `kMqttKeepAliveSeconds` = **30 s**, so any code path that can block MQTT for
+  more than 30 s without pumping `mqttClient.loop()` will drop the connection.
   Note "block MQTT", not "take longer than 10 s": the paths that legitimately spin
   for longer pump MQTT as they go. `readModemUntil()` runs inside every `sendAT()`
   and `waitWithWatchdog()` replaces every blocking `delay()`, and both pump. So
@@ -197,9 +209,11 @@ Two rules matter when changing it:
 
 | Field | Meaning |
 |---|---|
-| `network_ethernet_ok` | 1 = Ethernet link up |
-| `network_wifi_ok` | 1 = WiFi associated |
+| `network_ethernet_ok` | 1 = Ethernet reaches the broker (link **and** health) |
+| `network_wifi_ok` | 1 = WiFi reaches the broker (link **and** health) |
 | `network_internet_ok` | 1 = any path reaches the broker (LTE included) |
+
+These are health flags, not presence flags, as described under "Alarms" above.
 
 `SENSOR_ALIASES` in `backend/app/alarms.py` maps the `net_ethernet` /
 `net_wifi` / `net_internet` sensor ids to those fields, and
@@ -275,4 +289,5 @@ power, antenna, or SIM seating. If the module returns from stage 4 with
 
 `kMqttSilenceReconnectMs` (20 s) < telemetry interval (60 s) => forced reconnect
 every 20 s => reconnect republishes telemetry. Fixed by raising the threshold to
-90 s and letting `loop()` be the probe.
+90 s and letting `loop()` be the probe. The interval itself is capped at 300 s so
+the same mistake cannot be re-created from the config form.
