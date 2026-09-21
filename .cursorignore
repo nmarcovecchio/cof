@@ -29,8 +29,10 @@ hardware/kicad/*.kicad_prl
 hardware/kicad/erc*.rpt
 hardware/layout-9x15.png
 
-# ---------- Web: heavy image assets (rarely edited) ----------
-web/assets/
+# ---------- Web ----------
+# NOTE: no bare `web/assets/` exclusion. Images are already covered by the
+# *.png/*.jpg patterns above, and a directory-wide ignore risks tooling
+# removing real tracked files.
 
 # ---------- Python / env ----------
 **/__pycache__/
