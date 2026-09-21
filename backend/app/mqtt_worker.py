@@ -97,7 +97,20 @@ def persist_message(topic, payload):
                 logger.warning("Ignoring unknown device because auto-provision is disabled device=%s topic=%s", device_uid, topic)
                 return
 
-            device.last_seen_at = utcnow()
+            # Liveness is only refreshed by messages that prove the device is up.
+            # This used to run unconditionally, and it interacts badly with the
+            # firmware's retained Last Will: a device that loses power makes the
+            # broker publish {"status":"offline"} on devices/<uid>/status, and
+            # stamping last_seen_at here marked that dead device "online" for the
+            # whole freshness window. Worse, retained messages are re-delivered on
+            # every subscribe, so each worker restart re-marked every device -
+            # including ones dead for weeks - online for another window.
+            reported_status = None
+            if message_type == "status":
+                reported_status = str(payload.get("status") or "").strip().lower()
+            device_is_down = reported_status == "offline"
+            if not device_is_down:
+                device.last_seen_at = utcnow()
 
             if device.archived_at is not None:
                 recent_warning = (
@@ -119,7 +132,12 @@ def persist_message(topic, payload):
                 logger.warning("Archived device still publishing device=%s topic=%s", device_uid, topic)
                 return
 
-            device.status = "online"
+            if device_is_down:
+                # The Last Will. Keep the authoritative status so the UI can say
+                # "offline" instead of inferring liveness purely from a timestamp.
+                device.status = "offline"
+            else:
+                device.status = "online"
             device.firmware_version = payload.get("firmware") or payload.get("firmware_version") or device.firmware_version
             device.ip_address = payload.get("ip") or payload.get("ip_address") or device.ip_address
 
@@ -130,9 +148,9 @@ def persist_message(topic, payload):
                         payload=payload,
                         firmware_version=device.firmware_version,
                         mains_voltage=to_float(payload.get("mains_voltage")),
-                        temperature_1=to_float(payload.get("temperature_1") or payload.get("temp_1")),
-                        temperature_2=to_float(payload.get("temperature_2") or payload.get("temp_2")),
-                        humidity=to_float(payload.get("humidity")),
+                        temperature_1=to_float_rounded(payload.get("temperature_1") or payload.get("temp_1")),
+                        temperature_2=to_float_rounded(payload.get("temperature_2") or payload.get("temp_2")),
+                        humidity=to_float_rounded(payload.get("humidity")),
                         water_leak=to_bool_or_none(payload.get("water_leak")),
                     )
                 )
@@ -284,6 +302,20 @@ def to_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def to_float_rounded(value, digits: int = 2):
+    """to_float, but rounded for storage.
+
+    The firmware publishes raw sensor floats (an SHT31 humidity can be stored as
+    57.900001525878906). Nothing rounded them, so the telemetry tables rendered
+    long meaningless decimals that also changed decimal count reading to reading,
+    which looks like sensor drift. Round at ingest so the stored value is stable.
+    """
+    number = to_float(value)
+    if number is None:
+        return None
+    return round(number, digits)
 
 
 def to_int(value):

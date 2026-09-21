@@ -129,6 +129,13 @@
         <div class="meta-label">Ethernet</div>
         <div class="meta-value">
           {{ 'conectado' if net_eth.get('up') and device|device_live else ('ultimo: conectado' if net_eth.get('up') else 'sin link') }}
+          {% if net_eth.get('internet') is defined %}
+            {# Distinguishes "cable plugged in" from "cable reaches the broker" - a
+               router with no uplink still raises PHY and hands out a lease. #}
+            <span class="badge text-bg-{{ 'success' if net_eth.get('internet') else 'warning' }}">
+              {{ 'con internet' if net_eth.get('internet') else 'sin internet' }}
+            </span>
+          {% endif %}
           {% if net_eth.get('ip') and net_eth.get('ip') != '-' %}
             · <code>{{ net_eth.get('ip') }}</code>
           {% endif %}
@@ -155,18 +162,48 @@
           {% if net_wifi.get('up') and device|device_live and net_wifi.get('rssi') is not none %}
             · RSSI {{ net_wifi.get('rssi') }}
           {% endif %}
+          {% if net_wifi.get('internet') is defined and (net_wifi.get('up') or net_wifi.get('configured')) %}
+            <span class="badge text-bg-{{ 'success' if net_wifi.get('internet') else 'warning' }}">
+              {{ 'con internet' if net_wifi.get('internet') else 'sin internet' }}
+            </span>
+          {% endif %}
         </div>
       </div>
       <div class="col-md-4">
         <div class="meta-label">LTE (modem)</div>
         <div class="meta-value">
-          {{ 'datos OK' if net_lte.get('up') else 'en espera' }}
+          {# This reads network.lte.up, which the firmware sets from lteDataUp - the
+             data bearer, not radio registration. The firmware deliberately tears
+             the PDP down while LAN carries MQTT, so "en espera" is the normal,
+             healthy state for an Ethernet or WiFi device. Do not relabel it
+             "conectado"/"sin conexion": the modem card below reports radio
+             registration separately and the two are expected to differ. #}
+          {% if net_lte.get('up') and device|device_live %}
+            datos OK
+          {% elif net_lte.get('up') %}
+            ultimo: datos OK
+          {% else %}
+            en espera
+          {% endif %}
           {% if net_lte.get('ip') and net_lte.get('ip') != '-' %}
             · <code>{{ net_lte.get('ip') }}</code>
           {% endif %}
         </div>
       </div>
     </div>
+    {# The firmware computes these two and nothing displayed them. network.degraded
+       is exactly the trap this page used to fall into: a LAN interface with link
+       and DHCP but no reachable broker. #}
+    {% if net and net.get('degraded') and device|device_live %}
+    <div class="alert alert-warning py-2 mb-3">
+      <strong>Sin internet.</strong> El equipo tiene red local pero no alcanza el broker, y no hay respaldo LTE activo. Los avisos por SMS o llamada pueden perderse si el corte sigue.
+    </div>
+    {% endif %}
+    {% if net and net.get('internet') is defined and not net.get('internet') and device|device_live %}
+    <div class="alert alert-danger py-2 mb-3">
+      <strong>Sin ninguna ruta a internet.</strong> Ni la red local ni LTE llegan al broker.
+    </div>
+    {% endif %}
     {% if not device.archived_at %}
     <div class="d-flex flex-wrap gap-2 align-items-end">
     <form class="row g-2 align-items-end flex-grow-1" method="post" action="{{ url_for('device_command_set_wifi', device_uid=device.device_uid) }}">
@@ -440,7 +477,7 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        Requiere firmware 0.2.34+. El texto se usa en el SMS (160) y, en la llamada, se convierte a AMR 8 kHz (hasta 800 caracteres, ~1 min).
+        El texto se usa en el SMS (160 caracteres) y, en la llamada, se convierte a AMR 8 kHz (hasta 800 caracteres, ~1 min).
         El chip Voz verde solo si alguna llamada conecto.
       </p>
     </form>
@@ -458,6 +495,11 @@
           {% for key, value in device.capabilities.items() %}
             {% if value is sameas true %}
               <span class="badge text-bg-light border">{{ key }}</span>
+            {% elif value is sameas false %}
+              {# Jinja's `is number` is true for bools, so a False used to fall
+                 through to the numeric branch and render "key: False" beside real
+                 counts like max_ds18b20: 8, reading as if the count were False. #}
+              <span class="badge text-bg-light border text-muted">{{ key }}: no</span>
             {% elif value is number %}
               <span class="badge text-bg-light border">{{ key }}: {{ value }}</span>
             {% endif %}
@@ -487,19 +529,26 @@
           {% endif %}
           {% set cell = device.discovered.get('cellular') %}
           {% if cell %}
-            <span class="badge text-bg-{{ 'success' if cell.get('registered') else 'warning' }} border">
-              Red {{ 'OK' if cell.get('registered') else 'NO' }}
+            {% set lte_ok = cell|cellular_lte_ok %}
+            {% set sig = cell.get('csq')|cellular_signal %}
+            <span class="badge text-bg-{{ 'success' if lte_ok else 'warning' }} border">
+              Red {{ 'OK' if lte_ok else 'NO' }}
             </span>
             {% if cell.get('operator') %}
               <span class="badge text-bg-light border">{{ cell.get('operator') }}</span>
             {% endif %}
-            {% if cell.get('csq') is not none %}
-              <span class="badge text-bg-light border">CSQ {{ cell.get('csq') }}</span>
-            {% endif %}
-            {% if cell.get('creg') is not none %}
+            {# Route signal through the cellular_signal filter: CSQ 99 means "not
+               detectable" (TS 27.007), so printing it as a bare reading claimed a
+               measurement that does not exist. The filter reports "Sin dato". #}
+            <span class="badge text-bg-{{ sig.tone }} border">
+              Señal: {{ sig.label }}{% if sig.csq is not none and sig.csq != 99 %} (CSQ {{ sig.csq }}){% endif %}
+            </span>
+            {# creg/cereg are ints seeded to -1, so "is not none" was always true and
+               these printed sentinel values as data. Hide them when negative. #}
+            {% if cell.get('creg') is number and cell.get('creg') >= 0 %}
               <span class="badge text-bg-light border">CREG {{ cell.get('creg') }}</span>
             {% endif %}
-            {% if cell.get('cereg') is not none %}
+            {% if cell.get('cereg') is number and cell.get('cereg') >= 0 %}
               <span class="badge text-bg-light border">CEREG {{ cell.get('cereg') }}</span>
             {% endif %}
             {% if cell.get('apn') %}

@@ -4,3 +4,7 @@ gunicorn
 paho-mqtt
 psycopg[binary]
 redis
+# zoneinfo reads the IANA database from /usr/share/zoneinfo, which python:3.12-slim
+# does not ship. main.datetime_local() catches ZoneInfoNotFoundError and renders
+# every timestamp as "-", so without this the whole UI loses its dates silently.
+tzdata

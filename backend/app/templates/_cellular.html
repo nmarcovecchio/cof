@@ -18,7 +18,10 @@
     {{ signal_bars(cell.get('csq')) }}
     <span class="small text-{{ sig.tone }}">{{ sig.label }}</span>
   {% elif cell %}
-    <span class="badge text-bg-secondary">Sin conexion</span>
+    {# Stale, not disconnected. The data says "we have no fresh report", which is
+       NOT the same claim as "the cellular network is down" - the device may be
+       perfectly registered and simply unable to reach us. #}
+    <span class="badge text-bg-secondary">sin reporte fresco</span>
   {% else %}
     <span class="text-muted">-</span>
   {% endif %}

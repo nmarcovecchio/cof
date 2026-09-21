@@ -62,7 +62,7 @@
               <span class="text-muted">Sin sitios</span>
             {% endfor %}
           </td>
-          <td>{{ tenant.devices|length }}</td>
+          <td>{{ tenant.devices | rejectattr('archived_at') | list | length }}</td>
           <td class="text-end">
             <div class="d-flex justify-content-end gap-2">
               <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=tenant.id) }}">Editar</a>

@@ -35,7 +35,16 @@ SENSOR_ALIASES = {
 }
 
 DEFAULT_MANUAL_ACTIONS = ("email", "telegram", "sms", "call")
-DEVICE_LIVE_SECONDS = 180
+# How long a device stays "live" after its last message. Canonical definition:
+# main.py imports this so the UI badge and the alarm suffix cannot drift apart.
+#
+# Must exceed the maximum telemetry interval the config form accepts
+# (TELEMETRY_INTERVAL_MAX_SECONDS in main.py), because a telemetry frame is what
+# refreshes last_seen_at. While this was a hardcoded 180 s against an interval
+# that could be set to 3600 s, a perfectly healthy device rendered "offline" for
+# most of every cycle - at the maximum setting, about 57 minutes of each hour.
+# 600 s against a 300 s cap tolerates one missed frame before flagging stale.
+DEVICE_LIVE_SECONDS = 600
 
 _rule_since: dict[str, float] = {}
 _rearm_until: dict[str, float] = {}
@@ -57,6 +66,11 @@ def calling_enabled(device: Device, config: dict | None = None) -> bool:
 
 
 def device_recently_seen(device: Device) -> bool:
+    # Mirrors main.device_is_live(): an explicit "offline" from the Last Will
+    # outranks the timestamp, so an alarm raised for a device that has just gone
+    # away is not padded with the "SMS/llamada se pueden perder" suffix.
+    if str(getattr(device, "status", "") or "").strip().lower() == "offline":
+        return False
     seen = getattr(device, "last_seen_at", None)
     if seen is None:
         return False

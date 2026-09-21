@@ -1,7 +1,10 @@
 {% macro network_path(device) %}
   {% set net = (device.discovered or {}).get('network') if device else none %}
-  {% set active = (net or {}).get('active') %}
-  {% set wifi = (net or {}).get('wifi') or {} %}
+  {% set n = net or {} %}
+  {% set active = n.get('active') %}
+  {% set wifi = n.get('wifi') or {} %}
+  {% set eth = n.get('ethernet') or {} %}
+  {% set lte = n.get('lte') or {} %}
   {% if not device|device_live %}
     <span class="badge text-bg-secondary">sin reporte</span>
   {% elif active == 'ethernet' %}
@@ -10,10 +13,37 @@
     <span class="badge text-bg-info">WiFi{% if wifi.get('ssid') %} · {{ wifi.get('ssid') }}{% endif %}</span>
   {% elif active == 'lte' %}
     <span class="badge text-bg-warning">LTE</span>
-  {% elif device.ip_address %}
-    <span class="badge text-bg-primary">LAN</span>
+  {% elif eth.get('up') or wifi.get('up') %}
+    {# A LAN interface is up but MQTT is not riding it. Do not claim a path. #}
+    <span class="badge text-bg-secondary">LAN sin salida</span>
+  {% elif lte.get('up') %}
+    <span class="badge text-bg-warning">LTE (datos)</span>
   {% else %}
-    <span class="badge text-bg-secondary">sin Ethernet/WiFi</span>
+    <span class="badge text-bg-secondary">sin ruta</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro network_path_label(device) %}
+  {% set net = (device.discovered or {}).get('network') if device else none %}
+  {% set n = net or {} %}
+  {% set active = n.get('active') %}
+  {% set wifi = n.get('wifi') or {} %}
+  {% set eth = n.get('ethernet') or {} %}
+  {% set lte = n.get('lte') or {} %}
+  {% if not device|device_live %}
+    ultimo reporte, no sale ahora
+  {% elif active == 'ethernet' %}
+    Saliendo por Ethernet
+  {% elif active == 'wifi' %}
+    Saliendo por WiFi{% if wifi.get('ssid') %} ({{ wifi.get('ssid') }}){% endif %}
+  {% elif active == 'lte' %}
+    Saliendo por LTE
+  {% elif eth.get('up') or wifi.get('up') %}
+    Red local arriba pero sin salida a internet
+  {% elif lte.get('up') %}
+    Saliendo por LTE (datos)
+  {% else %}
+    Sin ruta a internet
   {% endif %}
 {% endmacro %}
 

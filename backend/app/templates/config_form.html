@@ -22,7 +22,8 @@
     <div class="card-body row g-3">
       <div class="col-md-4">
         <label class="form-label">Intervalo de telemetría (segundos)</label>
-        <input type="number" class="form-control" id="telemetry_interval" min="10" max="3600" value="{{ cfg.telemetry_interval_seconds | default(60) }}">
+        <input type="number" class="form-control" id="telemetry_interval" min="{{ telemetry_min }}" max="{{ telemetry_max }}" value="{{ cfg.telemetry_interval_seconds | default(60) }}">
+        <div class="form-text">Entre {{ telemetry_min }} y {{ telemetry_max }} segundos. El equipo se considera "sin reporte" recién a los {{ live_seconds }} s.</div>
       </div>
     </div>
   </div>
@@ -39,7 +40,8 @@
       </div>
       <div class="col-md-3">
         <label class="form-label">Máx. intentos por alarma</label>
-        <input type="number" class="form-control" id="calling_max_attempts" min="0" max="10" value="{{ cfg.calling.max_attempts_per_alarm | default(3) if cfg.calling else 3 }}">
+        <input type="number" class="form-control" id="calling_max_attempts" min="0" max="10" value="{{ cfg.calling.max_attempts_per_alarm | default(0) if cfg.calling else 0 }}">
+        <div class="form-text">Todavía no implementado. Hoy cada regla hace un intento y escala al siguiente contacto con la espera configurada abajo en la regla.</div>
       </div>
     </div>
   </div>
@@ -48,13 +50,26 @@
   <div class="card shadow-sm mb-3">
     <div class="card-header fw-semibold">Sensores</div>
     <div class="card-body p-0">
+      {% if inert_sensors %}
+      <div class="alert alert-warning m-3 mb-0 py-2">
+        <strong>Atención:</strong> hay reglas sobre sensores que nunca van a disparar:
+        <ul class="mb-0 mt-1">
+          {% for sensor_id, sensor_name, why in inert_sensors %}
+          <li><code>{{ sensor_id }}</code> ({{ sensor_name }}): {{ why }}.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <!-- Dead control removed: the per-sensor "Habilitado" switch was serialised
+           and persisted but read by nothing - not the alarm engine (only
+           calling.enabled) and not the firmware (which never reads the sensors
+           array, rules are evaluated server-side). Unchecking it did nothing. -->
       <table class="table table-sm mb-0 align-middle">
         <thead class="table-light">
           <tr>
             <th>ID</th>
             <th>Nombre</th>
             <th>Tipo</th>
-            <th>Habilitado</th>
           </tr>
         </thead>
         <tbody id="sensors-tbody">
@@ -65,15 +80,18 @@
               <input type="text" class="form-control form-control-sm sensor-name" value="{{ s.name }}">
             </td>
             <td><span class="badge bg-secondary">{{ s.type }}</span></td>
-            <td>
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input sensor-enabled" type="checkbox" {% if s.enabled %}checked{% endif %}>
-              </div>
-            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+    </div>
+    <div class="card-footer small text-muted">
+      Los sensores no se activan ni desactivan individualmente: las reglas de alarma de abajo son las que deciden que se vigila.
+      {# The per-sensor "Habilitado" switch was removed here. It was serialised and
+         persisted but read by nothing - not the alarm engine (which only reads
+         calling.enabled) and not the firmware (which never reads the sensors
+         array at all, since rules are evaluated server-side). An operator could
+         uncheck it and believe a sensor was excluded from alerting. #}
     </div>
   </div>
 
@@ -339,14 +357,14 @@ EXISTING_RULES.forEach(r => addRule(r));
 document.getElementById('config-form').addEventListener('submit', function(e) {
   e.preventDefault();
 
-  // Sensors
+  // Sensors. `enabled` is deliberately not collected any more: the switch was
+  // persisted but read by nothing, so the field is never written back.
   const sensors = [];
   document.querySelectorAll('#sensors-tbody tr').forEach(tr => {
     sensors.push({
       id: tr.dataset.sensorId,
       name: tr.querySelector('.sensor-name').value,
       type: tr.dataset.sensorType,
-      enabled: tr.querySelector('.sensor-enabled').checked,
       source: tr.dataset.sensorSource,
     });
   });
@@ -379,7 +397,10 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
   payload.telemetry_interval_seconds = parseInt(document.getElementById('telemetry_interval').value);
   payload.calling = {
     enabled: document.getElementById('calling_enabled').checked,
-    max_attempts_per_alarm: parseInt(document.getElementById('calling_max_attempts').value),
+    // max_attempts_per_alarm is written only because default_device_config still
+    // seeds it; nothing reads it, the per-rule escalate/delay settings drive
+    // actual retries. Kept so the field is not silently dropped from the JSON.
+    max_attempts_per_alarm: parseInt(document.getElementById('calling_max_attempts').value) || 0,
   };
   payload.sensors = sensors;
   payload.rules = rules;

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -21,6 +22,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .alarm_ack import ACK_VIA, acknowledge_by_token, acknowledge_device_from_event, lookup_ack_link, open_device_alarms
 from .alarm_log import friendly_step
 from .alarms import (
+    DEVICE_LIVE_SECONDS,
+    SENSOR_ALIASES,
     configured_rules_view,
     dispatch_alarm,
     find_rule,
@@ -38,6 +41,21 @@ from .mqtt_util import publish_mqtt, publish_mqtt_raw
 from .notify import send_email, send_telegram
 from .phones import is_e164_phone, join_values, normalize_phone, parse_telegram_chats
 from .tts import MAX_TEXT_CHARS
+
+# Telemetry interval bounds, shared by the config form and by the POST handler.
+#
+# The upper bound is load-bearing. The firmware's publishing-liveness watchdog
+# (kMqttSilenceReconnectMs = 90 s in firmware/src/main.cpp) forces a disconnect and
+# reconnect after that much silence without a successful publish - and each
+# reconnect republishes status + telemetry. With an interval above the watchdog
+# the device reconnects every cycle, which is what produced the observed ~20 s
+# telemetry cadence. So this cap must stay below that watchdog.
+#
+# Keep it comfortably below DEVICE_LIVE_SECONDS (600 s) too, or a healthy device
+# renders "offline" for part of every cycle: telemetry is what refreshes
+# last_seen_at.
+TELEMETRY_INTERVAL_MIN_SECONDS = 10
+TELEMETRY_INTERVAL_MAX_SECONDS = 300
 
 
 def login_required(view):
@@ -87,27 +105,92 @@ def parse_utc(value):
     return dt.astimezone(timezone.utc)
 
 
-def is_fresh(value, max_age_seconds: int = 180) -> bool:
+def is_fresh(value, max_age_seconds: int = DEVICE_LIVE_SECONDS) -> bool:
     dt = parse_utc(value)
     if dt is None:
         return False
     return (datetime.now(timezone.utc) - dt).total_seconds() < max_age_seconds
 
 
+def to_config_number(value):
+    """Coerce a config value to float, or None when it is not a usable number.
+
+    Mirrors alarms.to_number so that what the form accepts is what the alarm
+    engine can actually evaluate. A blank threshold arrives from the template as
+    JSON null (parseFloat("") is NaN and JSON.stringify turns NaN into null), and
+    to_number(None) is None, which makes condition_holds return None and the rule
+    is silently skipped forever - while the UI lists it as configured. Reject it
+    at save time instead.
+    """
+    if isinstance(value, bool):
+        return None
+    if value is None or isinstance(value, str):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def validate_config_payload(payload):
+    """Return a Spanish error message for an unsaveable config, else None.
+
+    These are the two ways a config could previously be saved and produce a
+    device that never behaves as the operator expects. Both were silent.
+    """
+    if not isinstance(payload, dict):
+        return "La configuracion debe ser un objeto JSON"
+
+    interval = to_config_number(payload.get("telemetry_interval_seconds"))
+    if interval is None:
+        return "El intervalo de telemetria debe ser numerico"
+    if interval < TELEMETRY_INTERVAL_MIN_SECONDS or interval > TELEMETRY_INTERVAL_MAX_SECONDS:
+        return (
+            f"El intervalo de telemetria debe estar entre {TELEMETRY_INTERVAL_MIN_SECONDS} y "
+            f"{TELEMETRY_INTERVAL_MAX_SECONDS} segundos. Con un intervalo mayor el equipo "
+            "reconecta en cada ciclo y la telemetria se desordena."
+        )
+
+    for index, rule in enumerate(payload.get("rules") or [], start=1):
+        if not isinstance(rule, dict):
+            continue
+        if not rule.get("sensor_id"):
+            continue
+        if to_config_number(rule.get("threshold")) is None:
+            sensor = str(rule.get("sensor_id"))
+            return (
+                f"La regla {index} (sensor {sensor}) no tiene un valor umbral valido. "
+                "Sin umbral la regla nunca se evalua, asi que no se guardo."
+            )
+    return None
+
+
 def device_is_live(device) -> bool:
     if device is None or getattr(device, "archived_at", None) is not None:
         return False
-    return is_fresh(getattr(device, "last_seen_at", None), 180)
+    # An explicit "offline" wins over the timestamp. The firmware publishes it as
+    # a retained Last Will, and it is the only authoritative statement that the
+    # device went away; trust it rather than waiting for last_seen_at to age out.
+    if str(getattr(device, "status", "") or "").strip().lower() == "offline":
+        return False
+    return is_fresh(getattr(device, "last_seen_at", None))
 
 
 def cellular_is_current(cell, device=None) -> bool:
+    # Threshold must track DEVICE_LIVE_SECONDS: cellular.received_at is stamped
+    # only when a status message carries a cellular dict, and status is published
+    # at most every kCellularStatusIntervalMs (5 min) in the firmware and not at
+    # all when MQTT rides LTE. A shorter window would call fresh data stale.
     if not device_is_live(device):
         return False
     if not isinstance(cell, dict) or not cell:
         return False
     received = cell.get("received_at")
     if received:
-        return is_fresh(received, 12 * 60)
+        return is_fresh(received, DEVICE_LIVE_SECONDS)
     return True
 
 
@@ -687,6 +770,10 @@ def create_app() -> Flask:
                 payload = json.loads(raw_payload)
             except json.JSONDecodeError as exc:
                 return render_config_form(device, raw_payload, error=f"JSON invalido: {exc}")
+
+            validation_error = validate_config_payload(payload)
+            if validation_error:
+                return render_config_form(device, raw_payload, error=validation_error)
 
             next_version = (latest_config.version + 1) if latest_config else 1
             payload["schema_version"] = payload.get("schema_version", 1)
@@ -1301,6 +1388,45 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         cfg = {}
     if isinstance(cfg, dict):
         cfg = ensure_network_sensors(cfg)
+    # Warn about rules whose sensor has never carried a value. The concrete case is
+    # mains_voltage: the firmware publishes it as null (only zmpt_raw is a real
+    # reading), so a mains rule is accepted by the form, listed in the UI, and can
+    # never fire. condition_holds returns None for a missing sensor and
+    # evaluate_device_rules silently skips the rule, so nothing else surfaces it.
+    #
+    # The mapped PCF8574 input is the deliberate exception: input_1 is polled but
+    # only forwarded to telemetry when water_leak is true, so absence of data is
+    # normal there and flagging it would be a false positive.
+    observed = set()
+    latest = (
+        Telemetry.query.filter_by(device_id=device.id)
+        .order_by(Telemetry.received_at.desc())
+        .first()
+        if device is not None and getattr(device, "id", None) is not None
+        else None
+    )
+    if latest is not None and isinstance(latest.payload, dict):
+        observed = {str(key) for key, value in latest.payload.items() if value is not None}
+    inert_sensors = []
+    rules = cfg.get("rules") if isinstance(cfg, dict) else None
+    sensors = {str(item.get("id")): item for item in (cfg.get("sensors") or []) if isinstance(item, dict)} if isinstance(cfg, dict) else {}
+    seen_sensor_ids = []
+    for rule in rules or []:
+        if not isinstance(rule, dict):
+            continue
+        sensor_id = str(rule.get("sensor_id") or "")
+        if not sensor_id or sensor_id in seen_sensor_ids:
+            continue
+        seen_sensor_ids.append(sensor_id)
+        if sensor_id == "input_1":
+            continue
+        sensor = sensors.get(sensor_id) or {}
+        if str(sensor.get("type")) == "mains_voltage" or sensor_id == "mains_1":
+            inert_sensors.append((sensor_id, sensor.get("name") or "Red electrica", "el firmware todavia no calcula la tension (solo publica la lectura cruda del ADC)"))
+            continue
+        keys = SENSOR_ALIASES.get(sensor_id, (sensor_id,))
+        if observed and not any(key in observed for key in keys):
+            inert_sensors.append((sensor_id, sensor.get("name") or sensor_id, "nunca reporto un valor"))
     return render_template(
         "config_form.html",
         device=device,
@@ -1309,6 +1435,10 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         error=error,
         contacts=tenant_contacts(device.tenant),
         telegram_chats=tenant_telegram_chats(device.tenant),
+        telemetry_min=TELEMETRY_INTERVAL_MIN_SECONDS,
+        telemetry_max=TELEMETRY_INTERVAL_MAX_SECONDS,
+        live_seconds=DEVICE_LIVE_SECONDS,
+        inert_sensors=inert_sensors,
     )
 
 
