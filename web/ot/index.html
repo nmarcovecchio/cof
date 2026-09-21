@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pack OT / Tablero — Call On Fail</title>
-    <meta name="description" content="Alarmas de PLC o tablero por contacto seco y Modbus: Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país." />
+    <meta name="description" content="Alarmas de PLC o tablero por contacto seco; Modbus RTU/TCP (próximamente): Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país." />
     <link rel="canonical" href="https://www.callonfail.com.ar/ot/" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="es_AR" />
     <meta property="og:url" content="https://www.callonfail.com.ar/ot/" />
     <meta property="og:title" content="Pack OT / Tablero — Call On Fail" />
-    <meta property="og:description" content="Alarmas de PLC o tablero por contacto seco y Modbus: Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país." />
+    <meta property="og:description" content="Alarmas de PLC o tablero por contacto seco; Modbus RTU/TCP (próximamente): Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país." />
     <meta property="og:image" content="https://www.callonfail.com.ar/assets/logo.png" />
     <meta name="twitter:card" content="summary" />
     <link rel="icon" href="/assets/logo.png" type="image/png" />
@@ -18,6 +18,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/css/styles.css" />
+    <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -30,7 +31,7 @@
         },
         "areaServed": "AR",
         "url": "https://www.callonfail.com.ar/ot/",
-        "description": "Alarmas de PLC o tablero por contacto seco y Modbus: Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país."
+        "description": "Alarmas de PLC o tablero por contacto seco; Modbus RTU/TCP (próximamente): Telegram y llamada si no hay ack. LTE + batería. CABA · todo el país."
       }
     </script>
   </head>
@@ -51,7 +52,13 @@
     <main>
       <section class="page-hero hero">
         <div class="hero-media" aria-hidden="true">
-          <img src="/assets/hero-sala.jpg" alt="" />
+          <img
+            src="/assets/hero-sala.png"
+            alt=""
+            width="1536"
+            height="1024"
+            fetchpriority="high"
+          />
         </div>
         <div class="hero-veil"></div>
         <div class="hero-copy">
@@ -60,7 +67,7 @@
           <h1>Tablero<br />y OT.</h1>
           <p class="lead">La alarma del tablero llega donde mirás. Si no hay ack, <strong>suena el teléfono</strong>.</p>
           <div class="cta-row">
-            <a class="btn btn-primary btn-icon" href="https://wa.me/541168619589?text=Hola%2C%20quiero%20un%20piloto%20Call%20On%20Fail%20para%20OT%20/%20Tablero" target="_blank" rel="noopener">
+            <a class="btn btn-primary btn-icon" href="https://wa.me/5491168619589?text=Hola%2C%20quiero%20un%20piloto%20Call%20On%20Fail%20para%20OT%20/%20Tablero" target="_blank" rel="noopener">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"/></svg>
               <span>Pedir piloto</span>
             </a>
@@ -75,13 +82,13 @@
           <p>Instalación llave en mano para OT / tablero. Cableamos, configuramos alarmas y escalamiento; vos recibís la llamada.</p>
           <ul class="feature-list">
             <li>Contactos secos desde PLC, relé o bornera de alarma</li>
-            <li>Lectura Modbus RTU/TCP según el sitio</li>
+            <li>Lectura Modbus RTU/TCP según el sitio (próximamente)</li>
             <li>Telegram / SMS / mail al dispararse</li>
             <li>Si no confirmás, llamada al celular y al siguiente número</li>
             <li>Misma caja: LTE + batería out-of-band</li>
             <li>Útil en tableros donde hoy solo hay una luz o un zumbador</li>
           </ul>
-          <div class="other-packs" aria-label="Otros packs">
+          <div class="other-packs" role="navigation" aria-label="Otros packs">
             <a href="/">Todos</a>
             <a href="/sala/">Sala</a><a href="/energia/">Energía</a><a href="/frio/">Frío</a>
           </div>
@@ -108,7 +115,7 @@
           <h2>¿Tenés un sitio para probarlo?</h2>
           <p>Instalamos en tu sitio, lo dejamos listo y seguimos con abono mensual. CABA · todo el país.</p>
           <div class="cta-row">
-            <a class="btn btn-primary btn-icon" href="https://wa.me/541168619589?text=Hola%2C%20quiero%20un%20piloto%20Call%20On%20Fail%20para%20OT%20/%20Tablero" target="_blank" rel="noopener">
+            <a class="btn btn-primary btn-icon" href="https://wa.me/5491168619589?text=Hola%2C%20quiero%20un%20piloto%20Call%20On%20Fail%20para%20OT%20/%20Tablero" target="_blank" rel="noopener">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"/></svg>
               <span>WhatsApp</span>
             </a>
@@ -133,7 +140,45 @@
             <a href="/ot/">OT</a>
             <a href="/frio/">Frío</a>
           </div>
-          <p class="legal">Facturación con monotributo disponible.</p>
+          <div class="footer-links">
+            <a
+              class="footer-link"
+              href="https://wa.me/5491168619589"
+              target="_blank"
+              rel="noopener"
+              aria-label="WhatsApp"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20.5 3.5A11.4 11.4 0 0 0 12.05 0C5.5 0 .2 5.3.2 11.85c0 2.09.55 4.12 1.6 5.92L0 24l6.4-1.67a11.8 11.8 0 0 0 5.65 1.44h.01c6.55 0 11.85-5.3 11.85-11.85 0-3.17-1.23-6.15-3.41-8.42ZM12.05 21.7h-.01a9.8 9.8 0 0 1-5-1.37l-.36-.21-3.8 1 1.01-3.7-.23-.38a9.8 9.8 0 0 1-1.5-5.2c0-5.42 4.41-9.83 9.84-9.83 2.63 0 5.1 1.02 6.96 2.88a9.76 9.76 0 0 1 2.88 6.95c0 5.43-4.42 9.84-9.84 9.84Zm5.4-7.37c-.3-.15-1.76-.87-2.03-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.47-1.75-1.64-2.04-.17-.3-.02-.46.13-.61.13-.13.3-.35.44-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.09 3.19 5.06 4.47.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35Z"/></svg>
+              <span>+54 11 6861-9589</span>
+            </a>
+            <a class="footer-link" href="mailto:marcovecchio.n.a@gmail.com">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5L4 8V6l8 5 8-5v2Z"
+                />
+              </svg>
+              <span>marcovecchio.n.a@gmail.com</span>
+            </a>
+            <a
+              class="footer-link"
+              href="https://www.linkedin.com/company/callonfail"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28ZM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12ZM7.12 20.45H3.56V9h3.56v11.45ZM22.23 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.23 0Z"
+                />
+              </svg>
+              <span>LinkedIn</span>
+            </a>
+          </div>
+          <p class="legal">
+            Facturación con monotributo disponible. Datos fiscales al cerrar
+            piloto o contrato.
+          </p>
         </div>
       </div>
     </footer>
