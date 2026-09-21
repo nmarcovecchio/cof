@@ -37,3 +37,20 @@ re-derive the pending list from the firmware.
 
 `firmware/include/cof_config.h` holds `COF_FIRMWARE_VERSION` and the GPIO/APN/MQTT map.
 Hardware v1.4 GPIO map lives in `docs/hardware/HARDWARE_V1.md` §10 — treat it as frozen.
+
+## Secrets
+
+**This repo is PUBLIC.** Never write a real credential into a tracked file: not
+in docs, not in code, not in commit messages, not in `.py`/`.md` examples. The
+admin panel password, `SECRET_KEY`, Postgres/MQTT passwords, tokens and API keys
+all count.
+
+- Ask for a credential **in chat**, or have the user run the step. Never
+  persist it to the repo.
+- `backend/app/main.py` still hardcodes `change-this-secret-key` as its
+  `SECRET_KEY` fallback; the real value must come from `.env` on the VPS.
+- APN user/password are the carrier's **published** values, not a secret — but
+  they are still per-carrier, so don't rotate them casually.
+- Files that need a value use `<placeholder>`. `.env.example` is the template.
+- If a credential ever reaches a commit, **rotate it** — rewriting history is
+  not enough once it has been public.

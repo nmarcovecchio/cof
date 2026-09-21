@@ -45,7 +45,8 @@
 #define COF_DEFAULT_MQTT_PORT 1883
 #define COF_DEFAULT_MQTT_DEVICE_ID "cof-test"
 #define COF_DEFAULT_MQTT_USERNAME "cof-test"
-// Keep in sync with MQTT_DEVICE_PASSWORD on the VPS (.env). Private repo only.
+// Overridden by the real credential over Serial and stored in Preferences.
+// This repo is PUBLIC: never commit a real value here, not even temporarily.
 #define COF_DEFAULT_MQTT_PASSWORD "change-me-device-mqtt"
 
 // ---------------------------------------------------------------------------

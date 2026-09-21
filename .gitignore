@@ -1,4 +1,13 @@
+# Secrets — never commit. This repo is PUBLIC.
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+deploy/mosquitto/passwd
+deploy/mosquitto/certs/*
+!deploy/mosquitto/certs/.gitignore
 __pycache__/
 *.py[cod]
 .vscode/
@@ -12,9 +21,6 @@ __pycache__/
 firmware/.pio/
 .DS_Store
 Thumbs.db
-deploy/mosquitto/passwd
-deploy/mosquitto/certs/*
-!deploy/mosquitto/certs/.gitignore
 
 # Binaries / generated — never commit (regen from gen_sch.py or vendor sites)
 *.pdf

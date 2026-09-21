@@ -91,9 +91,9 @@ panic o `CFUN`. Instrumentar: loguear `esp_reset_reason()`, `CEREG`, `CPSI` y
 ### 7. Revisar el error del log del modem en el panel
 
 Pendiente de la lista original de 0.2.55 y **nunca se hizo**: entrar a
-`app.callonfail.com.ar` con `admin` / `123QAZwsx!` y encontrar el error del
-modem que reporto el usuario. Requiere acceso al panel; el agente no puede
-autenticarse solo.
+`app.callonfail.com.ar` y encontrar el error del modem que reporto el usuario.
+Requiere acceso al panel; el agente **no** tiene ni debe tener la credencial
+(ver §Secretos). Lo mas util es pegar el error en el chat.
 
 ### 8. Verificar que las alarmas de corte disparen
 
@@ -115,14 +115,31 @@ Detalle completo en `docs/ops/VPS_CONFIG.md` §"Deferred: finish MQTT security".
 **No** OTA-ear un firmware que migre el default a `:8883` sin acceso serial: ya
 paso con `0.2.11` y dejo `cof-test` offline.
 
-### 11. Rotar la password del panel admin
+### 11. Rotar la credencial del panel admin
 
-El usuario ya aviso que `123QAZwsx!` es provisoria.
+Sigue siendo la provisoria de la puesta en marcha. Rotarla antes de que el panel
+quede expuesto a terceros.
 
 ### 12. Infra pendiente
 
 Migraciones de DB, backups, monitoreo basico, `ota.callonfail.com.ar` como
 gestor de releases.
+
+---
+
+## Secretos — regla dura
+
+Este repo es **publico**. Nunca commitear valores de credenciales, tokens, APN,
+SIM o claves de API: ni en docs, ni en codigo, ni en mensajes de commit, ni en
+ejemplos "de prueba".
+
+- Las credenciales reales viven en el `.env` del VPS y en los `Preferences` del
+  device, nunca en el repo.
+- Cuando una tarea necesite una credencial, el agente la **pide en el chat** o
+  el usuario ejecuta el paso. No se guarda en un archivo del repo.
+- Plantillas (`.env.example`, docs) usan `<placeholder>`, nunca el valor real.
+- Si una credencial se filtra a un commit, **rotarla** aunque se reescriba la
+  historia: el valor ya estuvo publico.
 
 ---
 
