@@ -218,7 +218,7 @@ Controlled from the web:
 
 If `calling.enabled` is false, the device must not place phone calls even if the
 modem is ready. Alarm email, Telegram chat ID and phone number are stored on
-the tenant (see `docs/NOTIFICATIONS.md`). Device `notifications` in this JSON
+the tenant (see `docs/ops/NOTIFICATIONS.md`). Device `notifications` in this JSON
 is a leftover override only.
 
 Audio assets should be dynamic. A customer may have no audio assets, one shared
@@ -544,7 +544,7 @@ The device forgets NVS credentials and disconnects WiFi. Ethernet is unchanged.
 ### Test call with audio
 
 An explicit operator action from the device page. The backend synthesizes the
-form text to AMR-NB 8 kHz (`docs/VOICE_SMS.md`) and the device
+form text to AMR-NB 8 kHz (`docs/voice/VOICE_SMS.md`) and the device
 downloads `audio_url` into `C:/tts.amr` before dialing.
 
 This command may place a call even if `calling.enabled` is false. Automatic

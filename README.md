@@ -9,7 +9,7 @@ Primer firmware base para CallOnFail usando:
 - DS18B20 por OneWire.
 - PCF8574 por I2C para boton/DIP switch.
 - Modem A7672 por UART TTL.
-- OTA por Ethernet desde `actual_version/manifest.json`.
+- OTA por Ethernet desde `ota/manifest.json`.
 - Audio de prueba descargado por Ethernet y cargado al modem con `AT+CFTRANRX`.
 
 ## Backend MVP con Docker
@@ -23,12 +23,12 @@ El repo incluye una base deployable para VPS:
 - Mosquitto MQTT interno.
 - Worker MQTT Python.
 - Caddy como reverse proxy.
-- Sitio público estático en `website/` (`www.callonfail.com.ar`).
+- Sitio público estático en `web/` (`www.callonfail.com.ar`).
 
 La bitacora/configuracion persistente del VPS queda en:
 
 ```text
-docs/VPS_CONFIG.md
+docs/ops/VPS_CONFIG.md
 ```
 
 El contrato inicial para configuracion de dispositivos queda en:
@@ -40,8 +40,8 @@ docs/DEVICE_CONFIG_V1.md
 Llamada y SMS validados en lab (Claro / A7672 / TTS WAV) quedan en:
 
 ```text
-docs/VOICE_SMS.md
-docs/operators/claro-ar.md
+docs/voice/VOICE_SMS.md
+docs/voice/operators/claro-ar.md
 ```
 
 La configuracion diferencia capacidades del modem, llamadas habilitadas por
@@ -88,7 +88,7 @@ https://www.callonfail.com.ar/
 https://app.callonfail.com.ar/
 ```
 
-Detalle de DNS/TLS/ACME: `docs/VPS_CONFIG.md`.
+Detalle de DNS/TLS/ACME: `docs/ops/VPS_CONFIG.md`.
 
 Timezone de la UI:
 
@@ -159,7 +159,7 @@ Flujo multi-cliente inicial:
 3. Crear dispositivo en `/devices/new`.
 4. Usar el mismo `Device ID` que usa el firmware en MQTT.
 5. Entrar al dispositivo y publicar config o forzar OTA.
-6. Configurar SMTP/bot una sola vez en el VPS: `docs/NOTIFICATIONS.md`.
+6. Configurar SMTP/bot una sola vez en el VPS: `docs/ops/NOTIFICATIONS.md`.
 
 Los dispositivos reportan `hardware_profile`, capacidades y recursos
 descubiertos. En `/devices/<device_id>` se muestran esos datos para poder mapear
@@ -286,7 +286,7 @@ http://IP_DEL_VPS/devices/cof-test
 
 Click en `Probar SMS` o `Probar llamada` (firmware 0.2.28+) para mandar un SMS
 o marcar un numero. El texto de la casilla es el SMS y el audio de la llamada
-(Piper `es_AR-daniela` → AMR-NB 8 kHz). Detalle en `docs/VOICE_SMS.md`. El backend
+(Piper `es_AR-daniela` → AMR-NB 8 kHz). Detalle en `docs/voice/VOICE_SMS.md`. El backend
 publica `test_sms` o `test_call` en `devices/<id>/command`. Si el ACK dice
 `unsupported`, primero `OTA`. Sin VoLTE la llamada prepara CS (RF bounce)
 antes del primer `ATD`.
@@ -342,17 +342,18 @@ Usa **Visual Studio Code + PlatformIO**.
 
 1. Instalar VS Code.
 2. Instalar la extension "PlatformIO IDE".
-3. Abrir esta carpeta del repo en VS Code.
-4. Editar `include/cof_config.h`.
+3. Abrir la carpeta `firmware/` del repo en VS Code (PlatformIO toma `platformio.ini` de ahí).
+4. Editar `firmware/include/cof_config.h`.
 5. Conectar el programador USB-Serial.
 6. En PlatformIO, ejecutar:
    - `Build`
    - `Upload`
    - `Monitor`
 
-Alternativa por consola:
+Alternativa por consola (desde `firmware/`):
 
 ```bash
+cd firmware
 pio run
 pio run -t upload
 pio device monitor -b 115200
@@ -439,7 +440,7 @@ para pruebas. Si el programa se cuelga, el ESP32 deberia reiniciarse solo.
 
 Por seguridad, las llamadas estan deshabilitadas por defecto.
 
-En `include/cof_config.h`:
+En `firmware/include/cof_config.h`:
 
 ```cpp
 #define COF_ENABLE_CALLS 0
@@ -453,13 +454,13 @@ Para probar llamadas:
 #define COF_PHONE_NUMBER "+549TU_NUMERO"
 ```
 
-Tambien se puede publicar el numero en `actual_version/manifest.json`, pero para la
+Tambien se puede publicar el numero en `ota/manifest.json`, pero para la
 primera prueba conviene dejarlo fijo en el firmware.
 
 ## Pines WT32
 
 La placa v1 (4 IN, 2 OUT, leak, RESET del A7672, WDT con corte de 5 V) esta
-en `docs/HARDWARE_V1.md`. Abajo queda el cableado de **lab** actual.
+en `docs/hardware/HARDWARE_V1.md`. Abajo queda el cableado de **lab** actual.
 
 ### Alimentacion
 
@@ -588,12 +589,12 @@ AT+CFTRANRX=?
 El ESP32 consulta:
 
 ```text
-https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/manifest.json
+https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json
 ```
 
 Para publicar una nueva version:
 
-1. Actualizar `COF_FIRMWARE_VERSION` en `include/cof_config.h`.
+1. Actualizar `COF_FIRMWARE_VERSION` en `firmware/include/cof_config.h`.
 2. Compilar:
 
    ```bash
@@ -603,10 +604,10 @@ Para publicar una nueva version:
 3. Copiar el binario:
 
    ```bash
-   cp .pio/build/wt32-eth01/firmware.bin actual_version/firmware.bin
+   cp firmware/.pio/build/wt32-eth01/firmware.bin ota/firmware.bin
    ```
 
-4. Actualizar `actual_version/manifest.json` con la nueva version.
+4. Actualizar `ota/manifest.json` con la nueva version.
 5. Commit + push.
 
 Los equipos instalados descargaran el firmware por Ethernet o WiFi cuando vean
@@ -618,7 +619,7 @@ como fallback y para pruebas.
 El archivo inicial es:
 
 ```text
-actual_version/audio/cof_test.wav
+ota/audio/cof_test.wav
 ```
 
 Formato:

@@ -79,10 +79,10 @@ is not the target setup.
 
 ## Public marketing website
 
-Static HTML lives in the repo under `website/` and is served by Caddy:
+Static HTML lives in the repo under `web/` and is served by Caddy:
 
 ```text
-https://www.callonfail.com.ar/     -> website/index.html
+https://www.callonfail.com.ar/     -> web/index.html
 https://www.callonfail.com.ar/sala/    -> pack Sala / Rack
 https://www.callonfail.com.ar/energia/ -> pack Energía
 https://www.callonfail.com.ar/ot/      -> pack OT / Tablero
@@ -91,7 +91,7 @@ https://callonfail.com.ar/         -> redirect to www
 https://app.callonfail.com.ar/     -> Flask app
 ```
 
-SEO helpers in `website/`:
+SEO helpers in `web/`:
 
 ```text
 robots.txt
@@ -464,7 +464,7 @@ https://app.callonfail.com.ar/dashboard
 ## Resume at home — 2026-09-03 (updated 2026-09-04)
 
 The ESP32 was recovered. **Test call and test SMS work.** Details and the
-radio/audio config to keep: `docs/VOICE_SMS.md`.
+radio/audio config to keep: `docs/voice/VOICE_SMS.md`.
 
 ### What is running now
 
@@ -472,7 +472,7 @@ radio/audio config to keep: `docs/VOICE_SMS.md`.
 - `docker-compose.yml` publishes `1883:1883` and `8883:8883`.
 - Web config form is visual (sensors / rules / call on/off).
   Email, Telegram chat ID and phone live on the **tenant**.
-  Rules are evaluated in `mqtt_worker`. Setup: `docs/NOTIFICATIONS.md`.
+  Rules are evaluated in `mqtt_worker`. Setup: `docs/ops/NOTIFICATIONS.md`.
 - Latest published firmware: `0.2.34`.
 - Lab device `cof-test`: MQTT `1883`, Claro A7672. Voice = CS bounce then one
   dial. SMS = modem. Call audio = Piper `es_AR-daniela` → AMR-NB 8 kHz.

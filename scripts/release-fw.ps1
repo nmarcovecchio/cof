@@ -1,4 +1,4 @@
-# Compile ESP32 firmware, update actual_version/, commit and push.
+# Compile ESP32 firmware, update ota/, commit and push.
 # From the repo root:
 #   powershell -ExecutionPolicy Bypass -File scripts\release-fw.ps1
 Set-StrictMode -Version Latest

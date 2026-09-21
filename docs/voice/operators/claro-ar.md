@@ -18,7 +18,7 @@ Related: [VOICE_SMS.md](../VOICE_SMS.md), [modem docs](../modem/README.md).
 | Voz usable | **CSFB**: LTE + `CREG=1`, sin IMS |
 | 2G en este sitio | **No.** `AT+CNMP=13` (GSM only) → `NO SERVICE` |
 
-Config en firmware: `include/cof_config.h` (`COF_MODEM_APN*`, `COF_MODEM_SMSC`).
+Config en firmware: `firmware/include/cof_config.h` (`COF_MODEM_APN*`, `COF_MODEM_SMSC`).
 Voz-céntrico: `AT+CEMODE=1`, `AT+CEVDP=3`, `AT+CAVIMS=1`.
 
 SMS funciona cuando el módem está asentado (`CEREG=1`, CSQ alto, LTE B4).

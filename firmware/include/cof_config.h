@@ -4,7 +4,7 @@
 #define COF_FIRMWARE_VERSION "0.2.53"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
-#define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/manifest.json"
+#define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
 
 // Safety switch: set to 1 only after configuring COF_PHONE_NUMBER.
 #define COF_ENABLE_CALLS 0

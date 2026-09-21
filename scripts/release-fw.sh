@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile ESP32 firmware, update actual_version/, commit and push.
+# Compile ESP32 firmware, update ota/, commit and push.
 # From the repo root: ./scripts/release-fw.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."

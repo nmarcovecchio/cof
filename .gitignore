@@ -6,9 +6,10 @@ __pycache__/
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
-*.elf
+.elf
 *.map
 .pio/
+firmware/.pio/
 .DS_Store
 Thumbs.db
 deploy/mosquitto/passwd

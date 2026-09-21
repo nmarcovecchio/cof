@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile WT32 firmware, publish actual_version/, then commit and push.
+"""Compile WT32 firmware, publish ota/, then commit and push.
 
 Windows:
   python scripts/release-fw.py
@@ -24,15 +24,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG_H = ROOT / "include" / "cof_config.h"
-MANIFEST = ROOT / "actual_version" / "manifest.json"
-PIO_BIN = ROOT / ".pio" / "build" / "wt32-eth01" / "firmware.bin"
-OTA_BIN = ROOT / "actual_version" / "firmware.bin"
+FIRMWARE = ROOT / "firmware"
+CONFIG_H = FIRMWARE / "include" / "cof_config.h"
+MANIFEST = ROOT / "ota" / "manifest.json"
+PIO_BIN = FIRMWARE / ".pio" / "build" / "wt32-eth01" / "firmware.bin"
+OTA_BIN = ROOT / "ota" / "firmware.bin"
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd), flush=True)
-    return subprocess.run(cmd, cwd=ROOT, check=True, **kwargs)
+    return subprocess.run(cmd, cwd=kwargs.pop("cwd", ROOT), check=True, **kwargs)
 
 
 def find_pio() -> str:
@@ -78,7 +79,7 @@ def main() -> int:
     version = firmware_version()
     print(f"Firmware version: {version}", flush=True)
 
-    run([find_pio(), "run"])
+    run([find_pio(), "run"], cwd=FIRMWARE)
     if not PIO_BIN.is_file():
         sys.exit(f"missing build output: {PIO_BIN}")
 

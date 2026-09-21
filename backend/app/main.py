@@ -1175,7 +1175,7 @@ def default_device_config(device: Device) -> dict:
                 "id": "test_call",
                 "enabled": False,
                 "description": "Audio de prueba. El archivo debe validarse con una llamada real.",
-                "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/audio/cof_test.wav",
+                "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/audio/cof_test.wav",
                 "sha256": "",
                 "modem_path": "C:/cof_test.wav",
                 "format": "wav_pcm_8000_mono_16bit",

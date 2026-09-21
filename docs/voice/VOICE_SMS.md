@@ -29,7 +29,7 @@ Both **Probar SMS** and **Probar llamada** succeeded from the web on this setup.
 
 ## Claro / modem config (compiled in firmware)
 
-From `include/cof_config.h`:
+From `firmware/include/cof_config.h`:
 
 ```text
 APN       internet.claro.com.ar
@@ -169,4 +169,4 @@ If ACK is `unsupported`, OTA first.
 1. MQTT TLS + per-device passwords — only with Serial access to the ESP32.
 
 Alarmas por regla, email, Telegram y **Disparar esta alarma** estan en
-`docs/NOTIFICATIONS.md`. El telefono/email/chat van en el cliente.
+`docs/ops/NOTIFICATIONS.md`. El telefono/email/chat van en el cliente.

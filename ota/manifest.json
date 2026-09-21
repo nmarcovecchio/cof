@@ -2,11 +2,11 @@
   "firmware": {
     "version": "0.2.53",
     "url": "https://app.callonfail.com.ar/ota/firmware.bin",
-    "sha256": "9b61089b77cb24ce5f20055adf5fdf74c8d3c3f404fddee8f96e95b96c41f325"
+    "sha256": "cd022c13fd950bb3d9d555fc8a180b6b804ef83d9a827f7af47412c599e66b91"
   },
   "audio": {
     "version": "0.1.0",
-    "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/actual_version/audio/cof_test.wav",
+    "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/audio/cof_test.wav",
     "filename": "cof_test.wav",
     "modem_path": "C:/cof_test.wav",
     "format": "wav_pcm_8000_mono_16bit",
