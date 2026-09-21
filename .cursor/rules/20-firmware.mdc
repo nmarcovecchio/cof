@@ -8,9 +8,28 @@ alwaysApply: false
 
 - PlatformIO project root is `firmware/`. Always `cd firmware && pio run`.
   `src_dir` / `include_dir` resolve relative to `firmware/platformio.ini`.
-- `firmware/src/main.cpp` is large and monolithic. Point at the function you need;
-  never read the whole file to answer a scoped question.
-- GPIO / APN / MQTT defaults live in `firmware/include/cof_config.h`.
+- `firmware/src/main.cpp` was split into modules (it used to be one 5245-line
+  file). Read only the module you need; the map:
+
+  | File | Owns |
+  |---|---|
+  | `src/main.cpp` | `setup`/`loop`, sensors, display, serial/button, `setStatus`. Also **defines** every global. |
+  | `src/cof_state.h` | Umbrella header. Include this (not the others). Types, `extern` globals, `LteMqttClient`. |
+  | `src/cof_api.h` | Prototypes of all 175 functions, grouped by owner. No state. |
+  | `src/net_paths.cpp` | Ethernet/WiFi/LTE selection, probes, DNS, holdoff. |
+  | `src/modem_at.cpp` | AT transport, watchdog, radio recovery. |
+  | `src/sms_voice.cpp` | SMS, calls, TTS/audio upload. |
+  | `src/mqtt_io.cpp` | Connect/publish, deferred queue, telemetry JSON. |
+  | `src/lte_pdp.cpp` | PDP activation (NETOPEN/CNACT), LTE peer. |
+  | `src/ota_config.cpp` | Manifest, `performOta`, rollback guard, config apply. |
+  | `src/at_parse.cpp` | Pure AT string/CEER parsers. |
+  | `src/sensors_display.cpp` | I2C scan, SHT31, DS18B20, OLED. |
+
+  Include order matters: modules include `cof_config.h` **then** `cof_state.h`.
+- Timing constants live in `firmware/include/cof_config.h` (moved out of
+  `main.cpp`). GPIO / APN / MQTT defaults are there too.
+- A function's default arguments are declared **once**, in `cof_api.h`. Do not
+  re-add them to a definition in a `.cpp`.
 - Prefer a **new chat** for firmware work; don't mix it into hardware/KiCad threads.
 
 ## OTA release

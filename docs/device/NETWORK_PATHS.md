@@ -4,7 +4,8 @@ The device has three ways to reach the MQTT broker. This document describes how
 one is chosen and, more importantly, how a path that *looks* fine but carries no
 internet is detected.
 
-All of this lives in `firmware/src/main.cpp`.
+The path selection, the probes and the broker address resolution all live in
+`firmware/src/net_paths.cpp` (see the module map in `.cursor/rules/20-firmware.mdc`).
 
 ## Priority
 
