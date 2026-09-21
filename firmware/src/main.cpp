@@ -731,7 +731,14 @@ void pollWifiPath() {
     wifiProbeFails = 0;
     return;
   }
-  if (state.ethernetConnected) {
+  // Ethernet outranks WiFi, so while it is connected and healthy we have no
+  // reason to spend probes on WiFi. The exception matters: if Ethernet is
+  // connected but has no internet, WiFi must still be probed so it can be
+  // promoted the moment its own path comes back. Gating on the connection alone
+  // meant a recovered WiFi was never re-checked while a dead Ethernet held the
+  // port, which is one of the "check periodically whether internet came back"
+  // cases.
+  if (state.ethernetConnected && ethInternetUp) {
     return;
   }
   if (cachedMqttIp == IPAddress((uint32_t)0)) {
@@ -1543,8 +1550,14 @@ void fillNetworkJson(JsonObject network) {
 // drop evaluate on the regular push, even when the path that just died is the
 // only one available.
 void fillConnectivityJson(JsonDocument& doc) {
-  doc["network_ethernet_ok"] = state.ethernetConnected ? 1 : 0;
-  doc["network_wifi_ok"] = state.wifiConnected ? 1 : 0;
+  // Gated on the health flags, not on link presence. A cable plugged into a router
+  // with no uplink still brings PHY + DHCP up, so reporting link presence here
+  // would keep the "ethernet ok" alarm quiet in exactly the outage it exists to
+  // catch. Note the ethernet flag intentionally does NOT honour the holdoff: the
+  // holdoff is a routing-preference delay, and reporting "ethernet ok" off it
+  // would flap the alarm on every brief unplug.
+  doc["network_ethernet_ok"] = (state.ethernetConnected && ethInternetUp) ? 1 : 0;
+  doc["network_wifi_ok"] = (state.wifiConnected && wifiInternetUp) ? 1 : 0;
   doc["network_internet_ok"] = (lanHasInternet() || state.lteDataUp) ? 1 : 0;
 }
 
