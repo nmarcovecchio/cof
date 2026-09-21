@@ -3921,16 +3921,20 @@ bool radioHasService() {
 }
 
 // Does the radio report a usable RF state? False for the stuck state where CSQ is
-// 99 and CPSI says NO SERVICE. Note that networkRegistered ORs CREG/CEREG/CGREG,
-// and CEREG keeps reporting "registered" on a stale context long after the radio
-// lost service, so registration alone is not enough to call the radio healthy.
+// 99 and CPSI says NO SERVICE. networkRegistered ORs CREG/CEREG/CGREG, and CEREG
+// keeps reporting "registered" on a stale context long after the radio lost
+// service, so registration alone must not be trusted: CPSI's NO SERVICE is
+// authoritative and is checked first.
 bool radioReportsService() {
+  if (state.radioMode.length() > 0 &&
+      (state.radioMode.indexOf("NO SERVICE") >= 0 ||
+       state.radioMode.indexOf("No Service") >= 0)) {
+    return false;
+  }
   if (state.networkRegistered) {
     return true;
   }
-  return state.radioMode.length() > 0 &&
-         state.radioMode.indexOf("NO SERVICE") < 0 &&
-         state.radioMode.indexOf("No Service") < 0;
+  return state.radioMode.length() > 0;
 }
 
 bool imsVoiceReady() {
