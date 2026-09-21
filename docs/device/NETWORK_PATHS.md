@@ -124,7 +124,7 @@ the modem UART and starve every other task, so the gate is deliberate.
 | `kEthProbeIntervalMs` | 10 s | Ethernet broker probe | 1.5 s connect timeout |
 | `kPathRecoverProbeIntervalMs` | 60 s | recovery probes while on LTE | one connect timeout each |
 | `kCellularStatusIntervalMs` | 5 min | `refreshCellularStatus()` + status publish | ~7 AT commands per call |
-| `kMqttKeepAliveSeconds` | 10 s | PINGREQ cadence (library) | see below |
+| `kMqttKeepAliveSeconds` | 30 s | PINGREQ cadence (library) | see below |
 
 The one genuinely hot path is `LteMqttClient::available()`, which runs an
 `AT+CIPRXGET=2` round-trip when the RX buffer is empty, throttled by
@@ -132,11 +132,19 @@ The one genuinely hot path is `LteMqttClient::available()`, which runs an
 while LTE carries MQTT. Raising 250 ms trades inbound-command latency for UART
 load.
 
-On keepalive: 10 s is *shorter* than the 15-60 s typical for MQTT. It is not a
-poll of connection state; it is how long the library tolerates silence before
-issuing a PINGREQ, so a shorter value only buys faster dead-socket detection at
-the cost of more AT traffic (6 PINGREQs/min on LTE). `kMqttSilenceReconnectMs`
-(90 s) already covers the "no successful publish" case.
+On keepalive: `kMqttKeepAliveSeconds` was 10 s and is now 30 s. It is not a poll of
+connection state; it is how long the library tolerates silence before issuing a
+PINGREQ. 10 s was more aggressive than the 15-60 s typical for MQTT, and on LTE
+every PINGREQ is a modem round-trip (6/min instead of 2/min). 30 s trims that
+traffic; the cost is that a silently dead socket is noticed up to ~20 s later.
+`kMqttSilenceReconnectMs` (90 s) still covers the "no successful publish" case
+independently, so nothing depends on the keepalive being short.
+
+Note the keepalive also bounds how long MQTT may go unattended. Every long AT
+operation pumps `mqttClient.loop()` (`readModemUntil()` inside `sendAT()`, and
+`waitWithWatchdog()` in place of blocking `delay()`), so raising the keepalive
+widens the margin for any path that does not pump, rather than making such a path
+correct.
 
 ## Alarms
 
