@@ -1,15 +1,38 @@
-﻿# Keep agent context small. PDFs, KiCad dumps, and previews burn tokens.
+# Keep agent context small.
+# Rule of thumb: anything binary, generated, or bulk-schematic is noise.
+# Cursor also honours .gitignore, so entries here are the "extras".
+#
+# NOTE: negations (!) cannot re-include a file if a parent dir was excluded
+# with a bare *, so we exclude narrowly instead of excluding whole folders.
+
+# ---------- Binaries / generated ----------
 *.pdf
-*.kicad_sch
+*.bin
+*.elf
+*.map
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.wav
+*.onnx
+
+# ---------- Firmware build output ----------
+.pio/
+firmware/.pio/
+
+# ---------- Hardware: schematic dumps (edit gen_sch.py instead) ----------
 hardware/kicad/_preview/
 hardware/kicad/__pycache__/
-hardware/kicad/*.svg
+hardware/kicad/*.kicad_sch
 hardware/kicad/*.kicad_prl
 hardware/kicad/erc*.rpt
 hardware/layout-9x15.png
-website/assets/*.png
+
+# ---------- Web: heavy image assets (rarely edited) ----------
+web/assets/
+
+# ---------- Python / env ----------
 **/__pycache__/
-.pio/
-*.elf
-*.map
+*.pyc
 .env

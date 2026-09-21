@@ -1,0 +1,18 @@
+---
+description: KiCad hardware — avoid huge token burns
+globs: hardware/**,docs/hardware/**
+alwaysApply: false
+---
+
+# Hardware (KiCad v1)
+
+- Source of truth is `hardware/kicad/gen_sch.py`. **Edit that, then regenerate.**
+  Never hand-edit `*.kicad_sch`.
+- Do **not** Read/Grep bulk `*.kicad_sch`, `cof-v1.pdf`, `_preview/*`, or large SVGs/PNGs.
+  Use `kicad-cli sch erc` and short greps instead.
+- Do **not** regenerate `_preview` SVG/PNG tiles unless the user asks to look at a
+  layout image.
+- After `gen_sch.py`: `sch upgrade` the three sheets, `sch erc`, `sch export pdf`.
+  Skip SVG export by default.
+- Prefer labels over long wires; never route across IC bodies (rules in `gen_sch.py`).
+- Hardware v1.4 is frozen. GPIO map: `docs/hardware/HARDWARE_V1.md` §10.

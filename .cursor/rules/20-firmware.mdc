@@ -1,0 +1,31 @@
+---
+description: ESP32 firmware — work scoped to firmware/
+globs: firmware/**/*.{cpp,h,ino,c},firmware/platformio.ini,firmware/partitions.csv
+alwaysApply: false
+---
+
+# Firmware (ESP32 / WT32-ETH01)
+
+- PlatformIO project root is `firmware/`. Always `cd firmware && pio run`.
+  `src_dir` / `include_dir` resolve relative to `firmware/platformio.ini`.
+- `firmware/src/main.cpp` is large and monolithic. Point at the function you need;
+  never read the whole file to answer a scoped question.
+- GPIO / APN / MQTT defaults live in `firmware/include/cof_config.h`.
+- Prefer a **new chat** for firmware work; don't mix it into hardware/KiCad threads.
+
+## OTA release
+
+The agent compiles and publishes `ota/`; the user only presses **Forzar chequeo OTA**.
+Never ask for a USB reflash for a normal firmware drop.
+
+1. Bump `COF_FIRMWARE_VERSION` in `firmware/include/cof_config.h` above the version
+   currently in `ota/manifest.json`.
+2. Publish (compiles, copies bin, updates sha256, commits, pushes):
+   - Linux: `./scripts/release-fw.sh -y`
+   - Windows: `powershell -ExecutionPolicy Bypass -File scripts\release-fw.ps1 -y`
+3. On the VPS **before** OTA: `cd /opt/callonfail && git pull`
+
+Flask serves `https://app.callonfail.com.ar/ota/firmware.bin` from `ota/` (`OTA_DIR`).
+The device reads the GitHub manifest, then downloads that VPS URL.
+
+`scripts/push.sh` / `push.ps1` are git-only. Firmware releases use `release-fw`.

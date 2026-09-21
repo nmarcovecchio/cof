@@ -1,0 +1,17 @@
+---
+description: Flask backend + MQTT worker
+globs: backend/**,docker-compose.yml,deploy/**
+alwaysApply: false
+---
+
+# Backend (Flask + MQTT worker)
+
+- Docker build context is `backend/`. `backend/app/main.py` is the Flask app and is
+  large (~50 KB) — grep for the route/handler, don't read the whole file.
+- Modules: `alarms.py` (rules), `alarm_ack.py` (silence/ack), `modem_queue.py`
+  (AT command queue), `mqtt_worker.py` (device ingest), `notify.py` + `tts.py`.
+- Templates live in `backend/app/templates/`.
+- Compose mounts `./ota:/opt/cof-ota:ro` for OTA and `./web:/srv/website:ro` for Caddy.
+  If you move those dirs, update `docker-compose.yml` **and** `deploy/caddy/Caddyfile`.
+- Validate changes with `docker compose config` before committing.
+- Docs: `docs/ops/` (deploy/VPS), `docs/device/` (device config).

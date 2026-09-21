@@ -1,0 +1,29 @@
+---
+description: Repo map + token discipline (the only always-on rule)
+alwaysApply: true
+---
+
+# CallOnFail repo map
+
+| Dir | What | Notes |
+|---|---|---|
+| `firmware/` | ESP32 (WT32-ETH01) | PlatformIO. **Run `pio` from inside `firmware/`.** |
+| `backend/` | Flask + MQTT worker | Docker build context. |
+| `web/` | Static commercial site | Served by Caddy at `www.callonfail.com.ar`. |
+| `ota/` | OTA artefacts | `manifest.json` + `firmware.bin` + `audio/`. Served by Flask/Caddy. |
+| `hardware/` | KiCad schematics | Regenerate from `kicad/gen_sch.py`, never hand-edit. |
+| `docs/` | `hardware/ device/ ops/ voice/ modem/` | |
+| `deploy/` | Caddy + Mosquitto config | |
+
+## Don't burn tokens
+
+- **Never** Read/Grep binaries or generated bulk: `*.pdf`, `*.kicad_sch`, `_preview/*`,
+  `*.png`/`*.svg`, `ota/firmware.bin`, `.pio/`. They're gitignored + cursorignored.
+- Hardware work: use `kicad-cli sch erc` and short greps. Don't dump the schematic.
+- Point at **one file or function**. Don't "read the whole firmware".
+- Prefer Grep over Read when you know the symbol.
+
+## Versions
+
+`firmware/include/cof_config.h` holds `COF_FIRMWARE_VERSION` and the GPIO/APN/MQTT map.
+Hardware v1.4 GPIO map lives in `docs/hardware/HARDWARE_V1.md` §10 — treat it as frozen.
