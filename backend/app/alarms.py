@@ -24,6 +24,14 @@ SENSOR_ALIASES = {
     "humidity_1": ("humidity_1", "humidity"),
     "mains_1": ("mains_1", "mains_voltage"),
     "water_1": ("water_1", "water_leak", "input_1"),
+    # Connectivity sensors are published by the firmware as 1 = present / 0 = lost
+    # (see fillNetworkJson in firmware/src/main.cpp). A rule with operator "lt"
+    # and threshold 1 therefore fires on a disconnection. These exist so link and
+    # internet dropouts reuse the normal alarm pipeline (duration, hysteresis,
+    # SMS, call, ack, rearm) instead of needing a parallel mechanism.
+    "net_ethernet": ("network_ethernet_ok",),
+    "net_wifi": ("network_wifi_ok",),
+    "net_internet": ("network_internet_ok",),
 }
 
 DEFAULT_MANUAL_ACTIONS = ("email", "telegram", "sms", "call")

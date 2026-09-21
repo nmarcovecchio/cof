@@ -1143,6 +1143,49 @@ def publish_config_desired(device: Device, payload: dict):
     publish_mqtt(f"devices/{device.device_uid}/config/desired", payload, qos=1, retain=True)
 
 
+# Connectivity sensors offered to every device. The firmware publishes them as
+# 1 = ok / 0 = down, so an alarm rule is `operator: lt, threshold: 1`.
+NETWORK_SENSORS = [
+    {
+        "id": "net_ethernet",
+        "name": "Ethernet conectado (1 = si)",
+        "type": "connectivity",
+        "enabled": True,
+        "source": "network_ethernet",
+    },
+    {
+        "id": "net_wifi",
+        "name": "WiFi conectado (1 = si)",
+        "type": "connectivity",
+        "enabled": True,
+        "source": "network_wifi",
+    },
+    {
+        "id": "net_internet",
+        "name": "Internet disponible (1 = si)",
+        "type": "connectivity",
+        "enabled": True,
+        "source": "network_internet",
+    },
+]
+
+
+def ensure_network_sensors(cfg: dict) -> dict:
+    """Make the connectivity sensors available without editing every config.
+
+    Older devices have a stored config that predates these sensors. Injecting
+    them here (rather than forcing a migration) means the operator immediately
+    sees them in the rules dropdown, and because the config form rebuilds the
+    payload from the rendered rows, they are persisted on the next save.
+    """
+    sensors = cfg.setdefault("sensors", [])
+    present = {str(sensor.get("source") or "") for sensor in sensors if isinstance(sensor, dict)}
+    for spec in NETWORK_SENSORS:
+        if spec["source"] not in present:
+            sensors.append(dict(spec))
+    return cfg
+
+
 def default_device_config(device: Device) -> dict:
     return {
         "schema_version": 1,
@@ -1160,6 +1203,7 @@ def default_device_config(device: Device) -> dict:
             },
             {"id": "humidity_1", "name": "SHT31 humedad", "type": "humidity", "enabled": True, "source": "sht31_humidity"},
             {"id": "mains_1", "name": "Red electrica", "type": "mains_voltage", "enabled": True, "source": "zmpt101b"},
+            *[dict(spec) for spec in NETWORK_SENSORS],
         ],
         "outputs": [
             {"id": "output_1", "name": "Salida 1", "type": "relay", "enabled": True},
@@ -1255,6 +1299,8 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         cfg = json.loads(payload) if isinstance(payload, str) else payload
     except Exception:
         cfg = {}
+    if isinstance(cfg, dict):
+        cfg = ensure_network_sensors(cfg)
     return render_template(
         "config_form.html",
         device=device,
