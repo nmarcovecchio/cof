@@ -130,6 +130,48 @@ Events produced while MQTT is down are queued in a small bounded buffer
 interleaving AT housekeeping with an open `AT+CIPOPEN`/`CAOPEN` session can
 corrupt the modem socket.
 
+## Modem radio recovery
+
+Observed on hardware (2026-09-21 06:30): the modem got stuck reporting
+
+```
++CPIN: READY          <- SIM is fine
+AT+CIMI -> 722310...  <- SIM readable
++CSQ: 99,99           <- no signal
++CPSI: NO SERVICE,Online
+AT+CNACT? -> ERROR
+```
+
+`AT+CMEE=2` and `AT+CGATT=1` do not recover this, and neither did anything else
+in the firmware. The only known cure was a physical power cycle, which is not
+available on a remote site. Historically the device fell back to the 6-minute
+MQTT-silence reboot, which does not touch module power.
+
+It is also why the device can look like it has "all three paths available" and
+still reach nothing: Ethernet and WiFi were fine but the cellular path was dead,
+and a stale `CEREG` kept reporting registered. Note that `state.networkRegistered`
+ORs CREG/CEREG/CGREG, and CEREG holds a stale "registered" long after the radio
+lost service, so registration alone cannot be used as a health signal.
+
+`pollModem()` watches `radioReportsService()` and escalates through
+`resetModemRadio(stage)`, one step per `kModemRecoveryIntervalMs` (150 s):
+
+| Stage | Action |
+|---|---|
+| 1 | detach/attach (`CGATT=0/1`) + `COPS=0` operator auto |
+| 2 | `CFUN=0/1` + full network scan |
+| 3 | `CFUN=4/1` radio cycle + `CEMODE`/`CEVDP` + `COPS=0` |
+| 4 | `CFUN=1,1` module reset, then `initModem()` to re-apply ATE0, CGDCONT, CGAUTH, CGSMS, CMGF, CSCA and voice settings |
+| 5 | restart the ESP32, so the module comes up from a cold power-on |
+
+About 12 min from stuck to reboot. The stage counter resets the moment service
+comes back.
+
+**This is a mitigation, not a fix.** A healthy module never climbs the ladder, so
+if `[modem] recovery 5/5` ever appears the hardware needs attention: module
+power, antenna, or SIM seating. If the module returns from stage 4 with
+`+CPIN: NOT READY`, that points at SIM contact or supply, not firmware.
+
 ## Why 20 s telemetry, in one line
 
 `kMqttSilenceReconnectMs` (20 s) < telemetry interval (60 s) => forced reconnect

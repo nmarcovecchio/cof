@@ -66,6 +66,12 @@ constexpr uint32_t kPathPreemptSettleMs = 3000;
 constexpr uint32_t kMqttSilenceReconnectMs = 90UL * 1000UL;
 constexpr uint32_t kSilenceProbeIntervalMs = 45UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
+// Modem radio recovery. pollModem() runs every 30 s on LAN and 5 s without it, so
+// this interval only has to be long enough for one recovery step to take effect.
+// 150 s over 5 steps means a stuck radio escalates to a full ESP32 restart in
+// about 12 min, instead of staying dead until someone drives to the site.
+constexpr uint32_t kModemRecoveryIntervalMs = 150UL * 1000UL;
+constexpr uint8_t kModemRecoveryMaxStage = 5;
 // lte_data traces carry a whole modem dump and were republished on every failed
 // PDP attempt (every 10 s, forever). Back the retries off and throttle the event.
 constexpr uint32_t kLteRetryMaxIntervalMs = 120UL * 1000UL;
@@ -239,6 +245,12 @@ bool wifiInternetUp = false;
 uint8_t wifiProbeFails = 0;
 uint32_t lastWifiProbeMs = 0;
 uint32_t lastEthRecoverProbeMs = 0;
+// Ethernet is flagged down but still physically present (link up + lease), so it
+// is worth probing to get the better path back. Derived from ETH.linkUp() rather
+// than latched from an event, so a replug without a matching event still recovers.
+bool ethRecoverPending = false;
+uint8_t modemRecoveryStage = 0;
+uint32_t lastModemRecoveryMs = 0;
 uint32_t ltePreemptSinceMs = 0;
 uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
@@ -269,6 +281,7 @@ void scheduleWifiBackup(uint32_t delayMs);
 void maintainWifiBackup();
 void pollEthernetPath();
 void markEthernetDown(const char* reason);
+void markEthernetUp(const char* reason);
 void feedWatchdog();
 bool probeMqttOverEthernet();
 bool ethernetHoldoffActive();
@@ -289,6 +302,10 @@ bool probeMqttOverWifi();
 bool probeMqttOnInterface(bool ethernet);
 bool ethernetHoldoffActive();
 bool publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId);
+bool radioReportsService();
+bool resetModemRadio(uint8_t stage);
+bool waitForRadioService(uint32_t timeoutMs, bool gsmOnly);
+void waitWithWatchdog(uint32_t ms);
 bool refreshSimReady();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
@@ -591,10 +608,16 @@ bool probeMqttOverWifi() {
 // WiFi is associated - or probing WiFi while Ethernet still owns the route -
 // would silently test the other interface and report a false result.
 bool probeMqttOnInterface(bool ethernet) {
-  if (ethernet && !state.ethernetConnected) {
-    return false;
-  }
-  if (!ethernet && !state.wifiConnected) {
+  if (ethernet) {
+    // Do NOT gate on state.ethernetConnected: Ethernet flagged down inside the
+    // holdoff still holds its DHCP lease, and this probe is the only way back. An
+    // early return on the flag made the recovery probe impossible - it bailed out
+    // before ever testing the link, so a perfectly good cable was never
+    // re-accepted and the device stayed on the worse path forever.
+    if (ETH.localIP() == IPAddress((uint32_t)0)) {
+      return false;
+    }
+  } else if (!state.wifiConnected) {
     return false;
   }
   applyPreferredRoute(ethernet ? PathPreference::Ethernet : PathPreference::Wifi);
@@ -608,24 +631,49 @@ bool probeMqttOnInterface(bool ethernet) {
 // honest signal. Probes use the cached broker IP, which we only learn from a
 // real successful MQTT connect, so this never turns into a DNS dependency.
 void pollEthernetPath() {
-  if (!state.ethernetConnected || state.callInProgress || state.otaInProgress) {
+  if (state.callInProgress || state.otaInProgress) {
     ethProbeFails = 0;
     return;
   }
+
+  if (!state.ethernetConnected) {
+    // Ethernet flagged down. It is only worth probing if it is physically here
+    // (link up) and still holds a lease, which is the router-reboot case: the
+    // DHCP lease survives, so no GOT_IP event ever fires again and without this
+    // poll nothing would ever bring Ethernet back. Derived from the hardware on
+    // every pass rather than latched from an event, so a cable replug that
+    // happened without a matching event still recovers.
+    if (ETH.linkUp() && ETH.localIP() != IPAddress((uint32_t)0)) {
+      ethRecoverPending = true;
+    }
+    if (!ethRecoverPending) {
+      return;
+    }
+    const uint32_t nowDown = millis();
+    if (lastEthRecoverProbeMs != 0 && nowDown - lastEthRecoverProbeMs < kPathRecoverProbeIntervalMs) {
+      return;
+    }
+    lastEthRecoverProbeMs = nowDown == 0 ? 1 : nowDown;
+    if (probeMqttOnInterface(true)) {
+      ethRecoverPending = false;
+      markEthernetUp("recovered probe");
+    }
+    return;
+  }
+
   if (state.lteMqttTransport) {
-    // While MQTT runs over LTE we must still watch Ethernet for recovery, just
-    // slowly: this is what used to be skipped entirely (the early return left
-    // Ethernet never re-probed, so LTE could not be released while it was up).
-    const uint32_t now0 = millis();
+    // Ethernet is up but MQTT rides LTE. Keep probing slowly so LTE can be
+    // released: this is what used to be skipped entirely, because the early
+    // return left Ethernet never re-probed while the PDP was carrying traffic.
+    const uint32_t nowLte = millis();
     if (ethernetHoldoffActive()) {
       return;
     }
-    if (lastEthRecoverProbeMs != 0 && now0 - lastEthRecoverProbeMs < kPathRecoverProbeIntervalMs) {
+    if (lastEthRecoverProbeMs != 0 && nowLte - lastEthRecoverProbeMs < kPathRecoverProbeIntervalMs) {
       return;
     }
-    lastEthRecoverProbeMs = now0 == 0 ? 1 : now0;
-    const bool reachable = probeMqttOnInterface(true);
-    if (reachable) {
+    lastEthRecoverProbeMs = nowLte == 0 ? 1 : nowLte;
+    if (probeMqttOnInterface(true)) {
       ethProbeFails = 0;
       if (!ethInternetUp) {
         ethInternetUp = true;
@@ -771,6 +819,7 @@ void markEthernetUp(const char* reason) {
   // Optimistic: a fresh IP is treated as a working path until the probe says
   // otherwise. This keeps boot fast and avoids double-switching.
   ethInternetUp = true;
+  ethRecoverPending = false;
   lastEthRecoverProbeMs = 0;
   noLanSinceMs = 0;
   ethernetUpAtMs = millis();
@@ -794,6 +843,7 @@ void markEthernetDown(const char* reason) {
   }
   ethInternetUp = false;
   ethProbeFails = 0;
+  ethRecoverPending = false;
   lastEthRecoverProbeMs = 0;
   if (!state.ethernetConnected) {
     return;
@@ -855,6 +905,80 @@ void noteLanMqttFailure(const char* reason) {
 void requestMqttBounce(const char* reason) {
   pendingMqttBounce = true;
   Serial.printf("[mqtt] bounce requested: %s\n", reason);
+}
+
+// Restore radio service after the modem gets stuck in a NO SERVICE state.
+//
+// Observed on hardware (2026-09-21): +CPIN: READY and AT+CIMI OK, but
+// +CSQ: 99,99 and +CPSI: NO SERVICE,Online, with AT+CNACT? replying ERROR.
+// AT+CMEE=2 and AT+CGATT=1 do not recover it and nothing else in the firmware
+// did either; the only known cure was a physical power cycle, unavailable on a
+// remote site. Escalate from the cheapest reset to the closest software
+// equivalent of that power cycle.
+//
+// NOT A FIX - a mitigation. A healthy module never reaches stage 5, so when that
+// log line appears the modem needs attention (power, antenna, SIM seating).
+bool resetModemRadio(uint8_t stage) {
+  if (!state.modemReady || state.callInProgress || state.otaInProgress) {
+    return false;
+  }
+  setStatus("Modem reset");
+  switch (stage) {
+    case 1:
+      // Re-attach and re-select the operator, then drop the PDP so the next
+      // ensureLtePdp() rebuilds it from scratch.
+      Serial.println("[modem] recovery 1/5: detach/attach + operator auto");
+      stopLtePdp();
+      sendAT("AT+CGATT=0", "OK", 5000);
+      waitWithWatchdog(1000);
+      sendAT("AT+CGATT=1", "OK", 15000);
+      sendAT("AT+COPS=0", "OK", 20000);
+      break;
+    case 2:
+      // Force a full network scan instead of using the stored operator.
+      Serial.println("[modem] recovery 2/5: full network scan");
+      stopLtePdp();
+      sendAT("AT+CFUN=0", "OK", 10000);
+      waitWithWatchdog(2000);
+      sendAT("AT+CFUN=1", "OK", 15000);
+      sendAT("AT+COPS=0", "OK", 30000);
+      break;
+    case 3:
+      // Reset the radio only (keeps the SIM context and the AT channel).
+      Serial.println("[modem] recovery 3/5: radio cycle (CFUN)");
+      stopLtePdp();
+      sendAT("AT+CFUN=4", "OK", 8000);
+      waitWithWatchdog(3000);
+      sendAT("AT+CFUN=1", "OK", 15000);
+      sendAT("AT+CEMODE=1", "OK", 3000);
+      sendAT("AT+CEVDP=3", "OK", 3000);
+      sendAT("AT+COPS=0", "OK", 30000);
+      break;
+    case 4:
+      // Software reset of the whole module. Watch the CPIN state afterwards: a
+      // module that comes back with +CPIN: NOT READY points at SIM seating or
+      // power rather than firmware.
+      Serial.println("[modem] recovery 4/5: modem reset (CFUN=1,1)");
+      sendAT("AT+CFUN=1,1", "OK", 5000);
+      waitWithWatchdog(15000);
+      // CFUN=1,1 drops ATE0, CGDCONT, CGAUTH, CGSMS, CMGF, CSCA and the voice
+      // settings, so re-apply them. Without this the module recovers RF but comes
+      // back without the APN/SMS configuration and the PDP cannot come up.
+      initModem();
+      break;
+    default:
+      // Stage 5, or AT+CFUN=1,1 is still settling. Reboot so the radio comes up
+      // from a cold power-on anyway. Stage 4 already reset the module, so its
+      // configuration has to be re-applied on the way back up; initModem() in
+      // setup() covers that.
+      Serial.println("[modem] recovery 5/5: modem still dead, restarting ESP32");
+      stopLtePdp();
+      setStatus("Restart (modem)");
+      delay(300);
+      ESP.restart();
+      return false;
+  }
+  return waitForRadioService(45000, false);
 }
 
 void bounceMqttForRouteChange() {
@@ -3322,6 +3446,33 @@ void pollModem() {
       publishDeviceStatus("online", true);
     }
   }
+
+  // Radio stuck without service. This used to recover only via a physical power
+  // cycle, which is not available on a remote site, so the device could sit dead
+  // while Ethernet, WiFi and LTE all looked "available". Escalate a modem reset
+  // from the cheapest step, spaced out so one attempt has time to take effect.
+  if (state.networkRegistered && radioReportsService()) {
+    modemRecoveryStage = 0;
+    lastModemRecoveryMs = 0;
+    return;
+  }
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return;
+  }
+  const uint32_t now = millis();
+  if (modemRecoveryStage >= kModemRecoveryMaxStage) {
+    // Already at the most aggressive step; it logs and restarts there.
+    return;
+  }
+  if (lastModemRecoveryMs != 0 && now - lastModemRecoveryMs < kModemRecoveryIntervalMs) {
+    return;
+  }
+  lastModemRecoveryMs = now == 0 ? 1 : now;
+  modemRecoveryStage++;
+  Serial.printf("[modem] no service, recovery step %u/%u\n",
+                modemRecoveryStage,
+                static_cast<unsigned>(kModemRecoveryMaxStage));
+  resetModemRadio(modemRecoveryStage);
 }
 
 String ttsModemPathFor(const String& url, const String& format) {
@@ -3754,6 +3905,19 @@ bool radioHasService() {
          state.radioMode.indexOf("NO SERVICE") < 0 &&
          state.radioMode.indexOf("No Service") < 0 &&
          state.networkRegistered;
+}
+
+// Does the radio report a usable RF state? False for the stuck state where CSQ is
+// 99 and CPSI says NO SERVICE. Note that networkRegistered ORs CREG/CEREG/CGREG,
+// and CEREG keeps reporting "registered" on a stale context long after the radio
+// lost service, so registration alone is not enough to call the radio healthy.
+bool radioReportsService() {
+  if (state.networkRegistered) {
+    return true;
+  }
+  return state.radioMode.length() > 0 &&
+         state.radioMode.indexOf("NO SERVICE") < 0 &&
+         state.radioMode.indexOf("No Service") < 0;
 }
 
 bool imsVoiceReady() {
