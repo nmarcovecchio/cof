@@ -52,6 +52,27 @@ The alternative, `WiFi.hostByName()`, blocks the main loop for **up to 15 s**
 That is not acceptable in `loop()`, so before the broker IP is known the code
 relies on the optimistic default plus connect-failure demotion instead.
 
+`serviceBrokerResolve()` closes that window without reintroducing the stall. It
+drives the same lwIP entry point the Arduino core uses (`dns_gethostbyname`) but
+never waits: the callback only stores the answer and the next loop pass picks it
+up, with a 15 s backstop for a lookup that never calls back. It runs once at boot,
+refreshes hourly after that, and retries every 15 s while it is failing - a boot
+attempt can legitimately fail before the interface's resolver is usable, and a
+full hourly wait would reopen the window it exists to close.
+
+Two rules keep it from doing harm:
+
+- It only *fills* `cachedMqttIp` when that is unset (the boot case). It does not
+  overwrite an address learned from a real connect, which is stronger evidence.
+- It adopts a changed answer only while MQTT is **down**. A broker that moves
+  otherwise leaves the probes testing a dead address and demoting a healthy LAN
+  path, and the only way out was the 6-minute silence reboot. Gating on
+  `!mqttConnected` lets that heal while making it impossible for a transient or
+  poisoned answer to knock us off a working address.
+
+Before this, the unset-IP window was covered only by MQTT connect failures
+demoting the path, which still works - this just makes it not the only mechanism.
+
 ### A probe must leave through the interface it claims to test
 
 `probeMqttOnInterface(bool ethernet)` pins the default route to the interface

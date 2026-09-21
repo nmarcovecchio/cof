@@ -18,6 +18,7 @@
 #include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
 #include <mbedtls/sha256.h>
+#include "lwip/dns.h"
 #include "lwip/netif.h"
 
 #include <cstring>
@@ -200,6 +201,34 @@ uint32_t noLanSinceMs = 0;
 uint32_t ethernetUpAtMs = 0;
 uint32_t ethernetHoldoffUntilMs = 0;
 IPAddress cachedMqttIp;
+// Non-blocking lwIP DNS for the broker hostname.
+//
+// cachedMqttIp is only learned from a successful MQTT connect and lives in RAM,
+// so after every reboot it is 0.0.0.0 until that first connect - and the
+// reachability probes (probeMqttOverEthernet / lanPathReachable) all bail out on
+// an unset IP. That left the boot window relying entirely on MQTT connect
+// failures to demote a dead LAN path.
+//
+// We cannot use the synchronous WiFi.hostByName() to close that: it waits up to
+// 15-16 s on the lwIP DNS semaphore, which is exactly why it was rejected for
+// probe use in the first place. So this drives the same lwIP call the core uses
+// (dns_gethostbyname, see WiFiGenericClass::hostByName) but never waits: the
+// callback only stores the result and the loop picks it up on its next pass.
+//
+// Resolved once at boot, then refreshed hourly. The refresh matters because the
+// broker hostname can be repointed by DNS, and a probe holding a stale address
+// would keep declaring a healthy path dead (or worse, declare a dead one alive).
+constexpr uint32_t kBrokerResolveIntervalMs = 60UL * 60UL * 1000UL;
+constexpr uint32_t kBrokerResolveRetryMs = 15UL * 1000UL;
+IPAddress resolvedBrokerIp;
+volatile bool brokerResolveDone = false;
+bool brokerResolveInFlight = false;
+bool brokerResolveFailed = false;
+uint32_t brokerResolveStartedMs = 0;
+uint32_t lastBrokerResolveMs = 0;
+// Stable storage for the name being resolved: lwIP keeps this pointer for the
+// whole async lookup, and state.mqttHost can be rewritten by a config apply.
+String brokerResolveName;
 uint32_t lastTelemetryPublishMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
@@ -279,6 +308,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length);
 void configureMqttClientTransport();
 void maintainLteFallback();
 void releaseLteMqttForModem();
+void serviceBrokerResolve();
 void requestMqttBounce(const char* reason);
 void connectWiFi(const String& ssid, const String& password, bool saveCredentials);
 void forgetWifiRadio();
@@ -325,6 +355,126 @@ void serviceOtaRollbackGuard();
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+
+// Broker hostname resolution. Runs in the lwIP TCP/IP thread, so it must do
+// nothing but stash the answer and set a flag: no Serial, no MQTT, no String.
+void onBrokerResolved(const char* name, const ip_addr_t* addr, void* arg) {
+  (void)name;
+  (void)arg;
+  if (addr != nullptr) {
+    resolvedBrokerIp = addr->u_addr.ip4.addr;
+  }
+  brokerResolveDone = true;
+}
+
+// Kick off a resolve and pick up the previous one's result. Non-blocking by
+// design: if the answer is not ready this returns an empty IP and the caller
+// keeps using whatever it already had, so nothing stalls the main loop.
+IPAddress resolveBrokerHost(const String& host, bool force) {
+  const uint32_t now = millis();
+
+  if (brokerResolveDone) {
+    brokerResolveDone = false;
+    brokerResolveInFlight = false;
+    lastBrokerResolveMs = now == 0 ? 1 : now;
+    if (static_cast<uint32_t>(resolvedBrokerIp) != 0) {
+      brokerResolveFailed = false;
+      Serial.printf("[dns] broker %s -> %s\n", host.c_str(), resolvedBrokerIp.toString().c_str());
+      return resolvedBrokerIp;
+    }
+    // NXDOMAIN, timeout, or no usable DNS server. Retry on the SHORT interval: a
+    // boot-time attempt can legitimately fail before the interface's resolver is
+    // usable, and waiting a full hourly refresh would reopen the exact window this
+    // was added to close.
+    brokerResolveFailed = true;
+    Serial.printf("[dns] broker resolve failed for %s\n", host.c_str());
+    return IPAddress((uint32_t)0);
+  }
+
+  if (brokerResolveInFlight) {
+    // Backstop: lwIP's own timeout is ~14 s. Without this a resolve that never
+    // calls back would wedge the state machine in "in flight" forever.
+    if (now - brokerResolveStartedMs >= 15000) {
+      brokerResolveInFlight = false;
+      brokerResolveFailed = true;
+      lastBrokerResolveMs = now == 0 ? 1 : now;
+    }
+    return IPAddress((uint32_t)0);
+  }
+
+  // Hourly while it works, every 15 s while it does not.
+  const uint32_t interval = brokerResolveFailed ? kBrokerResolveRetryMs : kBrokerResolveIntervalMs;
+  if (!force && lastBrokerResolveMs != 0 && now - lastBrokerResolveMs < interval) {
+    return IPAddress((uint32_t)0);
+  }
+
+  lastBrokerResolveMs = now == 0 ? 1 : now;
+  brokerResolveStartedMs = lastBrokerResolveMs;
+  brokerResolveDone = false;
+  resolvedBrokerIp = IPAddress((uint32_t)0);
+  brokerResolveName = host;
+  ip_addr_t addr;
+  ip_addr_set_zero(&addr);
+  const err_t err = dns_gethostbyname(brokerResolveName.c_str(), &addr, onBrokerResolved, nullptr);
+  if (err == ERR_OK) {
+    // Answered from lwIP's own cache, so the callback never runs. Take the value
+    // from `addr` directly - otherwise the next pass would see "done" with an
+    // empty result and record a success as a failure.
+    resolvedBrokerIp = addr.u_addr.ip4.addr;
+    brokerResolveDone = true;
+  } else if (err == ERR_INPROGRESS) {
+    brokerResolveInFlight = true;
+  } else {
+    brokerResolveFailed = true;
+  }
+  return IPAddress((uint32_t)0);
+}
+
+// Called from the main loop before the path polls, so their cachedMqttIp is
+// populated as early as the network allows.
+void serviceBrokerResolve() {
+  if (state.mqttHost.isEmpty()) {
+    return;
+  }
+  // An IP literal needs no DNS.
+  IPAddress literal;
+  if (literal.fromString(state.mqttHost)) {
+    if (cachedMqttIp == IPAddress((uint32_t)0)) {
+      cachedMqttIp = literal;
+    }
+    return;
+  }
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return;
+  }
+  if (!state.ethernetConnected && !state.wifiConnected) {
+    // No LAN interface, and while MQTT rides LTE a probe over lwIP would leave
+    // through whatever route happens to be installed - not worth resolving.
+    return;
+  }
+  const IPAddress resolved = resolveBrokerHost(state.mqttHost, false);
+  if (static_cast<uint32_t>(resolved) == 0) {
+    return;
+  }
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    // Nothing verified yet: this is the boot case that motivated the resolver.
+    cachedMqttIp = resolved;
+    return;
+  }
+  // A repoint. Adopt the DNS answer only while MQTT is DOWN, so a transient or
+  // poisoned DNS answer cannot knock us off an address that is demonstrably
+  // working - while MQTT is connected, the current target is proven good and the
+  // real connect keeps the final word anyway. This is what makes a broker IP
+  // change heal without waiting for the 6-minute silence reboot that used to be
+  // the only way out, since the probes would otherwise keep testing the old
+  // address and demote a perfectly healthy LAN path.
+  if (!state.mqttConnected && resolved != cachedMqttIp) {
+    Serial.printf("[dns] broker repointed %s -> %s\n",
+                  cachedMqttIp.toString().c_str(),
+                  resolved.toString().c_str());
+    cachedMqttIp = resolved;
+  }
 }
 
 bool mqttUsesTls() {
@@ -1967,6 +2117,13 @@ void connectMqttIfNeeded() {
   if (!state.lteMqttTransport) {
     cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
     Serial.printf("[mqtt] path ip=%s\n", cachedMqttIp.toString().c_str());
+    // Each real connect is a free, authoritative answer to "where is the broker
+    // right now", so restart the hourly resolve clock from it. The hourly timer
+    // exists to catch a DNS repoint that happens while we happen to be connected.
+    lastBrokerResolveMs = millis();
+    if (lastBrokerResolveMs == 0) {
+      lastBrokerResolveMs = 1;
+    }
     if (state.ethernetConnected) {
       ethInternetUp = true;
     } else if (state.wifiConnected) {
@@ -4972,6 +5129,9 @@ void loop() {
     drawDisplay();
   }
 
+  // Before the path polls: they all gate on cachedMqttIp, which is otherwise only
+  // learned from a successful MQTT connect.
+  serviceBrokerResolve();
   pollEthernetPath();
   pollWifiPath();
   serviceNetworkPaths();
