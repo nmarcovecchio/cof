@@ -39,16 +39,40 @@ constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
 constexpr uint32_t kMqttKeepAliveSeconds = 10;
 constexpr uint32_t kMqttSocketTimeoutSeconds = 3;
-constexpr uint8_t kLanMqttFailLimit = 1;
+constexpr uint8_t kLanMqttFailLimit = 2;
 constexpr uint32_t kWifiBackupDelayMs = 1500;
 constexpr uint8_t kWifiAuthFailLimit = 3;
-constexpr uint32_t kEthProbeIntervalMs = 3000;
-constexpr uint8_t kEthProbeFailLimit = 1;
+// Path health. A LAN interface is only trusted as "the internet" after a real
+// broker reachability probe: a router with no uplink still hands out DHCP
+// leases, and treating that as internet used to pin the device on a dead path
+// (lanConnected() stayed true, so LTE never engaged, and nothing re-probed
+// Ethernet once LTE was up). See docs/device/NETWORK_PATHS.md.
+constexpr uint32_t kEthProbeIntervalMs = 10000;
+constexpr uint8_t kEthProbeFailLimit = 2;
+constexpr uint8_t kWifiProbeFailLimit = 2;
 constexpr uint32_t kWifiGraceBeforeLteMs = 8000;
 constexpr uint32_t kLteBootGraceMs = 15000;
 constexpr uint32_t kEthernetHoldoffMs = 20000;
-constexpr uint32_t kMqttSilenceReconnectMs = 20UL * 1000UL;
+// Ethernet marked down with the cable still in: its DHCP lease survives a
+// router reboot, so no GOT_IP event ever fires again. Re-probe on this cadence.
+constexpr uint32_t kPathRecoverProbeIntervalMs = 60UL * 1000UL;
+// While MQTT runs over LTE, settle a recovered better path for this long before
+// tearing the PDP down, so a flapping link cannot cause a reconnect storm.
+constexpr uint32_t kPathPreemptSettleMs = 3000;
+// Publishing liveness. This MUST stay above the largest telemetry interval we
+// accept (60 s, enforced in loadSavedMqttConfig) or it forces a disconnect and
+// reconnect every cycle - and each reconnect republishes telemetry, which is
+// what produced the observed ~20 s cadence.
+constexpr uint32_t kMqttSilenceReconnectMs = 90UL * 1000UL;
+constexpr uint32_t kSilenceProbeIntervalMs = 45UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
+// lte_data traces carry a whole modem dump and were republished on every failed
+// PDP attempt (every 10 s, forever). Back the retries off and throttle the event.
+constexpr uint32_t kLteRetryMaxIntervalMs = 120UL * 1000UL;
+constexpr uint32_t kLteDataEventMinIntervalMs = 30UL * 1000UL;
+// Events produced while MQTT is down (SMS/call results) used to be dropped by
+// publishMqttJson. Queue a bounded number and flush them on reconnect.
+constexpr size_t kDeferredEventMax = 8;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
 constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
@@ -208,6 +232,29 @@ String pendingLteTraceMessage;
 bool pendingLteTracePublish = false;
 bool pendingLteTraceOk = false;
 
+// Path health. Optimistic when an interface gets its IP (so boot is not slowed
+// down by a probe), demoted only when the broker probe actually fails.
+bool ethInternetUp = false;
+bool wifiInternetUp = false;
+uint8_t wifiProbeFails = 0;
+uint32_t lastWifiProbeMs = 0;
+uint32_t lastEthRecoverProbeMs = 0;
+uint32_t ltePreemptSinceMs = 0;
+uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
+uint32_t lastLteDataEventMs = 0;
+uint8_t lteMqttConnectFails = 0;
+uint32_t lastSilenceProbeMs = 0;
+
+// Events produced while MQTT is down, drained in order once it is back.
+struct DeferredEvent {
+  String type;
+  String severity;
+  String message;
+  String commandId;
+};
+DeferredEvent deferredEvents[kDeferredEventMax];
+size_t deferredEventCount = 0;
+
 bool csAttached();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
 void configureMqttClientTransport();
@@ -227,6 +274,21 @@ bool probeMqttOverEthernet();
 bool ethernetHoldoffActive();
 void refreshCellularStatus();
 bool initModem();
+void pollWifiPath();
+void serviceNetworkPaths();
+// Which interface the lwIP default route should use. Auto follows the health
+// flags (Ethernet > WiFi); the explicit values pin the route for a reachability
+// probe, which is only meaningful if the packet leaves through the interface
+// under test.
+enum class PathPreference : uint8_t { Auto, Ethernet, Wifi };
+void applyPreferredRoute(PathPreference pref = PathPreference::Auto);
+void stopLtePdp();
+void deferDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId);
+void flushDeferredEvents();
+bool probeMqttOverWifi();
+bool probeMqttOnInterface(bool ethernet);
+bool ethernetHoldoffActive();
+bool publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId);
 bool refreshSimReady();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
 void flushModemInput();
@@ -304,14 +366,20 @@ const char* activeNetworkName() {
   if (state.lteMqttTransport && state.lteDataUp) {
     return "lte";
   }
+  if (state.ethernetConnected && ethInternetUp) {
+    return "ethernet";
+  }
+  if (state.wifiConnected && wifiInternetUp) {
+    return "wifi";
+  }
+  if (state.lteDataUp) {
+    return "lte";
+  }
   if (state.ethernetConnected) {
     return "ethernet";
   }
   if (state.wifiConnected) {
     return "wifi";
-  }
-  if (state.lteDataUp) {
-    return "lte";
   }
   return "none";
 }
@@ -332,28 +400,51 @@ const char* mqttPathLetter() {
   return "?";
 }
 
-void applyPreferredRoute() {
+void applyPreferredRoute(PathPreference pref) {
+  // Auto gates the Ethernet branch on ethInternetUp: an Ethernet interface that
+  // is up but not carrying the internet (a router with no uplink - the exact case
+  // that used to wedge the device on WiFi while DHCP was up) must not win the
+  // default route, otherwise every new TCP connection, including the MQTT
+  // reconnect, keeps leaving through the dead path.
+  //
+  // PathPreference::Ethernet also accepts an interface that still has an IP but
+  // is not flagged connected yet: that is the state inside the holdoff window,
+  // where markEthernetUp() must probe Ethernet specifically before re-accepting
+  // it, and probing over the wrong interface would give a false positive.
+  bool useEthernet = false;
+  bool useWifi = false;
+  switch (pref) {
+    case PathPreference::Ethernet:
+      useEthernet = state.ethernetConnected || ETH.localIP() != IPAddress((uint32_t)0);
+      break;
+    case PathPreference::Wifi:
+      useWifi = state.wifiConnected;
+      break;
+    case PathPreference::Auto:
+      useEthernet = state.ethernetConnected && ethInternetUp;
+      useWifi = state.wifiConnected;
+      break;
+  }
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  if (state.ethernetConnected) {
+  if (useEthernet) {
     ETH.setDefault();
     Serial.println("[net] default route ETH");
-  } else if (state.wifiConnected) {
+  } else if (useWifi) {
     WiFi.setDefault();
     Serial.println("[net] default route WiFi");
   }
 #else
   esp_netif_t* netif = nullptr;
-  if (state.ethernetConnected) {
+  if (useEthernet) {
     netif = esp_netif_get_handle_from_ifkey("ETH_DEF");
-  } else if (state.wifiConnected) {
+  } else if (useWifi) {
     netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
   }
   if (netif != nullptr) {
     auto* lwipIf = static_cast<struct netif*>(esp_netif_get_netif_impl(netif));
     if (lwipIf != nullptr) {
       netif_set_default(lwipIf);
-      Serial.printf("[net] default route %s\n",
-                    state.ethernetConnected ? "ETH" : "WiFi");
+      Serial.printf("[net] default route %s\n", useEthernet ? "ETH" : "WiFi");
     }
   }
 #endif
@@ -369,10 +460,13 @@ void forgetWifiRadio() {
   WiFi.persistent(false);
   state.wifiConnected = false;
   state.wifiIpAddress = "-";
+  wifiInternetUp = false;
+  wifiProbeFails = 0;
 }
 
 void pauseWiFiRadio() {
   wifiBackupDueMs = 0;
+  wifiAuthFailCount = 0;
   WiFi.setAutoReconnect(false);
   if (WiFi.getMode() == WIFI_OFF) {
     return;
@@ -380,6 +474,8 @@ void pauseWiFiRadio() {
   WiFi.disconnect(false);
   state.wifiConnected = false;
   state.wifiIpAddress = "-";
+  wifiInternetUp = false;
+  wifiProbeFails = 0;
   Serial.println("[wifi] paused (ethernet primary)");
 }
 
@@ -433,6 +529,40 @@ bool ethernetHoldoffActive() {
          static_cast<int32_t>(millis() - ethernetHoldoffUntilMs) < 0;
 }
 
+bool lanHasInternet() {
+  // True when any LAN path is trusted to reach the broker. Optimistic right
+  // after DHCP, demoted by real connect/publish/probe failures.
+  return (state.ethernetConnected && ethInternetUp) || (state.wifiConnected && wifiInternetUp);
+}
+
+// Reachability probe. It needs a broker IP, which we only learn from a real MQTT
+// connect: a DNS lookup here would be the alternative, but WiFi.hostByName()
+// blocks for up to 15 s inside the main loop (it waits on the lwIP DNS semaphore),
+// which would stall sensors, display and MQTT. So while the broker IP is unknown
+// we rely on the optimistic default plus connect-failure demotion instead.
+bool lanPathReachable() {
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    return false;
+  }
+  if (state.ethernetConnected && probeMqttOnInterface(true)) {
+    return true;
+  }
+  if (state.wifiConnected && probeMqttOnInterface(false)) {
+    return true;
+  }
+  return false;
+}
+
+bool canUseLan() {
+  if (!lanConnected()) {
+    return false;
+  }
+  if (lanHasInternet()) {
+    return true;
+  }
+  return lanPathReachable();
+}
+
 bool probeMqttOverEthernet() {
   if (cachedMqttIp == IPAddress((uint32_t)0)) {
     return false;
@@ -444,12 +574,70 @@ bool probeMqttOverEthernet() {
   return ok != 0;
 }
 
+bool probeMqttOverWifi() {
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    return false;
+  }
+  WiFiClient probe;
+  feedWatchdog();
+  const int ok = probe.connect(cachedMqttIp, state.mqttPort, 1500);
+  probe.stop();
+  return ok != 0;
+}
+
+// A probe only proves something about an interface if the packet actually leaves
+// through it, so pin the lwIP default route for the duration of the probe and
+// restore the normal preference afterwards. Without this, probing Ethernet while
+// WiFi is associated - or probing WiFi while Ethernet still owns the route -
+// would silently test the other interface and report a false result.
+bool probeMqttOnInterface(bool ethernet) {
+  if (ethernet && !state.ethernetConnected) {
+    return false;
+  }
+  if (!ethernet && !state.wifiConnected) {
+    return false;
+  }
+  applyPreferredRoute(ethernet ? PathPreference::Ethernet : PathPreference::Wifi);
+  const bool ok = ethernet ? probeMqttOverEthernet() : probeMqttOverWifi();
+  applyPreferredRoute();
+  return ok;
+}
+
+// An interface is only "the internet" if the broker is reachable through it.
+// A router with no uplink still gives link + DHCP, so reachability is the only
+// honest signal. Probes use the cached broker IP, which we only learn from a
+// real successful MQTT connect, so this never turns into a DNS dependency.
 void pollEthernetPath() {
-  if (!state.ethernetConnected || state.callInProgress || state.otaInProgress ||
-      state.lteMqttTransport) {
+  if (!state.ethernetConnected || state.callInProgress || state.otaInProgress) {
     ethProbeFails = 0;
     return;
   }
+  if (state.lteMqttTransport) {
+    // While MQTT runs over LTE we must still watch Ethernet for recovery, just
+    // slowly: this is what used to be skipped entirely (the early return left
+    // Ethernet never re-probed, so LTE could not be released while it was up).
+    const uint32_t now0 = millis();
+    if (ethernetHoldoffActive()) {
+      return;
+    }
+    if (lastEthRecoverProbeMs != 0 && now0 - lastEthRecoverProbeMs < kPathRecoverProbeIntervalMs) {
+      return;
+    }
+    lastEthRecoverProbeMs = now0 == 0 ? 1 : now0;
+    const bool reachable = probeMqttOnInterface(true);
+    if (reachable) {
+      ethProbeFails = 0;
+      if (!ethInternetUp) {
+        ethInternetUp = true;
+        Serial.println("[net] ethernet recovered while on LTE");
+        applyPreferredRoute();
+      }
+    } else if (ethInternetUp) {
+      ethInternetUp = false;
+    }
+    return;
+  }
+
   const uint32_t now = millis();
   if (lastEthProbeMs != 0 && now - lastEthProbeMs < kEthProbeIntervalMs) {
     return;
@@ -459,6 +647,8 @@ void pollEthernetPath() {
     return;
   }
   if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    // No real connect yet, so we cannot probe. Give MQTT time to come up; if it
+    // never does, assume the Ethernet path is not carrying the internet.
     if (!state.mqttConnected && ethernetUpAtMs != 0 &&
         static_cast<int32_t>(now - ethernetUpAtMs) >= 15000) {
       markEthernetDown("no mqtt path");
@@ -466,8 +656,14 @@ void pollEthernetPath() {
     return;
   }
 
-  if (probeMqttOverEthernet()) {
+  const bool reachable = probeMqttOnInterface(true);
+  if (reachable) {
     ethProbeFails = 0;
+    if (!ethInternetUp) {
+      ethInternetUp = true;
+      Serial.println("[eth] path recovered");
+      requestMqttBounce("eth recovered");
+    }
     return;
   }
   ethProbeFails++;
@@ -480,9 +676,83 @@ void pollEthernetPath() {
   }
 }
 
+// WiFi used to be trusted on a bare DHCP lease and could never be demoted, so a
+// WiFi uplink without internet blocked the LTE fallback forever.
+void pollWifiPath() {
+  if (!state.wifiConnected || state.callInProgress || state.otaInProgress) {
+    wifiProbeFails = 0;
+    return;
+  }
+  if (state.ethernetConnected) {
+    return;
+  }
+  if (cachedMqttIp == IPAddress((uint32_t)0)) {
+    return;
+  }
+  const uint32_t now = millis();
+  if (lastWifiProbeMs != 0 && now - lastWifiProbeMs < kEthProbeIntervalMs) {
+    return;
+  }
+  lastWifiProbeMs = now == 0 ? 1 : now;
+  // Pin the route to WiFi: this runs only when Ethernet is not connected, but a
+  // pinned probe keeps the result honest if that ever changes.
+  const bool reachable = probeMqttOnInterface(false);
+  if (reachable) {
+    wifiProbeFails = 0;
+    if (!wifiInternetUp) {
+      wifiInternetUp = true;
+      Serial.println("[wifi] path recovered");
+    }
+    return;
+  }
+  wifiProbeFails++;
+  Serial.printf("[wifi] path probe fail %u/%u ip=%s\n",
+                wifiProbeFails,
+                kWifiProbeFailLimit,
+                cachedMqttIp.toString().c_str());
+  if (wifiProbeFails >= kWifiProbeFailLimit) {
+    Serial.println("[wifi] no internet over WiFi, dropping path");
+    wifiInternetUp = false;
+    wifiProbeFails = 0;
+    if (state.mqttConfigured && !state.lteMqttTransport) {
+      requestMqttBounce("wifi no internet");
+    }
+    pendingNetworkStatusReport = true;
+  }
+}
+
+// Drives the passive failback from LTE to a recovered LAN path.
+void serviceNetworkPaths() {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    ltePreemptSinceMs = 0;
+    return;
+  }
+  const bool betterLan =
+      (state.ethernetConnected && ethInternetUp) || (state.wifiConnected && wifiInternetUp);
+  if (!state.lteMqttTransport || !betterLan) {
+    ltePreemptSinceMs = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  if (ltePreemptSinceMs == 0) {
+    ltePreemptSinceMs = now == 0 ? 1 : now;
+    return;
+  }
+  if (now - ltePreemptSinceMs < kPathPreemptSettleMs) {
+    return;
+  }
+  ltePreemptSinceMs = 0;
+  Serial.println("[net] LAN path recovered, releasing LTE");
+  stopLtePdp();
+  applyPreferredRoute();
+  requestMqttBounce("lan recovered");
+}
+
 void markEthernetUp(const char* reason) {
   if (ethernetHoldoffActive()) {
-    const bool probed = probeMqttOverEthernet();
+    // Probe Ethernet specifically: with the route on Auto, a live WiFi would have
+    // answered instead and this would re-accept a dead Ethernet.
+    const bool probed = probeMqttOnInterface(true);
     if (!probed) {
       Serial.printf("[eth] ignore up (%s) holdoff probe=%s ip=%s\n",
                     reason,
@@ -498,6 +768,10 @@ void markEthernetUp(const char* reason) {
   state.ipAddress = ETH.localIP().toString();
   lanMqttFailCount = 0;
   ethProbeFails = 0;
+  // Optimistic: a fresh IP is treated as a working path until the probe says
+  // otherwise. This keeps boot fast and avoids double-switching.
+  ethInternetUp = true;
+  lastEthRecoverProbeMs = 0;
   noLanSinceMs = 0;
   ethernetUpAtMs = millis();
   if (ethernetUpAtMs == 0) {
@@ -518,6 +792,9 @@ void markEthernetDown(const char* reason) {
   if (ethernetHoldoffUntilMs == 0) {
     ethernetHoldoffUntilMs = 1;
   }
+  ethInternetUp = false;
+  ethProbeFails = 0;
+  lastEthRecoverProbeMs = 0;
   if (!state.ethernetConnected) {
     return;
   }
@@ -532,17 +809,46 @@ void markEthernetDown(const char* reason) {
   startWifiRadio();
 }
 
-void noteLanMqttFailure(const char* reason) {
-  if (state.lteMqttTransport || !state.ethernetConnected) {
+// A LAN path is only usable if it actually reaches the broker. `hadInternet`
+// remembers whether this interface was the one carrying MQTT, so we can tell a
+// real outage from a probe failure on a backup interface that was never used.
+void noteLanPathFailure(bool ethernet, const char* reason, bool hadInternet) {
+  if (state.lteMqttTransport) {
     return;
   }
-  lanMqttFailCount++;
-  Serial.printf("[eth] mqtt fail %u/%u (%s)\n",
-                lanMqttFailCount,
-                kLanMqttFailLimit,
-                reason);
-  if (lanMqttFailCount >= kLanMqttFailLimit) {
-    markEthernetDown(reason);
+  if (ethernet) {
+    if (!state.ethernetConnected) {
+      return;
+    }
+    lanMqttFailCount++;
+    Serial.printf("[eth] mqtt fail %u/%u (%s)\n", lanMqttFailCount, kLanMqttFailLimit, reason);
+    if (hadInternet || lanMqttFailCount >= kLanMqttFailLimit) {
+      markEthernetDown(reason);
+    }
+    return;
+  }
+  if (!state.wifiConnected) {
+    return;
+  }
+  wifiInternetUp = false;
+  wifiProbeFails = 0;
+  pendingNetworkStatusReport = true;
+  Serial.printf("[wifi] path unusable (%s)\n", reason);
+  if (hadInternet) {
+    requestMqttBounce(reason);
+  }
+}
+
+void noteLanMqttFailure(const char* reason) {
+  if (state.ethernetConnected) {
+    noteLanPathFailure(true, reason, ethInternetUp);
+    return;
+  }
+  // WiFi used to be ignored here outright, which is why a WiFi link with a DHCP
+  // lease but no upstream internet pinned the device forever: lanConnected()
+  // stayed true so maintainLteFallback() never engaged LTE.
+  if (state.wifiConnected) {
+    noteLanPathFailure(false, reason, wifiInternetUp);
   }
 }
 
@@ -676,6 +982,8 @@ void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
       const bool lostWifiPath = state.wifiConnected && !state.ethernetConnected;
       state.wifiConnected = false;
       state.wifiIpAddress = "-";
+      wifiInternetUp = false;
+      wifiProbeFails = 0;
       if (lostWifiPath) {
         requestMqttBounce("wifi disconnected");
       }
@@ -1084,18 +1392,36 @@ void fillCellularJson(JsonObject cellular) {
 
 void fillNetworkJson(JsonObject network) {
   network["active"] = activeNetworkName();
+  const bool internetUp = lanHasInternet() || state.lteDataUp;
+  network["internet"] = internetUp;
+  // A LAN interface with an IP but no reachable broker is the trap this used to
+  // fall into: link and DHCP are up, so everything looked healthy while there
+  // was no internet at all.
+  network["degraded"] = lanConnected() && !lanHasInternet() && !state.lteDataUp;
   JsonObject ethernet = network["ethernet"].to<JsonObject>();
   ethernet["up"] = state.ethernetConnected;
   ethernet["ip"] = state.ethernetConnected ? state.ipAddress : "-";
+  ethernet["internet"] = state.ethernetConnected && ethInternetUp;
   JsonObject wifi = network["wifi"].to<JsonObject>();
   wifi["configured"] = state.wifiConfigured;
   wifi["up"] = state.wifiConnected;
   wifi["ssid"] = state.wifiSsid;
   wifi["ip"] = state.wifiConnected ? state.wifiIpAddress : "-";
+  wifi["internet"] = state.wifiConnected && wifiInternetUp;
   wifi["rssi"] = state.wifiConnected ? WiFi.RSSI() : 0;
   JsonObject lte = network["lte"].to<JsonObject>();
   lte["up"] = state.lteDataUp;
   lte["ip"] = state.lteDataUp ? state.lteIpAddress : "-";
+}
+
+// Flat 1/0 flags mirroring SENSOR_ALIASES in backend/app/alarms.py. Publishing
+// them in every telemetry frame is what lets an alarm rule on a link or internet
+// drop evaluate on the regular push, even when the path that just died is the
+// only one available.
+void fillConnectivityJson(JsonDocument& doc) {
+  doc["network_ethernet_ok"] = state.ethernetConnected ? 1 : 0;
+  doc["network_wifi_ok"] = state.wifiConnected ? 1 : 0;
+  doc["network_internet_ok"] = (lanHasInternet() || state.lteDataUp) ? 1 : 0;
 }
 
 void publishDeviceStatus(const char* status, bool retained = true) {
@@ -1107,6 +1433,7 @@ void publishDeviceStatus(const char* status, bool retained = true) {
   doc["ethernet"] = state.ethernetConnected;
   doc["wifi"] = state.wifiConnected;
   fillNetworkJson(doc["network"].to<JsonObject>());
+  fillConnectivityJson(doc);
   doc["modem_ready"] = state.modemReady;
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
@@ -1174,7 +1501,40 @@ void publishCommandAck() {
   publishMqttJson("ack", doc, false, 1);
 }
 
-void publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId = "") {
+void deferDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId) {
+  if (deferredEventCount >= kDeferredEventMax) {
+    // Keep the newest: a fresh command result matters more than a stale trace.
+    Serial.printf("[event] deferred queue full, dropping oldest (%s)\n", deferredEvents[0].type.c_str());
+    for (size_t i = 1; i < deferredEventCount; i++) {
+      deferredEvents[i - 1] = deferredEvents[i];
+    }
+    deferredEventCount--;
+  }
+  DeferredEvent& slot = deferredEvents[deferredEventCount++];
+  slot.type = type;
+  slot.severity = severity;
+  slot.message = message;
+  slot.commandId = commandId;
+  Serial.printf("[event] deferred %s: %s\n", type, message.c_str());
+}
+
+void flushDeferredEvents() {
+  if (!state.mqttConnected || deferredEventCount == 0) {
+    return;
+  }
+  if (!publishDeviceEvent(deferredEvents[0].type.c_str(),
+                          deferredEvents[0].severity.c_str(),
+                          deferredEvents[0].message,
+                          deferredEvents[0].commandId)) {
+    return;
+  }
+  for (size_t i = 1; i < deferredEventCount; i++) {
+    deferredEvents[i - 1] = deferredEvents[i];
+  }
+  deferredEventCount--;
+}
+
+bool publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId = "") {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
@@ -1184,7 +1544,15 @@ void publishDeviceEvent(const char* type, const char* severity, const String& me
   if (commandId.length() > 0) {
     doc["command_id"] = commandId;
   }
-  publishMqttJson("event", doc, false, 1);
+  if (!publishMqttJson("event", doc, false, 1)) {
+    // Queue instead of dropping: this used to silently discard the result of an
+    // SMS test (transmitSms() takes MQTT down first via releaseLteMqttForModem)
+    // and the backend would then time the command out with no explanation.
+    deferDeviceEvent(type, severity, message, commandId);
+    return false;
+  }
+  flushDeferredEvents();
+  return true;
 }
 
 void publishInboundSms(const String& from, const String& text) {
@@ -1213,7 +1581,12 @@ void publishTestCallProgress(const String& message) {
   }
   setStatus(message);
   if (state.mqttConnected) {
-    mqttClient.loop();
+    // Keep the keepalive serviced so the broker does not drop us mid-call.
+    if (mqttClient.loop()) {
+      lastMqttOkMs = millis();
+    } else {
+      state.mqttConnected = false;
+    }
     publishDeviceEvent("test_call", "info", withFirmware(message));
   }
 }
@@ -1239,6 +1612,15 @@ void publishLteDataTrace() {
     return;
   }
 
+  // Throttle: a persistently failing PDP used to emit a full modem dump every
+  // 10 s forever, which flooded the event stream and pushed the SMS/call traces
+  // out of the modem panel. Identical messages coalesce into one event per
+  // window; a changed message is still reported at most once per window.
+  const uint32_t now = millis();
+  if (lastLteDataEventMs != 0 && now - lastLteDataEventMs < kLteDataEventMinIntervalMs) {
+    return;
+  }
+
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
@@ -1250,6 +1632,7 @@ void publishLteDataTrace() {
   }
   if (publishMqttJson("event", doc, false, 1)) {
     pendingLteTracePublish = false;
+    lastLteDataEventMs = now == 0 ? 1 : now;
     return;
   }
   if (lteTraceLog.length() <= 900) {
@@ -1258,6 +1641,7 @@ void publishLteDataTrace() {
   doc["modem_log"] = lteTraceLog.substring(lteTraceLog.length() - 900);
   if (publishMqttJson("event", doc, false, 1)) {
     pendingLteTracePublish = false;
+    lastLteDataEventMs = now == 0 ? 1 : now;
   }
 }
 
@@ -1310,6 +1694,7 @@ void publishTelemetryNow() {
   doc["ethernet"] = state.ethernetConnected;
   doc["wifi"] = state.wifiConnected;
   fillNetworkJson(doc["network"].to<JsonObject>());
+  fillConnectivityJson(doc);
   if (isnan(state.dsTemperature)) {
     doc["temperature_1"] = nullptr;
   } else {
@@ -1403,6 +1788,16 @@ void connectMqttIfNeeded() {
                   state.lteMqttTransport ? "yes" : "no");
     setStatus("MQTT fail");
     if (state.lteMqttTransport) {
+      // A failed connect over the cellular path must not wedge the PDP: back the
+      // retry off and tear the PDP down once it looks hopeless so the next
+      // attempt rebuilds it from scratch.
+      lteMqttConnectFails++;
+      if (lteMqttConnectFails >= 3) {
+        lteMqttConnectFails = 0;
+        Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
+        stopLtePdp();
+        lastLteAttemptMs = 0;
+      }
       lteTraceLog = modemCallLog;
       pendingLteTraceMessage = "LTE MQTT fail";
       pendingLteTraceOk = false;
@@ -1415,10 +1810,16 @@ void connectMqttIfNeeded() {
   }
 
   lanMqttFailCount = 0;
+  lteMqttConnectFails = 0;
 
   if (!state.lteMqttTransport) {
     cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
     Serial.printf("[mqtt] path ip=%s\n", cachedMqttIp.toString().c_str());
+    if (state.ethernetConnected) {
+      ethInternetUp = true;
+    } else if (state.wifiConnected) {
+      wifiInternetUp = true;
+    }
   } else {
     lteTraceLog = modemCallLog;
     pendingLteTraceMessage = "LTE MQTT OK";
@@ -1428,10 +1829,13 @@ void connectMqttIfNeeded() {
   }
 
   state.mqttConnected = true;
+  lastMqttOkMs = millis();
+  lastSilenceProbeMs = 0;
   mqttClient.subscribe(mqttTopic("config/desired").c_str(), 1);
   mqttClient.subscribe(mqttTopic("command").c_str(), 1);
   publishDeviceStatus("online", true);
   publishTelemetryNow();
+  lastTelemetryPublishMs = millis();
   publishLteDataTrace();
   lastCellularStatusMs = millis();
   setStatus("MQTT OK");
@@ -1454,13 +1858,38 @@ void enforceMqttSilenceWatchdog() {
     ESP.restart();
   }
 
-  if (mqttClient.connected() && now - lastMqttOkMs >= kMqttSilenceReconnectMs) {
-    Serial.printf("[mqtt] no successful publish for %lu ms, reconnecting\n",
-                  static_cast<unsigned long>(now - lastMqttOkMs));
-    mqttClient.disconnect();
-    state.mqttConnected = false;
-    lastMqttReconnectMs = 0;
+  if (!mqttClient.connected()) {
+    lastSilenceProbeMs = 0;
+    return;
   }
+
+  // A quiet link is normal: telemetry is published every state.telemetryIntervalMs
+  // and nothing else may be sent for a whole cycle. Prove the connection is alive
+  // with a cheap MQTT-level ping before declaring it dead, and only then force a
+  // reconnect. Without this, the reconnect fired every kMqttSilenceReconnectMs and
+  // the reconnect path republishes status+telemetry, which is what produced the
+  // observed ~20 s telemetry cadence.
+  if (now - lastMqttOkMs < kMqttSilenceReconnectMs) {
+    return;
+  }
+  if (lastSilenceProbeMs != 0 && now - lastSilenceProbeMs < kSilenceProbeIntervalMs) {
+    return;
+  }
+  lastSilenceProbeMs = now == 0 ? 1 : now;
+  // PubSubClient keeps the connection warm by itself: loop() emits PINGREQ once
+  // the keepalive elapses and returns false if the PINGRESP never arrives, so it
+  // is already a real liveness probe. Pinging from here too would make
+  // pingOutstanding collide with loop()'s own ping bookkeeping.
+  if (mqttClient.loop()) {
+    lastMqttOkMs = millis();
+    return;
+  }
+  Serial.printf("[mqtt] keepalive lost after %lu ms, reconnecting\n",
+                static_cast<unsigned long>(now - lastMqttOkMs));
+  mqttClient.disconnect();
+  state.mqttConnected = false;
+  lastMqttReconnectMs = 0;
+  lastSilenceProbeMs = 0;
 }
 
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000) {
@@ -1543,8 +1972,15 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
-    if (state.mqttConnected && !state.lteMqttTransport) {
-      mqttClient.loop();
+    // Pump MQTT on every path. `if (!loop())` below means "PINGRESP missing or
+    // socket dead", not "no data available" (loop() returns true when idle), so
+    // the return value is the liveness signal we actually want.
+    if (state.mqttConnected) {
+      if (mqttClient.loop()) {
+        lastMqttOkMs = millis();
+      } else {
+        state.mqttConnected = false;
+      }
     }
     while (ModemSerial.available()) {
       const char c = static_cast<char>(ModemSerial.read());
@@ -2066,6 +2502,8 @@ bool markLtePdpUp(const String& ip, uint8_t cid) {
   state.ltePdpCid = cid;
   state.lteDataUp = true;
   state.lteIpAddress = ip;
+  lastLteRetryDelayMs = kLteRetryIntervalMs;
+  lteMqttConnectFails = 0;
   pendingNetworkStatusReport = true;
   finishLteAttempt(true, "LTE IP " + ip);
   return true;
@@ -2075,10 +2513,11 @@ bool ensureLtePdp() {
   if (state.lteDataUp) {
     return true;
   }
-  if (millis() - lastLteAttemptMs < kLteRetryIntervalMs && lastLteAttemptMs != 0) {
+  const uint32_t now = millis();
+  if (lastLteAttemptMs != 0 && now - lastLteAttemptMs < lastLteRetryDelayMs) {
     return false;
   }
-  lastLteAttemptMs = millis();
+  lastLteAttemptMs = now == 0 ? 1 : now;
   if (!state.modemReady) {
     initModem();
     if (!state.modemReady) {
@@ -2096,6 +2535,9 @@ bool ensureLtePdp() {
   refreshCellularStatus();
   if (!state.networkRegistered) {
     finishLteAttempt(false, "LTE not registered");
+    // Exponential backoff: without this a modem that is simply out of coverage
+    // retried every 10 s forever, emitting a full modem dump each time.
+    lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
     return false;
   }
 
@@ -2117,6 +2559,7 @@ bool ensureLtePdp() {
   }
 
   finishLteAttempt(false, "LTE PDP fail");
+  lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
   return false;
 }
 
@@ -2132,6 +2575,9 @@ void stopLtePdp() {
   state.lteDataUp = false;
   state.lteMqttTransport = false;
   state.lteIpAddress = "-";
+  lastLteAttemptMs = 0;
+  lastLteRetryDelayMs = kLteRetryIntervalMs;
+  lteMqttConnectFails = 0;
   pendingNetworkStatusReport = true;
 }
 
@@ -2166,11 +2612,17 @@ void maintainLteFallback() {
     return;
   }
 
-  if (lanConnected()) {
+  // A LAN interface is only a reason to stay off LTE if it actually reaches the
+  // broker. Previously a bare DHCP lease was enough, so a router with no uplink
+  // kept lanConnected() true and LTE never engaged.
+  const bool lanUsable = canUseLan();
+  if (lanUsable) {
     noLanSinceMs = 0;
     if (!state.lteDataUp) {
       lastLteFail = false;
     }
+    lastLteAttemptMs = 0;
+    lastLteRetryDelayMs = kLteRetryIntervalMs;
     return;
   }
 
@@ -2190,7 +2642,12 @@ void maintainLteFallback() {
 }
 
 void configureMqttClientTransport() {
-  const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive();
+  // Prefer LAN whenever it is genuinely usable: Ethernet first (by
+  // applyPreferredRoute), then WiFi, and only then LTE. `ltePreemptSinceMs` is
+  // deliberately not part of this test: serviceNetworkPaths() only arms it after
+  // a probe has already set the interface's health flag, so adding it here would
+  // only create a window where a dead LAN can reclaim MQTT.
+  const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive() && lanHasInternet();
   if (state.lteDataUp && !lanLooksUsable) {
     mqttClient.setClient(lteMqttClient);
     state.lteMqttTransport = true;
@@ -2829,6 +3286,9 @@ void processPendingSmsUrcs() {
 }
 
 void pollIncomingSms() {
+  // Skipped while MQTT rides the cellular socket: interleaving AT housekeeping
+  // with an open AT+CIPOPEN/CAOPEN session can corrupt the modem socket, so the
+  // caller keeps the !lteMqttTransport guard here.
   if (!state.modemReady || !state.simReady || state.callInProgress || !state.mqttConnected) {
     return;
   }
@@ -3873,8 +4333,39 @@ String resolveTestPhone(const String& phoneOverride) {
   return phone;
 }
 
+// Pumps MQTT while waiting out a modem operation so a long AT exchange does not
+// drop the broker connection. On LTE the MQTT keepalive is only 10 s while SMS
+// commands can take up to 70 s, so without this the connection dies and the
+// result event has nowhere to go.
+void waitWithMqtt(uint32_t ms) {
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < ms) {
+    feedWatchdog();
+    if (!state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+      if (mqttClient.connected()) {
+        state.mqttConnected = true;
+        // loop() returns false only when the socket died or a PINGRESP never
+        // arrived; a true return also means the keepalive was serviced.
+        if (mqttClient.loop()) {
+          lastMqttOkMs = millis();
+        } else {
+          state.mqttConnected = false;
+        }
+      }
+    }
+    delay(10);
+  }
+}
+
 String transmitSms(const String& phone, const String& body) {
-  releaseLteMqttForModem();
+  if (!lanHasInternet()) {
+    // MQTT is riding the modem. Do not tear the LTE socket down: on LTE the SMS
+    // and the PDP coexist (AT+CGSMS=1 prefers the CS bearer), and killing MQTT
+    // is what used to lose the command result. Only release the socket when the
+    // command will actually collide with the IP stack, i.e. when it fails.
+    mqttClient.loop();
+    state.mqttConnected = mqttClient.connected();
+  }
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
     setStatus("SMS mode fail");
     return "SMS mode fail";
@@ -3921,7 +4412,7 @@ String sendTestSms(const String& phoneOverride, const String& text) {
       if (refreshSimReady()) {
         break;
       }
-      waitWithWatchdog(1000);
+      waitWithMqtt(1000);
     }
   }
   if (!state.modemReady || !state.simReady) {
@@ -3954,6 +4445,9 @@ String sendTestSms(const String& phoneOverride, const String& text) {
 
   String result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
+    // First attempt failed: only now is it worth giving up the LTE MQTT socket,
+    // restore the packet services and try once more.
+    releaseLteMqttForModem();
     restorePacketServices();
     result = transmitSms(phone, body);
   }
@@ -4283,6 +4777,8 @@ void loop() {
   }
 
   pollEthernetPath();
+  pollWifiPath();
+  serviceNetworkPaths();
   connectMqttIfNeeded();
   maintainWifiBackup();
   enforceMqttSilenceWatchdog();
@@ -4292,6 +4788,7 @@ void loop() {
     publishDeviceStatus("online", true);
   }
   publishLteDataTrace();
+  flushDeferredEvents();
 
   if (state.mqttConnected && pendingConfigReport) {
     publishConfigReported();

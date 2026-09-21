@@ -47,3 +47,12 @@ cannot be recovered by hand. Two guard rails exist in `performOta`:
 **Pending**: `performOta` uses `client.setInsecure()`, so TLS is not verified.
 Integrity is covered by the sha256, but the transport is not authenticated.
 Fixing this means pinning the Let's Encrypt chain in the firmware.
+
+## Network paths
+
+Ethernet > WiFi > LTE, plus the rule that an interface is only "the internet" if
+the broker is actually reachable through it (link + DHCP is not enough). Read
+`docs/device/NETWORK_PATHS.md` before touching anything network related: it
+documents the health flags, the probe rules, why `WiFi.hostByName()` must not be
+called from `loop()`, and the publishing-liveness thresholds (in particular why
+`kMqttSilenceReconnectMs` must stay above the telemetry interval).
