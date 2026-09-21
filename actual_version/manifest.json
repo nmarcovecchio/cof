@@ -1,8 +1,8 @@
 {
   "firmware": {
-    "version": "0.2.55",
+    "version": "0.2.56",
     "url": "https://app.callonfail.com.ar/ota/firmware.bin",
-    "sha256": "bd702850ed18f73b4445d4205d93ec3a5ad3bd5a40b7590917b730caf3aee6cb"
+    "sha256": "8581a68d66525d0e3e12f75cb5113beefcd57be85bfbfb5fe7d0b3719332c113"
   },
   "audio": {
     "version": "0.1.0",
