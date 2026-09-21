@@ -93,10 +93,50 @@ Notes:
 - Verified against the vendored `PubSubClient.cpp` (2.8.x): when
   `pingOutstanding` is set and `keepAlive` elapses again, `loop()` sets
   `MQTT_CONNECTION_TIMEOUT`, stops the client and returns `false`. `keepAlive` is
-  `kMqttKeepAliveSeconds` = **10 s**, so any code path that can block the loop for
+  `kMqttKeepAliveSeconds` = **10 s**, so any code path that can block MQTT for
   more than 10 s without pumping `mqttClient.loop()` will drop the connection.
-  This is why `readModemUntil()` and `waitForRadioService()` pump MQTT while they
-  spin on the modem, and why long operations must not use a bare `delay()`.
+  Note "block MQTT", not "take longer than 10 s": the paths that legitimately spin
+  for longer pump MQTT as they go. `readModemUntil()` runs inside every `sendAT()`
+  and `waitWithWatchdog()` replaces every blocking `delay()`, and both pump. So
+  keeping MQTT up during a long AT operation is already handled, and batching
+  `pollModem()` on a 30 s gate is fine for the same reason. What would not be fine
+  is a new sleep that neither pumps nor uses `waitWithWatchdog()`.
+
+## What polls, and what it costs
+
+`loop()` runs continuously and ends with `delay(20)`, so a pass is ~20 ms plus
+whatever blocking work that pass did. `mqttClient.connected()` is a state compare
+and `mqttClient.loop()` on Ethernet/WiFi is a non-blocking socket read, so calling
+both on every pass is effectively free. Nothing polls the connection on a timer.
+
+The expensive work is rate-limited by *timestamps*, never by `delay()`. There is
+no bare `delay(30000)` in the firmware. The misreadable one is `kModemIntervalMs`
+(30 s): it gates how often `pollModem()` runs, and `pollModem()` issues ~7 AT
+commands through `refreshCellularStatus()`. Running that every pass would saturate
+the modem UART and starve every other task, so the gate is deliberate.
+
+| Interval | Value | Gates | Why not faster |
+|---|---|---|---|
+| `kSensorIntervalMs` | 3 s | `readSensors()` | DS18B20 conversion time |
+| `kSmsPollIntervalMs` | 5 s | `pollIncomingSms()` | AT round-trips on a shared UART |
+| `kModemRetryNoLanMs` | 5 s | `pollModem()` when no LAN | needed when it is the only path |
+| `kModemIntervalMs` | 30 s | `pollModem()` with LAN | ~7 AT commands per call |
+| `kEthProbeIntervalMs` | 10 s | Ethernet broker probe | 1.5 s connect timeout |
+| `kPathRecoverProbeIntervalMs` | 60 s | recovery probes while on LTE | one connect timeout each |
+| `kCellularStatusIntervalMs` | 5 min | `refreshCellularStatus()` + status publish | ~7 AT commands per call |
+| `kMqttKeepAliveSeconds` | 10 s | PINGREQ cadence (library) | see below |
+
+The one genuinely hot path is `LteMqttClient::available()`, which runs an
+`AT+CIPRXGET=2` round-trip when the RX buffer is empty, throttled by
+`lastRxPollMs >= 250`. MQTT over the modem's AT socket means paying that ~4x/sec
+while LTE carries MQTT. Raising 250 ms trades inbound-command latency for UART
+load.
+
+On keepalive: 10 s is *shorter* than the 15-60 s typical for MQTT. It is not a
+poll of connection state; it is how long the library tolerates silence before
+issuing a PINGREQ, so a shorter value only buys faster dead-socket detection at
+the cost of more AT traffic (6 PINGREQs/min on LTE). `kMqttSilenceReconnectMs`
+(90 s) already covers the "no successful publish" case.
 
 ## Alarms
 
