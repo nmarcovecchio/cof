@@ -96,39 +96,6 @@
       .reading-when.is-old { color: #b02a37; }
       .reading-when.is-warn { color: #997404; }
 
-      /* Outage marks. Absolutely positioned over the canvas so the band can be
-         given a minimum width: a one-hour cut in a 30-day range is under 2 px
-         of real scale, which is invisible. Exaggerating it is the point - the
-         alternative is detecting it correctly and still not seeing it. */
-      .outage-marks {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-      }
-      .outage-mark {
-        position: absolute;
-        top: 0;
-        bottom: 28px; /* leave the x axis labels uncovered */
-        background: rgba(176, 42, 55, 0.22);
-        border-left: 2px solid rgba(176, 42, 55, 0.55);
-        border-right: 2px solid rgba(176, 42, 55, 0.55);
-        border-radius: 2px;
-      }
-      .outage-summary {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 0.8rem;
-      }
-      .outage-chip {
-        background: rgba(176, 42, 55, 0.1);
-        border: 1px solid rgba(176, 42, 55, 0.35);
-        border-radius: 999px;
-        padding: 0.1rem 0.55rem;
-        color: #b02a37;
-      }
-
       .action-bar {
         display: flex;
         flex-wrap: wrap;

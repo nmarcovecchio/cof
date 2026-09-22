@@ -49,7 +49,6 @@ from .telemetry_series import (
     _to_epoch,
     bucket_rows,
     bucket_seconds,
-    detect_outages,
     extract_aux_values,
     extract_value,
     last_readings,
@@ -883,9 +882,6 @@ def create_app() -> Flask:
                 "points": points,
                 "total_samples": total,
                 "truncated": truncated,
-                # Silences measured on the raw samples, not on the buckets: a
-                # short outage inside one bucket leaves no trace in `points`.
-                "outages": detect_outages(rows),
             }
         )
 
