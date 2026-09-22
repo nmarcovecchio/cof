@@ -55,32 +55,69 @@ _BUCKETS = (
 # hides an outage: the line bridges the gap as if the device had kept reporting,
 # because no null ever reaches the renderer to trip `spanGaps: false`.
 #
-# Filling the empty buckets fixes that, but filling *every* one would cut the
-# line on any single missed reading. So a gap only becomes a visible break once
-# it lasts enough empty buckets, and shorter gaps stay bridged.
+# Where the break goes is decided from the *raw* samples, not from the buckets.
+# Counting empty buckets cannot work: a bucket that holds an outage *plus* a few
+# readings still has data, so it never looks empty. At a 6 h bucket (30-day
+# range) only a ~6 h silence emptied one, and a 4 h outage left no trace at all.
+# Measured on a 4 h cut: 60 nulls at 24 h, 4 at 7 d, 0 at 30 d. The information
+# was being averaged away, not judged wrongly.
 #
-# How many is "enough" depends on the bucket, not on taste. What makes an empty
-# bucket suspicious is how many real samples should have landed in it: with a
-# 60 s cadence a 1 min bucket holds one sample (so one lost reading empties it),
-# while a 6 h bucket holds 360 (so 360 consecutive losses are needed). A fixed
-# count would either invent cuts at 1 min or hide real outages at 6 h - at 30
-# days the old fixed 3 only fired after 18 h of silence.
-#
-# Hence the threshold scales down as the bucket grows: strict where a bucket is
-# one sample, lenient where an empty bucket is already proof of a long silence.
-_GAP_MIN_EMPTY_BUCKETS_BY_BUCKET = {
-    # bucket seconds -> empty buckets needed before the line breaks
-    60: 3,  # 1 min bucket: a couple of missed readings must not cut
-    300: 3,  # 5 min: 15 min of silence
-    3600: 2,  # 1 h: 2 h of silence
-    21600: 1,  # 6 h: an empty bucket is already 6 h with nothing
-}
-_GAP_MIN_EMPTY_BUCKETS = 3  # fallback for a bucket outside the table
+# So the silence is measured first, on the samples, where it is exact, and the
+# bucket resolution is only used to *draw* the line. Any silence past the
+# threshold breaks the line - including one that falls inside a bucket which
+# still holds readings, because "there is a hole here" is worth showing even
+# when the point cannot say how long it was.
+_GAP_MIN_SAMPLES = 8  # below this there is no cadence to measure
+_GAP_CADENCE_MULTIPLIER = 3  # a silence past 3x the usual cadence is an outage
+_GAP_MIN_SECONDS = 180  # absolute floor, so a bad estimate cannot invent cuts
+_GAP_MARGIN_SECONDS = 60  # slack so a sample sitting on the edge is not a cut
 
 
-def _gap_threshold(resolution: int) -> int:
-    """Empty buckets needed before a gap is drawn as a break, for a resolution."""
-    return _GAP_MIN_EMPTY_BUCKETS_BY_BUCKET.get(int(resolution), _GAP_MIN_EMPTY_BUCKETS)
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def silence_spans(rows) -> list[tuple[int, int]]:
+    """Silences in the raw samples, as ``[(from_epoch, to_epoch)]``.
+
+    ``rows`` must be the raw samples. The threshold is 3x the cadence *measured*
+    from the data, not read from the config: the interval is configurable per
+    device and is not stored per sample, so today's value would be applied to a
+    gap from months ago.
+
+    The reference cadence is the global median rather than one computed next to
+    each gap. A local window is fragile - a run of on-time samples beside an
+    honest 180 s LTE retry drags the local median down, the threshold lands
+    exactly on the retry, and a normal hiccup is reported as an outage (measured
+    at ~5% false positives).
+    """
+    stamps: list[int] = []
+    for row in rows:
+        at = _to_epoch(getattr(row, "received_at", None))
+        if at is not None:
+            stamps.append(at)
+    if len(stamps) < _GAP_MIN_SAMPLES:
+        return []
+
+    stamps.sort()
+    deltas = [b - a for a, b in zip(stamps, stamps[1:]) if b > a]
+    if len(deltas) < _GAP_MIN_SAMPLES:
+        return []
+
+    cadence = _median(deltas)
+    if cadence <= 0:
+        return []
+    threshold = max(cadence * _GAP_CADENCE_MULTIPLIER, _GAP_MIN_SECONDS) + _GAP_MARGIN_SECONDS
+
+    return [
+        (stamps[index], stamps[index + 1])
+        for index, delta in enumerate(deltas)
+        if delta >= threshold
+    ]
 
 
 def _as_float(value):
@@ -342,36 +379,43 @@ def _empty_point(slot: int, series: list[dict]) -> dict:
     return {"t": _iso_utc(datetime.fromtimestamp(slot, tz=timezone.utc)), "v": {item["id"]: None for item in series}}
 
 
-def _fill_gaps(points: list[dict], series: list[dict], resolution: int) -> list[dict]:
-    """Insert null buckets so a long silence breaks the line instead of bridging it.
+def _fill_gaps(
+    points: list[dict], series: list[dict], silence: list[tuple[int, int]], resolution: int
+) -> list[dict]:
+    """Mark the buckets that hold a silence, so the line breaks instead of bridging.
 
-    Only the space *between* the first and last point is filled: the chart should
-    not claim the device was up (or down) before it ever reported, nor after it
-    stopped. That also means a range whose whole span is empty stays empty.
+    ``silence`` is ``silence_spans()``: the real gaps measured on the raw
+    samples. A bucket is blanked when it *overlaps* a silence, which is what
+    lets a 4 h outage show up at a 6 h resolution - none of the buckets is empty
+    there, the readings simply stop for four hours inside one of them.
 
-    Gaps shorter than the resolution's threshold are left alone, so the line
-    stays continuous across a missed reading and the cut only means something
-    when it appears. See ``_gap_threshold``.
+    Overlap rather than "the bucket timestamp falls inside the span": a bucket is
+    labelled with its start, so a silence beginning a minute before a bucket
+    boundary would otherwise slip through and leave the line unbroken. Comparing
+    the whole interval cannot miss it.
+
+    Only the space *between* the first and last point is considered: the chart
+    should not claim the device was up (or down) before it ever reported, nor
+    after it stopped. A range whose whole span is empty stays empty.
+
+    The bucket is blanked whichever series it belongs to, since a silence means
+    no sample arrived at all and therefore no sensor has a reading for it. The
+    line is only broken once, at bucket granularity: the point cannot say how
+    long the cut lasted, only that there was one.
     """
-    if len(points) < 2:
+    if not points or not silence:
         return points
 
     resolution = max(int(resolution or 60), 1)
-    threshold = _gap_threshold(resolution)
-    out: list[dict] = []
-    for previous, current in zip(points, points[1:]):
-        out.append(previous)
-        previous_epoch = _parse_iso_epoch(previous.get("t"))
-        current_epoch = _parse_iso_epoch(current.get("t"))
-        if previous_epoch is None or current_epoch is None:
-            continue
-        missing = (current_epoch - previous_epoch) // resolution - 1
-        if missing < threshold:
-            # Too short to mean an outage; leave it bridged.
-            continue
-        for step in range(1, missing + 1):
-            out.append(_empty_point(previous_epoch + step * resolution, series))
-    out.append(points[-1])
+    out = []
+    for point in points:
+        epoch = _parse_iso_epoch(point.get("t"))
+        if epoch is not None and any(
+            epoch < end and epoch + resolution > start for start, end in silence
+        ):
+            out.append(_empty_point(epoch, series))
+        else:
+            out.append(point)
     return out
 
 
@@ -442,7 +486,7 @@ def bucket_rows(rows, series: list[dict], resolution: int):
             values[item["id"]] = round(sum(samples) / len(samples), 2) if samples else None
         points.append({"t": _iso_utc(datetime.fromtimestamp(slot, tz=timezone.utc)), "v": values})
 
-    points = _fill_gaps(points, series, resolution)
+    points = _fill_gaps(points, series, silence_spans(rows), resolution)
 
     # Flag which sensors actually reported anywhere in the range.
     for item in series:

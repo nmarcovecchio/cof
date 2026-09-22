@@ -276,26 +276,49 @@ Impacto medido: 24 h con un apagon de 4 h -> 281 puntos (51 nulos, 2 cortes, el
 mayor de 4.00 h). 30 dias a resolucion de 6 h -> ~120 puntos, muy por debajo del
 cap de 50k filas, asi que no hay riesgo de inflar el payload.
 
-### 9j. Cortes cortos invisibles en rangos largos — REVERTIDO
+### 9j. El corte depende del rango (bucket) — RESUELTO
 
-Se implemento `detect_outages()` (deteccion de silencios sobre las muestras
-crudas) y se dibujaban como banda vertical + contador arriba del grafico. **Se
-saco a pedido**: el operador quiere lo mas simple posible, solo el corte de la
-linea. Ya no hay `detect_outages` ni el campo `outages` en `telemetry.json`, ni
-bandas ni resumen.
+Sintoma: un apagon se veia en 24 h y 7 d pero **no en 30 d**. Medido con un
+corte de 4 h: 60 nulos a 24 h, 4 a 7 d, **0 a 30 d**.
 
-Vale la pena dejar anotado el diagnostico, porque explica un limite que sigue
-vigente en 9i:
+**No era el umbral, era de donde salia la decision.** `_fill_gaps` contaba
+buckets vacios, y un bucket que contiene un corte *mas* lecturas igual tiene
+datos, asi que nunca queda vacio. A 6 h de bucket solo un silencio de ~6 h
+vaciaba uno. La informacion la tiraba el promedio.
 
-Un bucket que contiene un corte *mas* lecturas igual tiene datos, asi que nunca
-queda vacio. A 30 dias (bucket de 6 h) un corte necesita durar ~6 h para
-cortar la linea; medido con un corte de 4 h: 0 nulos a 30 d, 4 nulos a 7 d
-(bucket 1 h), 60 nulos a 24 h (bucket 5 min).
+**Se mide el silencio sobre el crudo.** `silence_spans()` recorre las muestras
+crudas -que ya se traen para armar los buckets, sin queries extra- y mide el
+delta entre consecutivas. `_fill_gaps` anula despues el bucket que **se solapa**
+con un silencio. El grafico no cambia de tamaño: siguen siendo ~120 puntos, lo
+que cambia es en cual se corta la linea.
 
-O sea que **`9i` sigue funcionando, pero su alcance depende del rango**: un
-apagon se ve en 24 h y 7 d, no en 30 d. Si alguna vez hace falta ver cortes
-cortos en rangos largos, el camino es medir sobre el crudo (lo que hacia esta
-entrada) o achicar el bucket de los rangos largos, no bajar el umbral.
+Solapamiento y no "el timestamp del bucket cae dentro del tramo": el bucket se
+etiqueta con su inicio, asi que un silencio que empieza un minuto antes de un
+limite se escapaba y la linea quedaba sin cortar.
+
+**El umbral deja de depender del bucket.** Antes habia una tabla
+(`_GAP_MIN_EMPTY_BUCKETS_BY_BUCKET`) que daba 3 buckets a 1 min y 1 a 6 h. Ahora
+el criterio es tiempo real e igual para todos los rangos: **3x la cadencia
+medida**, con piso de 180 s y 60 s de margen. La cadencia se mide (mediana
+global de los deltas), no se lee de la config: el intervalo es configurable por
+equipo y no esta persistido por muestra.
+
+Un silencio que cruza un limite de bucket anula dos puntos contiguos; en el
+grafico se ve como **un solo corte**, porque son nulos seguidos.
+
+**Limite que queda:** el corte es granular al bucket. En 30 d la linea se corta
+una vez en el bucket de 6 h que contiene el hueco, pero **no se puede leer
+cuanto duro**: un corte de 30 min y uno de 5 h se ven igual. Y sigue en pie el
+cap de filas crudas (50.000): a 10 s de cadencia, 30 d son 259.200 y el analisis
+ve solo la parte que entra.
+
+Comparacion sobre el mismo dataset (cortes de 30 min, 1 h y 4 h), nulos:
+
+| Rango | Bucket | Antes | Ahora |
+|---|---|---|---|
+| 24 h | 5 min | 0 | 0 |
+| 7 d | 1 h | 0 | 0 |
+| 30 d | 6 h | **0** | **4 (3 cortes)** - incluye el de 30 min |
 
 ### 9k. Ultima lectura por sensor — RESUELTO
 
