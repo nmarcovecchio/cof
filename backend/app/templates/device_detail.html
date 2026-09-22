@@ -821,6 +821,7 @@
 {% block scripts %}
 {% if telemetry_series %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 (function () {
   const SERIES = {{ telemetry_series|tojson }};
@@ -901,24 +902,25 @@
   }
 
   function refreshPicker(data) {
-    // A sensor that reported nothing across the range is shown explicitly
-    // rather than as an invisible flat line - usually a probe that is
-    // disconnected or was retired, which is worth surfacing on a cold-chain
-    // panel.
+    // The picker is seeded from SERIES (the server-side snapshot), which always
+    // arrives with has_data false because the real counts are only known once
+    // the range has been queried. Rebuild each label from the live response so
+    // a reporting sensor stops claiming "sin datos en el rango" as soon as its
+    // data lands.
     (data.series || []).forEach(function (item) {
       const input = document.getElementById('series-' + item.id);
       if (!input) return;
       const label = input.nextElementSibling;
       if (!label) return;
-      const badge = label.querySelector('.badge.bg-secondary');
-      if (item.has_data && badge) badge.remove();
-      if (!item.has_data && !badge) {
-        const span = document.createElement('span');
-        span.className = 'badge bg-secondary';
-        span.textContent = 'sin datos en el rango';
-        label.appendChild(document.createTextNode(' '));
-        label.appendChild(span);
-      }
+      const note = item.note ? ' — ' + item.note : '';
+      const closed = item.closed
+        ? ' <span class="badge bg-dark" title="Este sensor dejo de registrar; el historial queda">cerrado</span>'
+        : '';
+      const idle = item.has_data
+        ? ''
+        : ' <span class="badge bg-secondary">sin datos en el rango</span>';
+      label.innerHTML = '<span style="color:' + item.color + '">&#9632;</span> '
+        + item.label + (item.unit ? ' (' + item.unit + ')' : '') + note + closed + idle;
     });
   }
 
@@ -931,28 +933,31 @@
     const hasData = data.points && data.points.length > 0;
     emptyBox.classList.toggle('d-none', hasData);
 
-    const labels = (data.points || []).map((point) => {
-      const date = new Date(point.t);
-      return date.toLocaleString();
-    });
+    const points = data.points || [];
 
+    // Plot {x, y} pairs against a real time axis instead of string labels.
+    // With category labels Chart.js cannot skip ticks by available width, so
+    // the handful it draws overlap; a time scale spaces them out properly.
     const datasets = SERIES.map(function (item) {
       return {
         label: item.label + (item.unit ? ' (' + item.unit + ')' : ''),
-        data: (data.points || []).map((point) => point.v[item.id]),
+        data: points.map(function (point) {
+          const value = point.v[item.id];
+          return { x: new Date(point.t).getTime(), y: value === null || value === undefined ? null : value };
+        }),
         borderColor: item.color,
         backgroundColor: item.color,
         yAxisID: item.axis === 'mains' ? 'yMains' : 'yClimate',
         spanGaps: false,
         tension: 0.15,
-        pointRadius: data.points.length > 200 ? 0 : 2,
+        pointRadius: points.length > 200 ? 0 : 2,
         borderWidth: 2,
       };
     });
 
     const config = {
       type: 'line',
-      data: { labels: labels, datasets: datasets },
+      data: { datasets: datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -962,6 +967,13 @@
         },
         scales: {
           x: {
+            type: 'time',
+            time: {
+              // The bucket endpoint returns UTC instants; render them in the
+              // operator's own timezone so the axis matches the range inputs.
+              tooltipFormat: 'dd/MM/yyyy HH:mm',
+              displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'dd/MM HH:mm' },
+            },
             ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0 },
             grid: { display: false },
           },

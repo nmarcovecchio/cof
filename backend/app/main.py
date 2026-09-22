@@ -100,13 +100,19 @@ def parse_telemetry_range(default_hours: int = 24):
     def parse(raw):
         if not raw:
             return None
-        raw = raw.strip()
+        candidate = raw.strip()
         # A UTC offset arrives as "+00:00" and a query string decodes "+" as a
         # space, so an unencoded timestamp reaches us as " 00:00". Accept that
         # rather than rejecting the range with a confusing format error.
-        candidate = raw
         if candidate.endswith(" 00:00"):
             candidate = candidate[: -len(" 00:00")] + "+00:00"
+        # JavaScript's Date.prototype.toISOString() - which is what the chart
+        # sends - always emits a trailing "Z" and milliseconds. Python 3.10's
+        # fromisoformat accepts neither, so normalise both before parsing:
+        # otherwise every range the chart asks for comes back as HTTP 400 and
+        # the graph renders empty.
+        if candidate.endswith(("Z", "z")):
+            candidate = candidate[:-1] + "+00:00"
         try:
             value = datetime.fromisoformat(candidate)
         except ValueError:
