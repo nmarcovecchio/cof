@@ -233,6 +233,49 @@ Queda pendiente decidir si la tabla de crudo vuelve **generada desde los alias**
 (no columnas fijas) con paginacion, para inspeccionar valores exactos sin bajar
 el CSV.
 
+### 9i. Apagon invisible en el grafico — RESUELTO
+
+Con el equipo apagado varias horas, el grafico unia los puntos a ambos lados
+como si nunca hubiera dejado de reportar. La causa no era la distancia entre
+puntos: era que **`bucket_rows` solo emitia los buckets que tenian filas**
+(`for slot in sorted(buckets)`, y `buckets` solo se poblaba con
+`setdefault(slot, {})` al aparecer una muestra). Los slots del apagon nunca se
+creaban, asi que ningun `null` llegaba al renderer y `spanGaps: false` no tenia
+nada que cortar. Con `type: 'time'` Chart.js interpola por posicion en el eje X,
+de modo que la linea cruzaba el hueco en diagonal.
+
+Arreglado con `_fill_gaps()`: emite los buckets faltantes entre la primera y la
+ultima lectura. Los bordes no se rellenan (no se inventa tiempo antes de la
+primera lectura ni despues de la ultima, y un rango entero sin datos sigue
+vacio).
+
+Umbral `_GAP_MIN_EMPTY_BUCKETS = 3`: un hueco menor a 3 buckets se deja
+puenteado, para que un salto de una lectura no ensucie el grafico. **3 es un
+valor inicial a calibrar**: un equipo configurado a 300 s (el maximo) puede dejar
+un bucket vacio por desfasaje de reloj, y uno o dos de esos no deben leerse como
+apagon.
+
+**Limite del feature, medido y aceptado**: no se puede representar un apagon mas
+corto que el bucket, y el bucket lo fija el ancho del rango.
+
+| Rango | Bucket | Detecta apagones de |
+|---|---|---|
+| 24 h | 300 s | > 15 min |
+| 7 d | 3600 s | > 3 h |
+| 30 d | 21600 s | > 18 h |
+
+O sea: un apagon de 12 h se ve en 24 h pero **desaparece** al mirar el mismo
+periodo en 30 dias (2 buckets de 6 h, debajo del umbral). Cubrir eso requiere un
+tramo punteado/gris propio, que se decidio no hacer por ahora.
+
+El **CSV no cambia**: sigue siendo una fila por muestra real, sin filas de
+relleno. El grafico rellena, el CSV es el crudo. Verificado que no quedan filas
+con `-`.
+
+Impacto medido: 24 h con un apagon de 4 h -> 281 puntos (51 nulos, 2 cortes, el
+mayor de 4.00 h). 30 dias a resolucion de 6 h -> ~120 puntos, muy por debajo del
+cap de 50k filas, asi que no hay riesgo de inflar el payload.
+
 ### 9d. Borrado de historial por alias — NO implementado
 
 Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda

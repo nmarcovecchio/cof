@@ -49,6 +49,25 @@ _BUCKETS = (
     (timedelta(days=40), 21600),  # up to 40 d -> 6 h
 )
 
+# A sensor window in the chart is a line whose X positions are real timestamps,
+# so Chart.js draws a straight segment between two consecutive points whatever
+# the time between them. Emitting only the buckets that carry samples therefore
+# hides an outage: the line bridges the gap as if the device had kept reporting,
+# because no null ever reaches the renderer to trip `spanGaps: false`.
+#
+# Filling the empty buckets fixes that, but filling *every* one would cut the
+# line on any single missed reading (a 60 s cadence with a 300 s bucket leaves
+# gaps all the time). So a gap only becomes a visible break once it lasts
+# _GAP_MIN_EMPTY_BUCKETS buckets, and shorter gaps stay bridged.
+#
+# Note this bounds the resolution of the feature: an outage shorter than the
+# bucket is invisible by construction. Over 30 days the bucket is 6 h, so a two
+# hour outage cannot be represented at that zoom regardless of this threshold.
+# 3 is a starting value; a device configured at the 300 s maximum cadence can
+# leave a stray empty bucket from clock skew alone, and one or two of those
+# should not read as an outage.
+_GAP_MIN_EMPTY_BUCKETS = 3
+
 
 def _as_float(value):
     """Return a float, or None when the value is not usable as a number."""
@@ -237,6 +256,43 @@ def bucket_seconds(from_dt: datetime, to_dt: datetime) -> int:
     return _BUCKETS[-1][1]
 
 
+def _empty_point(slot: int, series: list[dict]) -> dict:
+    """A bucket with no reading for any series."""
+    return {"t": _iso_utc(datetime.fromtimestamp(slot, tz=timezone.utc)), "v": {item["id"]: None for item in series}}
+
+
+def _fill_gaps(points: list[dict], series: list[dict], resolution: int) -> list[dict]:
+    """Insert null buckets so a long silence breaks the line instead of bridging it.
+
+    Only the space *between* the first and last point is filled: the chart should
+    not claim the device was up (or down) before it ever reported, nor after it
+    stopped. That also means a range whose whole span is empty stays empty.
+
+    Gaps shorter than ``_GAP_MIN_EMPTY_BUCKETS`` buckets are left alone, so the
+    line stays continuous across a single missed reading and the cut only means
+    something when it appears.
+    """
+    if len(points) < 2:
+        return points
+
+    resolution = max(int(resolution or 60), 1)
+    out: list[dict] = []
+    for previous, current in zip(points, points[1:]):
+        out.append(previous)
+        previous_epoch = _parse_iso_epoch(previous.get("t"))
+        current_epoch = _parse_iso_epoch(current.get("t"))
+        if previous_epoch is None or current_epoch is None:
+            continue
+        missing = (current_epoch - previous_epoch) // resolution - 1
+        if missing < _GAP_MIN_EMPTY_BUCKETS:
+            # Too short to mean an outage; leave it bridged.
+            continue
+        for step in range(1, missing + 1):
+            out.append(_empty_point(previous_epoch + step * resolution, series))
+    out.append(points[-1])
+    return out
+
+
 def bucket_rows(rows, series: list[dict], resolution: int):
     """Average the samples into fixed-size buckets for charting.
 
@@ -302,15 +358,9 @@ def bucket_rows(rows, series: list[dict], resolution: int):
         for item in series:
             samples = accumulator.get(item["id"]) or []
             values[item["id"]] = round(sum(samples) / len(samples), 2) if samples else None
-        points.append(
-            {
-                "t": datetime.fromtimestamp(slot, tz=timezone.utc)
-                .replace(tzinfo=None)
-                .isoformat()
-                + "Z",
-                "v": values,
-            }
-        )
+        points.append({"t": _iso_utc(datetime.fromtimestamp(slot, tz=timezone.utc)), "v": values})
+
+    points = _fill_gaps(points, series, resolution)
 
     # Flag which sensors actually reported anywhere in the range.
     for item in series:
