@@ -38,7 +38,7 @@ from .alarms import (
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
-from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
+from .models import Device, DeviceConfig, Event, SensorWindow, Site, Telemetry, Tenant
 from .mqtt_util import publish_mqtt, publish_mqtt_raw
 from .notify import send_email, send_telegram
 from .phones import is_e164_phone, join_values, normalize_phone, parse_telegram_chats
@@ -48,7 +48,8 @@ from .telemetry_series import (
     bucket_seconds,
     extract_aux_values,
     extract_value,
-    series_for_device,
+    series_for_range,
+    windows_for_range,
 )
 from .tts import MAX_TEXT_CHARS
 
@@ -100,8 +101,14 @@ def parse_telemetry_range(default_hours: int = 24):
         if not raw:
             return None
         raw = raw.strip()
+        # A UTC offset arrives as "+00:00" and a query string decodes "+" as a
+        # space, so an unencoded timestamp reaches us as " 00:00". Accept that
+        # rather than rejecting the range with a confusing format error.
+        candidate = raw
+        if candidate.endswith(" 00:00"):
+            candidate = candidate[: -len(" 00:00")] + "+00:00"
         try:
-            value = datetime.fromisoformat(raw)
+            value = datetime.fromisoformat(candidate)
         except ValueError:
             return "invalid"
         if value.tzinfo is not None:
@@ -140,16 +147,17 @@ def telemetry_rows_for(device, from_dt, to_dt, limit):
     return rows[:limit], truncated
 
 
-def device_telemetry_series(device):
-    """Chartable series for a device, from its stored sensor configuration."""
-    try:
-        cfg = latest_config_payload(device)
-    except Exception:
-        app.logger.exception("latest_config_payload failed device=%s", device.device_uid)
-        cfg = {}
-    if isinstance(cfg, dict):
-        cfg = ensure_payload_keys(ensure_network_sensors(cfg))
-    return series_for_device(cfg)
+def device_sensor_windows(device):
+    """Every sensor window for a device, in effect order."""
+    return (
+        SensorWindow.query.filter_by(device_id=device.id)
+        .order_by(SensorWindow.starts_at.asc(), SensorWindow.id.asc())
+        .all()
+    )
+
+
+def active_windows(device):
+    return [w for w in device_sensor_windows(device) if w.ends_at is None]
 
 
 def cellular_signal(csq):
@@ -834,7 +842,11 @@ def create_app() -> Flask:
             contacts=resolve_contacts(device, latest_config_payload(device)),
             modem_jobs=active_modem_jobs(device),
             alarm_state=alarm_state,
-            telemetry_series=device_telemetry_series(device),
+            telemetry_series=series_for_range(
+                device_sensor_windows(device),
+                datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24),
+                datetime.now(timezone.utc).replace(tzinfo=None),
+            ),
             telemetry_max_days=TELEMETRY_MAX_RANGE_DAYS,
         )
 
@@ -845,7 +857,7 @@ def create_app() -> Flask:
         from_dt, to_dt, error = parse_telemetry_range()
         if error:
             return jsonify({"error": error}), 400
-        series = device_telemetry_series(device)
+        series = series_for_range(device_sensor_windows(device), from_dt, to_dt)
         rows, truncated = telemetry_rows_for(device, from_dt, to_dt, TELEMETRY_CHART_MAX_ROWS)
         resolution = bucket_seconds(from_dt, to_dt)
         points, total = bucket_rows(rows, series, resolution)
@@ -869,7 +881,7 @@ def create_app() -> Flask:
         from_dt, to_dt, error = parse_telemetry_range()
         if error:
             return error, 400, {"Content-Type": "text/plain; charset=utf-8"}
-        series = device_telemetry_series(device)
+        series = series_for_range(device_sensor_windows(device), from_dt, to_dt)
         rows, truncated = telemetry_rows_for(device, from_dt, to_dt, TELEMETRY_CSV_MAX_ROWS)
         if truncated:
             return (
@@ -899,6 +911,48 @@ def create_app() -> Flask:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
         return response
+
+    @app.post("/devices/<device_uid>/sensors/<int:window_id>/close")
+    @login_required
+    def device_sensor_close(device_uid, window_id):
+        """Stop recording a sensor. The history stays, it just stops growing."""
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        window = SensorWindow.query.filter_by(id=window_id, device_id=device.id).first_or_404()
+        if window.ends_at is None:
+            window.ends_at = datetime.now(timezone.utc)
+            window.closed_reason = "retired"
+            db.session.commit()
+        return redirect(url_for("device_config", device_uid=device.device_uid))
+
+    @app.post("/devices/<device_uid>/sensors/<int:window_id>/reassign")
+    @login_required
+    def device_sensor_reassign(device_uid, window_id):
+        """Move a sensor to a new role: close its window, open one with a new alias.
+
+        The probe keeps reading the same payload field, so closing the old
+        window is what stops the two aliases from both claiming the new samples.
+        """
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        window = SensorWindow.query.filter_by(id=window_id, device_id=device.id).first_or_404()
+        alias = (request.form.get("alias") or "").strip()
+        if not alias:
+            return redirect(url_for("device_config", device_uid=device.device_uid))
+        now = datetime.now(timezone.utc)
+        if window.ends_at is None:
+            window.ends_at = now
+            window.closed_reason = "reassigned"
+        db.session.add(
+            SensorWindow(
+                device_id=device.id,
+                sensor_id=window.sensor_id,
+                alias=alias,
+                payload_key=window.payload_key,
+                sensor_type=window.sensor_type,
+                starts_at=now,
+            )
+        )
+        db.session.commit()
+        return redirect(url_for("device_config", device_uid=device.device_uid))
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
     @login_required
@@ -1620,6 +1674,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         telemetry_max=TELEMETRY_INTERVAL_MAX_SECONDS,
         live_seconds=DEVICE_LIVE_SECONDS,
         inert_sensors=inert_sensors,
+        sensor_windows=device_sensor_windows(device),
     )
 
 

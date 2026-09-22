@@ -98,6 +98,50 @@
           {% endfor %}
         </tbody>
       </table>
+      {% if sensor_windows %}
+      <div class="table-responsive border-top">
+        <table class="table table-sm mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Alias</th>
+              <th>Campo</th>
+              <th>Vigencia</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for w in sensor_windows %}
+            <tr>
+              <td>{{ w.alias }}</td>
+              <td><code>{{ w.payload_key }}</code></td>
+              <td class="small text-muted">
+                desde {{ w.starts_at|datetime_local }}
+                {% if w.ends_at %}hasta {{ w.ends_at|datetime_local }}{% else %}<span class="badge bg-success">activo</span>{% endif %}
+              </td>
+              <td class="text-end">
+                {% if w.ends_at is none %}
+                <form method="post" action="{{ url_for('device_sensor_reassign', device_uid=device.device_uid, window_id=w.id) }}" class="d-inline">
+                  {{ csrf_field() }}
+                  <input type="text" name="alias" class="form-control form-control-sm d-inline-block" style="width: 12rem;" placeholder="Nuevo alias">
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Reasignar</button>
+                </form>
+                <form method="post" action="{{ url_for('device_sensor_close', device_uid=device.device_uid, window_id=w.id) }}" class="d-inline"
+                      onsubmit="return confirm('Dejar de registrar {{ w.alias }}? El historial ya guardado no se borra.');">
+                  {{ csrf_field() }}
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">Cerrar</button>
+                </form>
+                {% else %}
+                <span class="small text-muted">
+                  {{ 'reasignado' if w.closed_reason == 'reassigned' else 'cerrado' }}
+                </span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
     </div>
     <div class="card-footer small text-muted">
       El <strong>alias</strong> es el nombre que vas a ver en el grafico y en el CSV, y se mantiene aunque el sensor se desconecte:

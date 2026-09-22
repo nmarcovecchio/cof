@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint
 
 from .extensions import db
 
@@ -66,6 +66,7 @@ class Device(db.Model):
     telemetry = db.relationship("Telemetry", back_populates="device", cascade="all, delete-orphan")
     events = db.relationship("Event", back_populates="device", cascade="all, delete-orphan")
     modem_jobs = db.relationship("DeviceModemJob", back_populates="device", cascade="all, delete-orphan")
+    sensor_windows = db.relationship("SensorWindow", back_populates="device", cascade="all, delete-orphan")
 
 
 class DeviceConfig(db.Model):
@@ -106,6 +107,46 @@ class Telemetry(db.Model):
     __table_args__ = (db.Index("ix_telemetry_device_received", "device_id", "received_at"),)
 
     device = db.relationship("Device", back_populates="telemetry")
+
+
+class SensorWindow(db.Model):
+    """A sensor's alias for a period of time - who it was and where it read from.
+
+    A sensor has a physical identity (``sensor_id``, i.e. the pin it is wired
+    to) that outlives its role. The same probe can monitor camera A, then be
+    moved to camera B; the reading keeps arriving on the same payload field, so
+    the alias is the only thing that says what it means right now.
+
+    ``ends_at`` null means the window is open (currently recording). Closing it
+    freezes the history instead of losing it: the closed window keeps its alias
+    over its own stretch, and a new window can then take over the same
+    ``payload_key`` with a different name without the two being confused.
+
+    This is deliberately a table rather than a field inside
+    ``DeviceConfig.desired_payload``. That payload is pruned to the last few
+    versions when the device page renders it, so a window stored there would
+    vanish and take a historical alias with it.
+    """
+
+    __tablename__ = "sensor_windows"
+
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey("devices.id"), nullable=False, index=True)
+    sensor_id = db.Column(db.String(80), nullable=False)
+    alias = db.Column(db.String(160), nullable=False)
+    payload_key = db.Column(db.String(80), nullable=False)
+    sensor_type = db.Column(db.String(40), nullable=True)
+    starts_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    ends_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    closed_reason = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    device = db.relationship("Device", back_populates="sensor_windows")
+
+    __table_args__ = (
+        # Every range query filters by device and then tests for overlap.
+        Index("ix_sensor_windows_device_span", "device_id", "starts_at", "ends_at"),
+    )
 
 
 class DeviceModemJob(db.Model):

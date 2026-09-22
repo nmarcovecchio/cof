@@ -151,8 +151,40 @@ El firmware publica `doc["mains_voltage"] = nullptr` y solo manda `zmpt_raw`
 - El grafico de la linea de 220V muestra el ADC crudo, rotulado como tal.
 
 Falta calcular RMS en el firmware para tener voltios reales. El backend ya lo
-soporta sin tocar codigo: alcanza con cambiar el `payload_key` del sensor
+soporta sin tocar codigo: alcanza con reasignar el `payload_key` de la ventana
 `mains_1` de `zmpt_raw` a `mains_voltage` desde el formulario de config.
+
+### 9d. Borrado de historial por alias — NO implementado
+
+Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda
+bajo el alias anterior y el nuevo empieza a acumular. Falta poder **borrar el
+historial de un alias** ("ya no voy a loggear mas en esta camara").
+
+Depende de `SensorWindow` (ver `docs/ROADMAP.md`): el alias no es una unidad de
+almacenamiento, porque dos alias pueden leer el mismo `payload_key`. Lo unico
+que los separa es la **ventana** `[starts_at, ends_at)`. Entonces:
+
+- Borrar "el historial de Camara A" = `DELETE` del crudo en
+  `[starts_at, ends_at)`, **no** todas las filas con ese `payload_key` (eso
+  borraria tambien el de Camara B).
+- Si dos ventanas se solapan en el tiempo con el mismo `payload_key`, hay que
+  avisarlo en la confirmacion, porque el borrado se va a llevar datos de las dos.
+- Decisiones tomadas para cuando se implemente: alcance = **todo el historial de
+  ese alias**, y confirmacion **escribiendo el nombre** (no un clic).
+- Ya existe el boton **Cerrar** (deja de registrar sin borrar). El borrado es la
+  operacion destructiva y va aparte.
+
+### 9e. Reset de config desde el panel — NO implementado
+
+Pedido para poder rearmar sensores y alias desde cero. Alcance acordado: reset
+de **config** (vuelve a los sensores por defecto y cierra las ventanas abiertas)
+**sin borrar telemetria**. Va en la card de Sensores de la config del equipo.
+
+Ojo: hoy no se puede editar la config **desde ningun lado** — no hay endpoint
+POST para el JSON (se descubrio al escribir el plan de las ventanas). Antes de
+que el reset sea util, el panel tiene que poder **crear** config, no solo
+resetearla. Un reset tiene que ademas **cerrar las ventanas abiertas** y abrir
+las nuevas, o las ventanas viejas seguirian reclamando las muestras nuevas.
 
 ---
 

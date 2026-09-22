@@ -1,15 +1,15 @@
 """Telemetry chart/export helpers.
 
-Sensors are per-device configuration (``cfg["sensors"]``), each with a ``name``
-(the alias the operator sees), a ``type``, a ``source`` and - since this module
-was added - a ``payload_key`` telling us which field of the telemetry frame
-carries the reading.
+The series a chart shows come from ``SensorWindow`` rows, not from the device
+config. A window is a sensor's *alias* over a period: it says the probe wired
+to ``sensor_id`` was called "Camera A" from January to September, and "Camera B"
+after that, reading ``temperature_1`` the whole time.
 
-The alias is what gives a sensor a stable identity across a disconnect. A
-sensor that goes away keeps its row in the config, so its line and its CSV
-column stay in place - just empty for the period it was not reporting - and
-when the hardware comes back the same series starts filling again. Nothing has
-to be reconfigured and no historical range silently loses a column.
+That indirection is what makes reassigning a sensor honest. The reading keeps
+arriving on the same payload field, so without the window the chart would draw
+one continuous line whose meaning silently changed halfway. With it, a range
+that spans the hand-over returns two series - one per alias - each owning only
+its own stretch, and a retired sensor keeps its column in a historical export.
 
 This lives in the payload rather than in the promoted columns on purpose: the
 table only has temperature_1/2, humidity and water_leak, so a renamed or added
@@ -17,21 +17,13 @@ sensor has no column at all (see models.Telemetry).
 
 The mains case is special: the firmware publishes ``mains_voltage`` as null
 (``firmware/src/mqtt_io.cpp``) and the only real reading is the raw ADC value
-``zmpt_raw``, which is what ``mains_1``'s payload_key points at. It is labelled
-as uncalibrated when plotted.
+``zmpt_raw``, which is what a ``mains_1`` window points at. It is labelled as
+uncalibrated when plotted.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-
-# Fallback payload keys by sensor type, for sensors with no payload_key (a
-# config stored before the field existed whose id we do not recognise).
-FALLBACK_KEYS_BY_TYPE = {
-    "temperature": ("temperature_1", "temperature_2", "temp_1", "temp_2"),
-    "humidity": ("humidity", "humidity_1"),
-    "mains_voltage": ("zmpt_raw", "mains_voltage"),
-}
 
 # Types that are present in the config but make no sense as a chart line.
 _NON_PLOT_TYPES = {"relay", "digital", "boolean", ""}
@@ -72,75 +64,112 @@ def _as_float(value):
     return None
 
 
-def payload_keys_for(sensor: dict) -> tuple:
-    """Ordered payload keys a configured sensor's reading may live under.
-
-    The explicit ``payload_key`` wins: it is what the operator sees and what
-    survives a rename. Only when it is missing do we fall back to the type,
-    which is inherently ambiguous between two probes of the same type - so it
-    is a compatibility path, not the normal one.
-    """
-    key = str(sensor.get("payload_key") or "").strip()
-    if key:
-        return (key,)
-    return FALLBACK_KEYS_BY_TYPE.get(str(sensor.get("type") or "").strip(), ())
-
-
-def is_plottable(sensor: dict) -> bool:
-    if str(sensor.get("type") or "").strip() in _NON_PLOT_TYPES:
+def is_plottable(window) -> bool:
+    sensor_type = str(getattr(window, "sensor_type", "") or "").strip()
+    if sensor_type in _NON_PLOT_TYPES:
         return False
     # Connectivity sensors are plain 1/0 flags; they are exported to CSV, not
     # drawn as a line.
-    if str(sensor.get("source") or "").startswith("network_"):
+    if str(getattr(window, "payload_key", "") or "").startswith("network_"):
         return False
-    if not str(sensor.get("id") or "").strip():
-        return False
-    return bool(payload_keys_for(sensor))
+    return bool(str(getattr(window, "payload_key", "") or "").strip())
 
 
-def series_for_device(cfg: dict) -> list[dict]:
-    """Chartable series for a device, derived from its own sensor config.
+def _label_and_axis(window) -> tuple[str, str, str, str]:
+    """(label, unit, axis, note) for a window, by sensor type."""
+    sensor_type = str(getattr(window, "sensor_type", "") or "").strip()
+    alias = str(getattr(window, "alias", "") or getattr(window, "sensor_id", "") or "")
+    if sensor_type == "mains_voltage":
+        return alias or "Red electrica", "ADC", "mains", "ADC crudo, sin calibrar"
+    if sensor_type == "humidity":
+        return alias, "%", "climate", ""
+    if sensor_type == "temperature":
+        return alias, "\u00b0C", "climate", ""
+    return alias, "", "climate", ""
 
-    Every configured sensor yields a series whether or not it is currently
-    reporting, so a disconnected probe keeps its place (and its CSV column)
-    instead of vanishing from a historical range.
+
+def _parse_iso_epoch(value):
+    """Epoch seconds for an ISO string (as serialised into a series), or None."""
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def _to_epoch(value):
+    """Epoch seconds from a datetime, an ISO string or an epoch, or None."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    if isinstance(value, (int, float)):
+        return int(value)
+    return _parse_iso_epoch(value)
+
+
+def window_covers(window, from_dt, to_dt) -> bool:
+    """Whether a sensor window overlaps the requested range at all.
+
+    Both bounds are compared as epochs so the caller can pass either datetimes
+    or the ISO strings carried in a serialised series.
     """
-    sensors = cfg.get("sensors") if isinstance(cfg, dict) else None
+    starts = _to_epoch(getattr(window, "starts_at", None))
+    ends = _to_epoch(getattr(window, "ends_at", None))
+    range_start = _to_epoch(from_dt)
+    range_end = _to_epoch(to_dt)
+    if starts is None or range_start is None or range_end is None:
+        return False
+    if starts > range_end:
+        return False
+    if ends is not None and ends < range_start:
+        return False
+    return True
+
+
+def windows_for_range(windows, from_dt, to_dt) -> list:
+    """The sensor windows that were in effect at some point inside the range.
+
+    This is what makes a reassignment honest: asking for a range that spans the
+    hand-over returns both the old alias and the new one, each owning its own
+    stretch, instead of one series carrying two different meanings.
+    """
+    selected = [w for w in windows if is_plottable(w) and window_covers(w, from_dt, to_dt)]
+    selected.sort(key=lambda w: (_to_epoch(getattr(w, "starts_at", None)) or 0, getattr(w, "id", 0) or 0))
+    return selected
+
+
+def series_for_range(windows, from_dt, to_dt) -> list[dict]:
+    """Chartable series for a device, from the sensor windows active in a range.
+
+    Every selected window becomes its own series whether or not it is currently
+    reporting, so a sensor that was disconnected - or retired - keeps its place
+    (and its CSV column) instead of vanishing from a historical range.
+    """
     series = []
-    for sensor in sensors or []:
-        if not isinstance(sensor, dict) or not is_plottable(sensor):
-            continue
-        sensor_type = str(sensor.get("type") or "").strip()
-        sensor_id = str(sensor.get("id") or "").strip()
-        if sensor_type == "mains_voltage":
-            unit = "ADC"
-            axis = "mains"
-            label = sensor.get("name") or "Red electrica"
-            note = "ADC crudo, sin calibrar"
-        elif sensor_type == "humidity":
-            unit = "%"
-            axis = "climate"
-            label = sensor.get("name") or sensor_id
-            note = ""
-        elif sensor_type == "temperature":
-            unit = "\u00b0C"
-            axis = "climate"
-            label = sensor.get("name") or sensor_id
-            note = ""
-        else:
-            unit = ""
-            axis = "climate"
-            label = sensor.get("name") or sensor_id
-            note = ""
+    for window in windows_for_range(windows, from_dt, to_dt):
+        label, unit, axis, note = _label_and_axis(window)
         series.append(
             {
-                "id": sensor_id,
+                # Two windows can share a sensor_id (before/after a
+                # reassignment), so the series is keyed by the window id, which
+                # is unique.
+                "id": f"w{window.id}",
+                "sensor_id": str(getattr(window, "sensor_id", "") or ""),
                 "label": label,
                 "unit": unit,
                 "axis": axis,
                 "note": note,
-                "type": sensor_type,
-                "keys": list(payload_keys_for(sensor)),
+                "type": str(getattr(window, "sensor_type", "") or ""),
+                "keys": [str(getattr(window, "payload_key", "") or "")],
+                "starts_at": getattr(window, "starts_at", None).isoformat() + "Z"
+                if getattr(window, "starts_at", None)
+                else None,
+                "ends_at": getattr(window, "ends_at", None).isoformat() + "Z"
+                if getattr(window, "ends_at", None)
+                else None,
+                "closed": getattr(window, "ends_at", None) is not None,
                 "has_data": False,  # filled in by bucket_rows
             }
         )
@@ -182,25 +211,43 @@ def bucket_rows(rows, series: list[dict], resolution: int):
     ``{"t": iso8601, "v": {series_id: value | None}}``. A bucket with no usable
     value for a series stays None, so the chart shows a gap instead of a zero.
 
+    A sample only counts towards a series whose window covers that instant.
+    Without this an alias would keep plotting readings taken outside its own
+    validity - so after moving a probe from camera A to camera B, A would still
+    show B's temperatures.
+
     Each series is also flagged ``has_data`` in place: a sensor that reported
-    nothing across the whole range is disconnected, not merely sparse, and the
-    UI says so instead of drawing an invisible flat line.
+    nothing across the whole range is disconnected or retired, not merely
+    sparse, and the UI says so instead of drawing an invisible flat line.
     """
     resolution = max(int(resolution or 60), 1)
     total = len(rows)
     if not rows:
         return [], 0
 
+    # Per-series epoch bounds, so the inner loop stays cheap.
+    spans = {}
+    for item in series:
+        spans[item["id"]] = (
+            _parse_iso_epoch(item.get("starts_at")),
+            _parse_iso_epoch(item.get("ends_at")),
+        )
+
     buckets: dict[int, dict[str, list[float]]] = {}
     for row in rows:
         received_at = row.received_at
         if received_at is None:
             continue
-        epoch = int(received_at.timestamp())
-        slot = epoch - (epoch % resolution)
+        at = int(received_at.timestamp())
+        slot = at - (at % resolution)
         accumulator = buckets.setdefault(slot, {})
         payload = row.payload if isinstance(row.payload, dict) else {}
         for item in series:
+            starts, ends = spans[item["id"]]
+            if starts is not None and at < starts:
+                continue
+            if ends is not None and at > ends:
+                continue
             value = extract_value(payload, item)
             if value is None:
                 continue

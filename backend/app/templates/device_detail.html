@@ -892,6 +892,7 @@
       label.innerHTML = '<span style="color:' + item.color + '">&#9632;</span> '
         + item.label + (item.unit ? ' (' + item.unit + ')' : '')
         + (item.note ? ' <span class="text-muted">&mdash; ' + item.note + '</span>' : '')
+        + (item.closed ? ' <span class="badge bg-dark" title="Este sensor dejo de registrar; el historial queda">cerrado</span>' : '')
         + (item.has_data ? '' : ' <span class="badge bg-secondary">sin datos en el rango</span>');
       wrapper.appendChild(input);
       wrapper.appendChild(label);
@@ -900,16 +901,16 @@
   }
 
   function refreshPicker(data) {
-    // A configured sensor that reported nothing across the range is shown
-    // explicitly rather than as an invisible flat line - usually a probe that
-    // is disconnected, which is worth surfacing on a cold-chain panel.
-    const byId = {};
-    (data.series || []).forEach(function (item) { byId[item.id] = item; });
+    // A sensor that reported nothing across the range is shown explicitly
+    // rather than as an invisible flat line - usually a probe that is
+    // disconnected or was retired, which is worth surfacing on a cold-chain
+    // panel.
     (data.series || []).forEach(function (item) {
       const input = document.getElementById('series-' + item.id);
       if (!input) return;
       const label = input.nextElementSibling;
-      const badge = label ? label.querySelector('.badge') : null;
+      if (!label) return;
+      const badge = label.querySelector('.badge.bg-secondary');
       if (item.has_data && badge) badge.remove();
       if (!item.has_data && !badge) {
         const span = document.createElement('span');

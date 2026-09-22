@@ -1,6 +1,6 @@
 from .extensions import db
 from .main import create_app
-from .models import Device, Site, Tenant
+from .models import Device, Site, Tenant, utcnow
 from sqlalchemy import inspect, text
 
 
@@ -76,12 +76,64 @@ def ensure_seed_data():
     db.session.commit()
 
 
+def ensure_sensor_windows():
+    """Give every device with a config one open window per configured sensor.
+
+    Devices predate the table, so without this backfill their chart would be
+    empty. Each window starts at the device's first stored sample (so the whole
+    existing history is attributed to it) and is left open - the operator closes
+    or reassigns it from the panel.
+
+    Idempotent: a device that already has any window is skipped, so re-running
+    this on every boot never duplicates or reopens anything.
+    """
+    from .models import Device, DeviceConfig, SensorWindow, Telemetry
+
+    query = DeviceConfig.query.order_by(DeviceConfig.device_id, DeviceConfig.version.desc())
+    latest_by_device: dict[int, DeviceConfig] = {}
+    for config in query:
+        latest_by_device.setdefault(config.device_id, config)
+
+    for device_id, config in latest_by_device.items():
+        if SensorWindow.query.filter_by(device_id=device_id).first() is not None:
+            continue
+        payload = config.desired_payload if isinstance(config.desired_payload, dict) else {}
+        sensors = payload.get("sensors") or []
+        if not sensors:
+            continue
+        first = (
+            Telemetry.query.filter_by(device_id=device_id)
+            .order_by(Telemetry.received_at.asc())
+            .first()
+        )
+        starts_at = first.received_at if first and first.received_at else utcnow()
+        for sensor in sensors:
+            if not isinstance(sensor, dict):
+                continue
+            sensor_id = str(sensor.get("id") or "").strip()
+            payload_key = str(sensor.get("payload_key") or sensor.get("source") or "").strip()
+            if not sensor_id or not payload_key:
+                continue
+            db.session.add(
+                SensorWindow(
+                    device_id=device_id,
+                    sensor_id=sensor_id,
+                    alias=str(sensor.get("name") or sensor_id),
+                    payload_key=payload_key,
+                    sensor_type=str(sensor.get("type") or ""),
+                    starts_at=starts_at,
+                )
+            )
+    db.session.commit()
+
+
 def main():
     app = create_app()
     with app.app_context():
         db.create_all()
         ensure_schema_columns()
         ensure_seed_data()
+        ensure_sensor_windows()
         print("Database initialized")
 
 

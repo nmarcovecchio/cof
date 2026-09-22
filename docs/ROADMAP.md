@@ -70,26 +70,40 @@ prometiendo el reporte PDF.
 - **Que hay:** en `/devices/<uid>` la card de Telemetria tiene un grafico
   (Chart.js, CDN) con selector de rango (24 h / 7 d / 30 d o fechas a mano) y un
   boton **Exportar CSV** que baja cada muestra del rango.
-- **Series:** se derivan de `cfg.sensors` del equipo. Cada sensor tiene un
-  **alias** (`name`, lo que ve el operador) y un **`payload_key`** (la clave del
-  frame del firmware donde esta el valor, ej. `humidity`, `temperature_1`,
-  `zmpt_raw`). Ver `backend/app/telemetry_series.py`.
-- **Sensor desconectado:** el alias es la identidad estable del sensor. Si un
-  sensor deja de reportar, su fila sigue en la config, asi que **la linea y la
-  columna del CSV siguen existiendo** - vacias en ese periodo - y cuando se
-  reconecta la misma serie vuelve a llenarse. No hay que reconfigurar nada y
-  ningun rango historico pierde una columna. La UI marca el sensor como
-  "sin datos en el rango" cuando no reporto nada en el periodo pedido.
-  El boton de quitar sensor solo lo saca de la config: **no borra historial**.
+- **Series:** salen de los **alias con vigencia** (`SensorWindow`), no de la
+  config del equipo. Cada ventana dice que el sensor enchufado en `sensor_id`
+  se llamo "Camara A" desde enero hasta septiembre, y "Camara B" despues, leyendo
+  `payload_key` todo el tiempo. Ver `backend/app/telemetry_series.py`.
+- **Reasignar un sensor (camara A -> camara B):** desde la config, boton
+  **Reasignar** en la fila de vigencia. Cierra la ventana anterior y abre una
+  nueva con el alias nuevo. Un rango que cruza el cambio devuelve **dos series**
+  ("Camara A" y "Camara B"), cada una con datos solo en su tramo, y **nunca** se
+  mezclan. Un rango anterior al cambio solo muestra "Camara A"; uno posterior,
+  solo "Camara B".
+- **Cerrar un sensor:** boton **Cerrar** cuando ya no se va a registrar mas.
+  Deja de acumular y deja de graficarse, pero **el historial queda** y sigue
+  visible en los rangos en que estuvo activo. Es reversible solo recreando la
+  config; el form no reabre una ventana cerrada.
+- **Sensor desconectado (sin cerrar):** su serie sigue existiendo y el CSV
+  mantiene la columna, vacia en el periodo sin datos. La UI lo marca como
+  "sin datos en el rango". Cuando se reconecta, la misma linea vuelve a
+  llenarse.
 - **Linea de 220V:** el firmware publica `mains_voltage` en `null`
-  (`firmware/src/mqtt_io.cpp`), asi que `mains_1` apunta a `zmpt_raw` y se
-  grafica rotulado como "ADC crudo, sin calibrar". Cuando el firmware calcule
-  RMS, alcanza con cambiar el `payload_key` del sensor a `mains_voltage`.
+  (`firmware/src/mqtt_io.cpp`), asi que la ventana de `mains_1` apunta a
+  `zmpt_raw` y se grafica rotulado como "ADC crudo, sin calibrar". Cuando el
+  firmware calcule RMS, alcanza con reasignar el `payload_key` a
+  `mains_voltage`.
 - **Backend:** `GET /devices/<uid>/telemetry.json` (grafico, con tope de rango y
   promedio por bucket) y `GET /devices/<uid>/telemetry.csv` (sin downsampling,
-  exporta todo). Ambos requieren sesion.
-- **Lo que sigue pendiente:** el PDF propiamente dicho, y la retencion de
-  telemetria (ver `docs/ops/BACKLOG.md`).
+  exporta todo). Cierre y reasignacion por `POST`. Todo requiere sesion.
+- **Migracion:** `ensure_sensor_windows()` en `init_db.py` crea una ventana
+  abierta por sensor configurado en los equipos que no tienen ninguna,
+  arrancando en la primera telemetria guardada. Es idempotente.
+- **Lo que sigue pendiente:** el PDF, la retencion de telemetria, y el
+  **borrado de historial por alias** (que depende de estas ventanas: borrar el
+  historial de "Camara A" = borrar el crudo dentro de `[starts_at, ends_at)`,
+  que es lo unico que lo separa del historial de "Camara B"). Ver
+  `docs/ops/BACKLOG.md`.
 
 ---
 
