@@ -23,7 +23,7 @@ uncalibrated when plotted.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Types that are present in the config but make no sense as a chart line.
 _NON_PLOT_TYPES = {"relay", "digital", "boolean", ""}
@@ -88,22 +88,59 @@ def _label_and_axis(window) -> tuple[str, str, str, str]:
     return alias, "", "climate", ""
 
 
+def _iso_utc(value) -> str | None:
+    """Serialise a datetime as an ISO-8601 UTC instant ending in ``Z``.
+
+    Postgres hands back timezone-aware datetimes while SQLite (and some fixture
+    paths) give naive ones. ``value.isoformat() + "Z"`` is wrong for the aware
+    case: it produces ``...+00:00Z``, which is not parseable, and the failure
+    was silent - the window filter then saw a null bound and stopped applying
+    entirely. Normalise to UTC first and only then append the suffix.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            # Stored timestamps are UTC by convention; treat naive as UTC rather
+            # than letting the local timezone shift the instant.
+            value = value.replace(tzinfo=timezone.utc)
+        value = value.astimezone(timezone.utc)
+        return value.replace(tzinfo=None).isoformat() + "Z"
+    return str(value)
+
+
 def _parse_iso_epoch(value):
     """Epoch seconds for an ISO string (as serialised into a series), or None."""
     if not value:
         return None
+    text = str(value).strip()
+    # Accept a trailing "Z" the same way parse_telemetry_range does.
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
     try:
-        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
 
 
 def _to_epoch(value):
-    """Epoch seconds from a datetime, an ISO string or an epoch, or None."""
+    """Epoch seconds from a datetime, an ISO string or an epoch, or None.
+
+    Naive datetimes are read as UTC. Using ``datetime.timestamp()`` directly
+    would interpret them in the server's local timezone, so every window
+    comparison would be off by the UTC offset (3 h for Argentina).
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return int(value.timestamp())
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return int(value)
     return _parse_iso_epoch(value)
@@ -163,12 +200,8 @@ def series_for_range(windows, from_dt, to_dt) -> list[dict]:
                 "note": note,
                 "type": str(getattr(window, "sensor_type", "") or ""),
                 "keys": [str(getattr(window, "payload_key", "") or "")],
-                "starts_at": getattr(window, "starts_at", None).isoformat() + "Z"
-                if getattr(window, "starts_at", None)
-                else None,
-                "ends_at": getattr(window, "ends_at", None).isoformat() + "Z"
-                if getattr(window, "ends_at", None)
-                else None,
+                "starts_at": _iso_utc(getattr(window, "starts_at", None)),
+                "ends_at": _iso_utc(getattr(window, "ends_at", None)),
                 "closed": getattr(window, "ends_at", None) is not None,
                 "has_data": False,  # filled in by bucket_rows
             }
@@ -238,15 +271,24 @@ def bucket_rows(rows, series: list[dict], resolution: int):
         received_at = row.received_at
         if received_at is None:
             continue
-        at = int(received_at.timestamp())
+        # Go through the same UTC normalisation as the window bounds: calling
+        # timestamp() on a naive datetime would read it in the server's local
+        # timezone and shift every comparison by the UTC offset, which let a
+        # reassigned alias absorb its predecessor's samples.
+        at = _to_epoch(received_at)
+        if at is None:
+            continue
         slot = at - (at % resolution)
         accumulator = buckets.setdefault(slot, {})
         payload = row.payload if isinstance(row.payload, dict) else {}
         for item in series:
             starts, ends = spans[item["id"]]
+            # Half-open window [starts, ends): at a reassignment A.ends_at equals
+            # B.starts_at, so an inclusive end would count the hand-over sample
+            # in both aliases (and twice in the CSV).
             if starts is not None and at < starts:
                 continue
-            if ends is not None and at > ends:
+            if ends is not None and at >= ends:
                 continue
             value = extract_value(payload, item)
             if value is None:
@@ -262,7 +304,10 @@ def bucket_rows(rows, series: list[dict], resolution: int):
             values[item["id"]] = round(sum(samples) / len(samples), 2) if samples else None
         points.append(
             {
-                "t": datetime.utcfromtimestamp(slot).replace(tzinfo=None).isoformat() + "Z",
+                "t": datetime.fromtimestamp(slot, tz=timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat()
+                + "Z",
                 "v": values,
             }
         )

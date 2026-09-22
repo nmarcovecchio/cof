@@ -44,6 +44,9 @@ from .notify import send_email, send_telegram
 from .phones import is_e164_phone, join_values, normalize_phone, parse_telegram_chats
 from .telemetry_series import (
     AUX_COLUMNS,
+    _iso_utc,
+    _parse_iso_epoch,
+    _to_epoch,
     bucket_rows,
     bucket_seconds,
     extract_aux_values,
@@ -870,8 +873,8 @@ def create_app() -> Flask:
         return jsonify(
             {
                 "device_uid": device.device_uid,
-                "from": from_dt.isoformat() + "Z",
-                "to": to_dt.isoformat() + "Z",
+                "from": _iso_utc(from_dt),
+                "to": _iso_utc(to_dt),
                 "bucket_seconds": resolution,
                 "series": series,
                 "points": points,
@@ -903,10 +906,26 @@ def create_app() -> Flask:
         header.extend(item["label"] + (f" ({item['unit']})" if item["unit"] else "") for item in series)
         header.extend(label for _, label in AUX_COLUMNS)
         writer.writerow(header)
+        # Each column must honour its own window: without this a reassigned
+        # sensor exports the same raw sample under the old alias and the new
+        # one, so the CSV would disagree with the chart (which does filter).
+        spans = {
+            item["id"]: (
+                _parse_iso_epoch(item.get("starts_at")),
+                _parse_iso_epoch(item.get("ends_at")),
+            )
+            for item in series
+        }
         for row in rows:
             payload = row.payload if isinstance(row.payload, dict) else {}
             line = [row.received_at.isoformat() if row.received_at else "", device.device_uid]
-            line.extend(extract_value(payload, item) for item in series)
+            at = _to_epoch(row.received_at)
+            for item in series:
+                starts, ends = spans[item["id"]]
+                if at is None or (starts is not None and at < starts) or (ends is not None and at >= ends):
+                    line.append(None)
+                else:
+                    line.append(extract_value(payload, item))
             line.extend(extract_aux_values(payload).values())
             writer.writerow(line)
 

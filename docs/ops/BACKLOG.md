@@ -173,6 +173,34 @@ Arreglado con un mapa driver -> clave real (`FIRMWARE_PAYLOAD_KEYS`, espejo de
 ventanas cuyo `payload_key` es un nombre de driver conocido. Un `payload_key`
 editado a mano no se toca, y la operacion es idempotente.
 
+### 9f. Ventanas de sensor: timezone, frontera y CSV — RESUELTO
+
+Tres bugs encadenados en `telemetry_series.py`, todos alrededor de las fechas
+de las ventanas. Aparecieron recien al probar con el tipo real de Postgres
+(`timestamptz` -> `datetime` **aware**); con SQLite los datetimes son *naive* y
+los tres quedaban ocultos.
+
+1. `isoformat() + "Z"` sobre un datetime aware genera `...+00:00Z`, que no es
+   parseable. `_parse_iso_epoch` devolvia `None` en silencio, los limites de
+   ventana quedaban en `None` y **el filtro por ventana se desactivaba por
+   completo**: tras una reasignacion, el alias nuevo mostraba los datos del
+   viejo. Arreglado con `_iso_utc()`, que normaliza a UTC antes de serializar.
+2. `int(received_at.timestamp())` interpreta un datetime naive como **hora
+   local**. Con el servidor en `America/Argentina/Buenos_Aires` cada comparacion
+   se corria 3 h respecto de los limites de la ventana. Ahora todo pasa por
+   `_to_epoch()`, que trata naive como UTC.
+3. La ventana era cerrada (`at <= ends_at`). En una reasignacion el instante del
+   traspaso pertenece a las dos ventanas, asi que la misma muestra se contaba
+   dos veces. Ahora es semiabierta `[starts_at, ends_at)`.
+
+Ademas el **CSV no filtraba por ventana** (`extract_value` solo lee la clave del
+payload): la misma fila aparecia con valor bajo los dos alias, y el CSV no
+coincidia con el grafico. Ahora cada columna respeta su ventana.
+
+Nota de proceso: los tests de la sesion anterior pasaban porque SQLite devuelve
+datetimes naive. Cualquier test futuro de ventanas tiene que forzar datetimes
+aware (o correr contra Postgres) para no repetir este falso verde.
+
 ### 9d. Borrado de historial por alias — NO implementado
 
 Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda
