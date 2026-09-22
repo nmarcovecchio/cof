@@ -105,6 +105,216 @@
   </div>
 </div>
 
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Telemetria</span>
+        <span class="small text-muted" id="telemetry-summary">&nbsp;</span>
+      </div>
+      <div class="card-body pb-2">
+        {% if telemetry_series %}
+        <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+          <div class="btn-group btn-group-sm" role="group" aria-label="Rango rapido">
+            <button type="button" class="btn btn-outline-secondary" data-range-hours="24">24 h</button>
+            <button type="button" class="btn btn-outline-secondary" data-range-hours="168">7 d</button>
+            <button type="button" class="btn btn-outline-secondary" data-range-days="{{ telemetry_max_days }}">
+              {{ telemetry_max_days }} d
+            </button>
+          </div>
+          <div>
+            <label class="form-label small mb-0" for="telemetry-from">Desde</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-from">
+          </div>
+          <div>
+            <label class="form-label small mb-0" for="telemetry-to">Hasta</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-to">
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="telemetry-apply">Aplicar</button>
+          <a class="btn btn-sm btn-outline-secondary ms-auto" id="telemetry-export" href="#">
+            <i class="bi bi-download"></i> Exportar CSV
+          </a>
+        </div>
+        <div id="telemetry-alert" class="alert alert-warning py-2 small d-none" role="alert"></div>
+        <div id="telemetry-series-picker" class="d-flex flex-wrap gap-3 mb-2 small"></div>
+        <div class="position-relative" style="height: 380px;">
+          <canvas id="telemetry-chart"></canvas>
+          <div id="telemetry-empty" class="text-muted small position-absolute top-50 start-50 translate-middle d-none">
+            Sin datos en el rango seleccionado.
+          </div>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">
+          Este equipo no tiene sensores graficables en su configuracion.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Avisos del cliente</h2>
+        <div class="text-muted small">Agenda de {{ device.tenant.name }}. SMS, email y llamadas por contacto. Telegram al grupo del cliente. La llamada solo si este equipo las tiene habilitadas. Email y Telegram salen por MQTT (Ethernet, WiFi o LTE). SMS y llamada usan el modem.</div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar cliente</a>
+      </div>
+    </div>
+    <div class="row g-3">
+      <div class="col-12">
+        <div class="meta-label">Grupo Telegram</div>
+        <div class="meta-value">{{ (contacts.telegram_chat_ids or [])|join(', ') or 'sin configurar' }}</div>
+      </div>
+      <div class="col-12">
+        <div class="meta-label">Agenda</div>
+        <div class="meta-value">
+          {% if contacts.agenda %}
+            {% for c in contacts.agenda %}
+            <div class="small">
+              <strong>{{ c.name }}</strong>
+              {% if c.phone %} · {{ c.phone }}{% endif %}
+              {% if c.email %} · {{ c.email }}{% endif %}
+            </div>
+            {% endfor %}
+          {% else %}
+            sin contactos
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="meta-label">Llamadas de este equipo</div>
+        <div class="meta-value">{{ 'habilitadas' if contacts.calling_enabled else 'deshabilitadas' }}</div>
+      </div>
+      <div class="col-md-8">
+        <div class="meta-label">Cola del modem</div>
+        <div class="meta-value">
+          {% if modem_jobs %}
+            {% for job in modem_jobs %}
+              <div class="small">
+                {{ job.status }} · {{ job.command }} · {{ (job.payload or {}).get('phone') or '-' }}
+              </div>
+            {% endfor %}
+          {% else %}
+            vacia
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Reglas de alarma</h2>
+        <div class="text-muted small">Las que estan publicadas en la config de este equipo. Editarlas no silencia una alarma abierta.</div>
+      </div>
+      {% if not device.archived_at %}
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar reglas</a>
+      {% endif %}
+    </div>
+    {% if not device.archived_at %}
+    <form class="d-flex flex-wrap align-items-center gap-2 mb-3" method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar una alarma real a toda la agenda? SMS, email, Telegram y llamadas. Queda abierta hasta un OK.');">
+      {{ csrf_field() }}
+      <button class="btn btn-outline-danger" type="submit">
+        <i class="bi bi-exclamation-triangle"></i> Probar alarma
+      </button>
+      <span class="small text-muted">Agenda completa: SMS, email, Telegram y llamadas. No es solo el módem.</span>
+    </form>
+    {% endif %}
+    {% if configured_rules %}
+      {% for rule in configured_rules %}
+      <div class="border rounded p-3 d-flex flex-wrap justify-content-between align-items-start gap-3{% if not loop.last %} mb-2{% endif %}">
+        <div>
+          <div class="fw-semibold">{{ rule.title }}</div>
+          <div class="small text-muted">Dispara si {{ rule.condition }} · {{ rule.duration_label }}</div>
+          <div class="small mt-1">
+            Avisa: {{ rule.actions|join(', ') or 'nada' }}
+            {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
+          </div>
+          <div class="small text-muted">
+            {% if rule.escalate %}Escala al siguiente telefono{% if rule.escalate_delay %} cada {{ rule.escalate_delay }}s{% endif %} si no hay OK.{% else %}Llama solo al primero.{% endif %}
+            {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
+            {% if rule.on_clear %} Al normalizarse: {{ rule.on_clear|join(', ') }}.{% endif %}
+          </div>
+        </div>
+        {% if not device.archived_at %}
+        <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar esta regla? Avisa como esta configurada (no a toda la agenda). Queda abierta hasta un OK.');">
+          {{ csrf_field() }}
+          <input type="hidden" name="rule_id" value="{{ rule.id }}">
+          <button class="btn btn-sm btn-outline-danger" type="submit">
+            <i class="bi bi-exclamation-triangle"></i> Disparar esta alarma
+          </button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="text-muted mb-0">Ninguna regla publicada. Se configuran al publicar la config del equipo.</p>
+    {% endif %}
+  </div>
+</div>
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Alarmas disparadas</h2>
+        <div class="text-muted small">Que se aviso, si atendieron y si se silencio. El corte de la llamada no silencia.</div>
+      </div>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver todas</a>
+    </div>
+    {% if recent_alarms %}
+      {% for alarm in recent_alarms %}
+      <div class="border rounded p-3{% if not loop.last %} mb-2{% endif %}">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">{{ alarm.title }}</div>
+            <div class="small text-muted">{{ alarm.detail }}</div>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            {% if alarm.acked and alarm.open %}
+              <span class="badge text-bg-warning">reconocida</span>
+            {% elif alarm.open %}
+              <span class="badge text-bg-danger">abierta</span>
+            {% else %}
+              <span class="badge text-bg-success">cerrada</span>
+            {% endif %}
+            <button
+              class="btn btn-sm btn-outline-secondary"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#alarm-cycle-{{ alarm.event.id }}"
+              aria-expanded="false"
+              aria-controls="alarm-cycle-{{ alarm.event.id }}"
+            >
+              Ciclo
+            </button>
+          </div>
+        </div>
+        <div class="small text-muted mt-1">{{ alarm.event.started_at|datetime_local }}{% if alarm.event.cleared_at %} · cerro {{ alarm.event.cleared_at|datetime_local }}{% endif %}{% if alarm.acked_label %} · {{ alarm.acked_label }}{% endif %}</div>
+        <div class="collapse mt-3" id="alarm-cycle-{{ alarm.event.id }}">
+          {% if alarm.steps %}
+          <ol class="timeline mb-2">
+            {% for step in alarm.steps %}
+            <li class="timeline-item is-{{ step.tone }}">
+              <div class="fw-semibold">{{ step.label }}</div>
+              <div class="small text-muted">{{ step.at|datetime_local }}</div>
+            </li>
+            {% endfor %}
+          </ol>
+          {% else %}
+          <div class="small text-muted mb-2">{{ alarm.last }}</div>
+          {% endif %}
+          <a class="small" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Abrir detalle</a>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="text-muted mb-0">Todavia no se disparo ninguna alarma en este equipo.</p>
+    {% endif %}
+  </div>
+</div>
 {% set net = device.discovered.get('network') if device.discovered else none %}
 {% set net_eth = (net.get('ethernet') if net else none) or {} %}
 {% set net_wifi = (net.get('wifi') if net else none) or {} %}
@@ -231,178 +441,7 @@
     {% endif %}
   </div>
 </div>
-
 {{ cellular_card(device.discovered.get('cellular') if device.discovered else none, device) }}
-
-<div class="card mb-4">
-  <div class="card-body">
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-      <div>
-        <h2 class="h5 mb-1">Avisos del cliente</h2>
-        <div class="text-muted small">Agenda de {{ device.tenant.name }}. SMS, email y llamadas por contacto. Telegram al grupo del cliente. La llamada solo si este equipo las tiene habilitadas. Email y Telegram salen por MQTT (Ethernet, WiFi o LTE). SMS y llamada usan el modem.</div>
-      </div>
-      <div class="d-flex gap-2">
-        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver alarmas</a>
-        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tenant_edit', tenant_id=device.tenant.id) }}">Editar cliente</a>
-      </div>
-    </div>
-    <div class="row g-3">
-      <div class="col-12">
-        <div class="meta-label">Grupo Telegram</div>
-        <div class="meta-value">{{ (contacts.telegram_chat_ids or [])|join(', ') or 'sin configurar' }}</div>
-      </div>
-      <div class="col-12">
-        <div class="meta-label">Agenda</div>
-        <div class="meta-value">
-          {% if contacts.agenda %}
-            {% for c in contacts.agenda %}
-            <div class="small">
-              <strong>{{ c.name }}</strong>
-              {% if c.phone %} · {{ c.phone }}{% endif %}
-              {% if c.email %} · {{ c.email }}{% endif %}
-            </div>
-            {% endfor %}
-          {% else %}
-            sin contactos
-          {% endif %}
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="meta-label">Llamadas de este equipo</div>
-        <div class="meta-value">{{ 'habilitadas' if contacts.calling_enabled else 'deshabilitadas' }}</div>
-      </div>
-      <div class="col-md-8">
-        <div class="meta-label">Cola del modem</div>
-        <div class="meta-value">
-          {% if modem_jobs %}
-            {% for job in modem_jobs %}
-              <div class="small">
-                {{ job.status }} · {{ job.command }} · {{ (job.payload or {}).get('phone') or '-' }}
-              </div>
-            {% endfor %}
-          {% else %}
-            vacia
-          {% endif %}
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="card mb-4">
-  <div class="card-body">
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-      <div>
-        <h2 class="h5 mb-1">Reglas de alarma</h2>
-        <div class="text-muted small">Las que estan publicadas en la config de este equipo. Editarlas no silencia una alarma abierta.</div>
-      </div>
-      {% if not device.archived_at %}
-      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">Editar reglas</a>
-      {% endif %}
-    </div>
-    {% if not device.archived_at %}
-    <form class="d-flex flex-wrap align-items-center gap-2 mb-3" method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar una alarma real a toda la agenda? SMS, email, Telegram y llamadas. Queda abierta hasta un OK.');">
-      {{ csrf_field() }}
-      <button class="btn btn-outline-danger" type="submit">
-        <i class="bi bi-exclamation-triangle"></i> Probar alarma
-      </button>
-      <span class="small text-muted">Agenda completa: SMS, email, Telegram y llamadas. No es solo el módem.</span>
-    </form>
-    {% endif %}
-    {% if configured_rules %}
-      {% for rule in configured_rules %}
-      <div class="border rounded p-3 d-flex flex-wrap justify-content-between align-items-start gap-3{% if not loop.last %} mb-2{% endif %}">
-        <div>
-          <div class="fw-semibold">{{ rule.title }}</div>
-          <div class="small text-muted">Dispara si {{ rule.condition }} · {{ rule.duration_label }}</div>
-          <div class="small mt-1">
-            Avisa: {{ rule.actions|join(', ') or 'nada' }}
-            {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
-          </div>
-          <div class="small text-muted">
-            {% if rule.escalate %}Escala al siguiente telefono{% if rule.escalate_delay %} cada {{ rule.escalate_delay }}s{% endif %} si no hay OK.{% else %}Llama solo al primero.{% endif %}
-            {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
-            {% if rule.on_clear %} Al normalizarse: {{ rule.on_clear|join(', ') }}.{% endif %}
-          </div>
-        </div>
-        {% if not device.archived_at %}
-        <form method="post" action="{{ url_for('device_trigger_alarm', device_uid=device.device_uid) }}" onsubmit="return confirm('Disparar esta regla? Avisa como esta configurada (no a toda la agenda). Queda abierta hasta un OK.');">
-          {{ csrf_field() }}
-          <input type="hidden" name="rule_id" value="{{ rule.id }}">
-          <button class="btn btn-sm btn-outline-danger" type="submit">
-            <i class="bi bi-exclamation-triangle"></i> Disparar esta alarma
-          </button>
-        </form>
-        {% endif %}
-      </div>
-      {% endfor %}
-    {% else %}
-      <p class="text-muted mb-0">Ninguna regla publicada. Se configuran al publicar la config del equipo.</p>
-    {% endif %}
-  </div>
-</div>
-
-<div class="card mb-4">
-  <div class="card-body">
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-      <div>
-        <h2 class="h5 mb-1">Alarmas disparadas</h2>
-        <div class="text-muted small">Que se aviso, si atendieron y si se silencio. El corte de la llamada no silencia.</div>
-      </div>
-      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alarms', device=device.device_uid) }}">Ver todas</a>
-    </div>
-    {% if recent_alarms %}
-      {% for alarm in recent_alarms %}
-      <div class="border rounded p-3{% if not loop.last %} mb-2{% endif %}">
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
-          <div>
-            <div class="fw-semibold">{{ alarm.title }}</div>
-            <div class="small text-muted">{{ alarm.detail }}</div>
-          </div>
-          <div class="d-flex align-items-center gap-2">
-            {% if alarm.acked and alarm.open %}
-              <span class="badge text-bg-warning">reconocida</span>
-            {% elif alarm.open %}
-              <span class="badge text-bg-danger">abierta</span>
-            {% else %}
-              <span class="badge text-bg-success">cerrada</span>
-            {% endif %}
-            <button
-              class="btn btn-sm btn-outline-secondary"
-              type="button"
-              data-bs-toggle="collapse"
-              data-bs-target="#alarm-cycle-{{ alarm.event.id }}"
-              aria-expanded="false"
-              aria-controls="alarm-cycle-{{ alarm.event.id }}"
-            >
-              Ciclo
-            </button>
-          </div>
-        </div>
-        <div class="small text-muted mt-1">{{ alarm.event.started_at|datetime_local }}{% if alarm.event.cleared_at %} · cerro {{ alarm.event.cleared_at|datetime_local }}{% endif %}{% if alarm.acked_label %} · {{ alarm.acked_label }}{% endif %}</div>
-        <div class="collapse mt-3" id="alarm-cycle-{{ alarm.event.id }}">
-          {% if alarm.steps %}
-          <ol class="timeline mb-2">
-            {% for step in alarm.steps %}
-            <li class="timeline-item is-{{ step.tone }}">
-              <div class="fw-semibold">{{ step.label }}</div>
-              <div class="small text-muted">{{ step.at|datetime_local }}</div>
-            </li>
-            {% endfor %}
-          </ol>
-          {% else %}
-          <div class="small text-muted mb-2">{{ alarm.last }}</div>
-          {% endif %}
-          <a class="small" href="{{ url_for('alarm_detail', event_id=alarm.event.id) }}">Abrir detalle</a>
-        </div>
-      </div>
-      {% endfor %}
-    {% else %}
-      <p class="text-muted mb-0">Todavia no se disparo ninguna alarma en este equipo.</p>
-    {% endif %}
-  </div>
-</div>
-
 <div class="card mb-4">
   <div class="card-body">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
@@ -483,282 +522,8 @@
     </form>
     {% endif %}
   </div>
-</div>
-
-<div class="row g-4 mb-4">
-  <div class="col-lg-6">
-    <div class="card h-100">
-      <div class="card-header">Capacidades</div>
-      <div class="card-body">
-        {% if device.capabilities %}
-        <div class="chip-wrap mb-3">
-          {% for key, value in device.capabilities.items() %}
-            {% if value is sameas true %}
-              <span class="badge text-bg-light border">{{ key }}</span>
-            {% elif value is sameas false %}
-              {# Jinja's `is number` is true for bools, so a False used to fall
-                 through to the numeric branch and render "key: False" beside real
-                 counts like max_ds18b20: 8, reading as if the count were False. #}
-              <span class="badge text-bg-light border text-muted">{{ key }}: no</span>
-            {% elif value is number %}
-              <span class="badge text-bg-light border">{{ key }}: {{ value }}</span>
-            {% endif %}
-          {% endfor %}
-        </div>
-        <details>
-          <summary class="small text-muted">JSON completo</summary>
-          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.capabilities|json_pretty }}</code></pre>
-        </details>
-        {% else %}
-        <p class="text-muted mb-0">Todavia no reporto capacidades.</p>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-  <div class="col-lg-6">
-    <div class="card h-100">
-      <div class="card-header">Recursos descubiertos</div>
-      <div class="card-body">
-        {% if device.discovered %}
-        <div class="chip-wrap mb-3">
-          {% if device.discovered.get('sht31') %}
-            <span class="badge text-bg-light border">SHT31</span>
-          {% endif %}
-          {% if device.discovered.get('modem') %}
-            <span class="badge text-bg-light border">Modem</span>
-          {% endif %}
-          {% set cell = device.discovered.get('cellular') %}
-          {% if cell %}
-            {% set lte_ok = cell|cellular_lte_ok %}
-            {% set sig = cell.get('csq')|cellular_signal %}
-            <span class="badge text-bg-{{ 'success' if lte_ok else 'warning' }} border">
-              Red {{ 'OK' if lte_ok else 'NO' }}
-            </span>
-            {% if cell.get('operator') %}
-              <span class="badge text-bg-light border">{{ cell.get('operator') }}</span>
-            {% endif %}
-            {# Route signal through the cellular_signal filter: CSQ 99 means "not
-               detectable" (TS 27.007), so printing it as a bare reading claimed a
-               measurement that does not exist. The filter reports "Sin dato". #}
-            <span class="badge text-bg-{{ sig.tone }} border">
-              Señal: {{ sig.label }}{% if sig.csq is not none and sig.csq != 99 %} (CSQ {{ sig.csq }}){% endif %}
-            </span>
-            {# creg/cereg are ints seeded to -1, so "is not none" was always true and
-               these printed sentinel values as data. Hide them when negative. #}
-            {% if cell.get('creg') is number and cell.get('creg') >= 0 %}
-              <span class="badge text-bg-light border">CREG {{ cell.get('creg') }}</span>
-            {% endif %}
-            {% if cell.get('cereg') is number and cell.get('cereg') >= 0 %}
-              <span class="badge text-bg-light border">CEREG {{ cell.get('cereg') }}</span>
-            {% endif %}
-            {% if cell.get('apn') %}
-              <span class="badge text-bg-light border">{{ cell.get('apn') }}</span>
-            {% endif %}
-            {% if cell.get('smsc') %}
-              <span class="badge text-bg-light border">SMSC {{ cell.get('smsc') }}</span>
-            {% endif %}
-            {% if cell.get('model') %}
-              <span class="badge text-bg-light border">{{ cell.get('model') }}</span>
-            {% endif %}
-            {% if cell.get('radio') %}
-              <span class="badge text-bg-light border">{{ cell.get('radio') }}</span>
-            {% endif %}
-            {% if cell.get('ims') is not none %}
-              <span class="badge text-bg-{{ 'success' if cell.get('ims') else 'warning' }} border">
-                IMS {{ 'OK' if cell.get('ims') else 'NO' }}
-              </span>
-            {% endif %}
-            {% set voice = cell.get('voice') or {} %}
-            {% set voice_path = voice.get('path') or cell.get('voice_path') %}
-            {% if voice_path %}
-              <span class="badge text-bg-{{ 'success' if voice_path in ['volte', 'csfb', 'gsm'] else 'warning' }} border">
-                Voz {{ voice_path }}
-              </span>
-            {% endif %}
-            {% if voice.get('last_ok') %}
-              <span class="badge text-bg-light border">Última {{ voice.get('last_ok') }}</span>
-            {% endif %}
-            {% if voice.get('cs_attached') is not none %}
-              <span class="badge text-bg-light border">CS {{ 'OK' if voice.get('cs_attached') else 'NO' }}</span>
-            {% endif %}
-          {% endif %}
-          {% if device.discovered.get('pcf8574') %}
-            <span class="badge text-bg-light border">PCF8574</span>
-          {% endif %}
-          {% if device.discovered.get('ds18b20_count') %}
-            <span class="badge text-bg-light border">DS18B20 × {{ device.discovered.get('ds18b20_count') }}</span>
-          {% endif %}
-          {% for addr in device.discovered.get('ds18b20', []) %}
-            <span class="badge text-bg-light border"><code>{{ addr }}</code></span>
-          {% endfor %}
-        </div>
-        <details>
-          <summary class="small text-muted">JSON completo</summary>
-          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.discovered|json_pretty }}</code></pre>
-        </details>
-        {% else %}
-        <p class="text-muted mb-0">Todavia no reporto recursos.</p>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="row g-4">
-  <div class="col-xl-7">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span>Telemetria</span>
-        <span class="small text-muted" id="telemetry-summary">&nbsp;</span>
-      </div>
-      <div class="card-body pb-2">
-        {% if telemetry_series %}
-        <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
-          <div class="btn-group btn-group-sm" role="group" aria-label="Rango rapido">
-            <button type="button" class="btn btn-outline-secondary" data-range-hours="24">24 h</button>
-            <button type="button" class="btn btn-outline-secondary" data-range-hours="168">7 d</button>
-            <button type="button" class="btn btn-outline-secondary" data-range-days="{{ telemetry_max_days }}">
-              {{ telemetry_max_days }} d
-            </button>
-          </div>
-          <div>
-            <label class="form-label small mb-0" for="telemetry-from">Desde</label>
-            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-from">
-          </div>
-          <div>
-            <label class="form-label small mb-0" for="telemetry-to">Hasta</label>
-            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-to">
-          </div>
-          <button type="button" class="btn btn-sm btn-primary" id="telemetry-apply">Aplicar</button>
-          <a class="btn btn-sm btn-outline-secondary ms-auto" id="telemetry-export" href="#">
-            <i class="bi bi-download"></i> Exportar CSV
-          </a>
-        </div>
-        <div id="telemetry-alert" class="alert alert-warning py-2 small d-none" role="alert"></div>
-        <div id="telemetry-series-picker" class="d-flex flex-wrap gap-3 mb-2 small"></div>
-        <div class="position-relative" style="height: 320px;">
-          <canvas id="telemetry-chart"></canvas>
-          <div id="telemetry-empty" class="text-muted small position-absolute top-50 start-50 translate-middle d-none">
-            Sin datos en el rango seleccionado.
-          </div>
-        </div>
-        {% else %}
-        <p class="text-muted small mb-0">
-          Este equipo no tiene sensores graficables en su configuracion.
-        </p>
-        {% endif %}
-      </div>
-      {% if recent_telemetry %}
-      <div class="table-responsive border-top">
-        <table class="table table-sm mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Fecha</th>
-              <th>Temp 1</th>
-              <th>Temp 2</th>
-              <th>Hum</th>
-              <th>VAC</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in recent_telemetry %}
-            <tr>
-              <td class="small text-muted">{{ row.received_at|datetime_local }}</td>
-              <td>{{ row.temperature_1 if row.temperature_1 is not none else '-' }}</td>
-              <td>{{ row.temperature_2 if row.temperature_2 is not none else '-' }}</td>
-              <td>{{ row.humidity if row.humidity is not none else '-' }}</td>
-              <td>{{ row.mains_voltage if row.mains_voltage is not none else '-' }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <div class="px-3 py-2 text-muted small border-top">Sin telemetria.</div>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-xl-5">
-    <div class="card mb-4">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span>Modem</span>
-        {% if modem_trace_event %}
-        <span class="small text-muted">{{ modem_trace_event.started_at|datetime_local }}</span>
-        {% endif %}
-      </div>
-      {% if modem_trace_event and modem_trace_event.payload.get('modem_log') %}
-      <pre class="modem-log">{% for line in modem_trace_event.payload.get('modem_log').splitlines() %}{% if line.startswith('>>') %}<span class="tx">{{ line }}</span>
-{% elif line.startswith('<<') %}<span class="rx">{{ line }}</span>
-{% else %}{{ line }}
-{% endif %}{% endfor %}</pre>
-      <div class="px-3 py-2 small text-muted border-top">{{ modem_trace_event.message }}</div>
-      {% else %}
-      <div class="p-3 text-muted small">
-        Traza AT de la ultima prueba de llamada o del intento LTE.
-        Si MQTT estaba caido, el dump se publica cuando el broker vuelve (cable o LTE).
-        En llamadas, el corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>.
-        No se publica en vivo: un dump al terminar, para no saturar MQTT.
-      </div>
-      {% endif %}
-    </div>
-    <div class="card mb-4">
-      <div class="card-header">Eventos</div>
-      {% if recent_events %}
-      <ul class="event-list">
-        {% for event in recent_events %}
-        <li class="event-item">
-          <div class="event-main">
-            <div class="event-body">
-              <div class="event-title">
-                {% set sev = event|event_severity %}
-                {% if sev == 'warning' %}
-                  <span class="badge text-bg-warning text-dark">{{ sev }}</span>
-                {% elif sev == 'error' %}
-                  <span class="badge text-bg-danger">{{ sev }}</span>
-                {% elif event.type == 'test_call' and (event.message or '').startswith('Remote hangup') %}
-                  <span class="badge text-bg-success">corte</span>
-                {% elif event.type == 'test_call' and (event.message or '').startswith('Call done') %}
-                  <span class="badge text-bg-success">ok</span>
-                {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
-                  <span class="badge text-bg-success">ok</span>
-                {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
-                  <span class="badge text-bg-light border">progreso</span>
-                {% else %}
-                  <span class="badge text-bg-light border">{{ sev }}</span>
-                {% endif %}
-                <code class="small">{{ event.type }}</code>
-              </div>
-              <div class="event-message" title="{{ event.message or 'Sin mensaje' }}">{{ event.message or 'Sin mensaje' }}</div>
-              <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
-            </div>
-            <button
-              class="icon-btn"
-              type="button"
-              data-bs-toggle="collapse"
-              data-bs-target="#event-payload-{{ event.id }}"
-              aria-expanded="false"
-              aria-controls="event-payload-{{ event.id }}"
-              title="Ver payload"
-            >
-              <i class="bi bi-eye"></i>
-            </button>
-          </div>
-          <div class="collapse" id="event-payload-{{ event.id }}">
-            <div class="payload-panel">
-              <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ event.payload|json_pretty }}</code></pre>
-            </div>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <div class="p-3 text-muted">Sin eventos.</div>
-      {% endif %}
-    </div>
-
-    <div class="card">
-      <div class="card-header">Ultimas configs</div>
+    <div class="border-top mt-3 pt-3">
+      <div class="fw-semibold mb-2">Historial de configs</div>
       {% if configs %}
       <ul class="config-list">
         {% for config in configs %}
@@ -812,6 +577,157 @@
       </ul>
       {% else %}
       <div class="p-3 text-muted">Sin configs.</div>
+      {% endif %}
+    </div>
+</div>
+<details class="mb-4">
+  <summary class="text-muted small mb-2">Detalle tecnico: capacidades y recursos descubiertos</summary>
+<div class="row g-4 mb-4">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Capacidades</div>
+      <div class="card-body">
+        {% if device.capabilities %}
+        <div class="chip-wrap mb-3">
+          {% for key, value in device.capabilities.items() %}
+            {% if value is sameas true %}
+              <span class="badge text-bg-light border">{{ key }}</span>
+            {% elif value is sameas false %}
+              {# Jinja's `is number` is true for bools, so a False used to fall
+                 through to the numeric branch and render "key: False" beside real
+                 counts like max_ds18b20: 8, reading as if the count were False. #}
+              <span class="badge text-bg-light border text-muted">{{ key }}: no</span>
+            {% elif value is number %}
+              <span class="badge text-bg-light border">{{ key }}: {{ value }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <details>
+          <summary class="small text-muted">JSON completo</summary>
+          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.capabilities|json_pretty }}</code></pre>
+        </details>
+        {% else %}
+        <p class="text-muted mb-0">Todavia no reporto capacidades.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header">Recursos descubiertos</div>
+      <div class="card-body">
+        {% if device.discovered %}
+        <div class="chip-wrap mb-3">
+          {% if device.discovered.get('sht31') %}
+            <span class="badge text-bg-light border">SHT31</span>
+          {% endif %}
+          {% if device.discovered.get('modem') %}
+            <span class="badge text-bg-light border">Modem</span>
+          {% endif %}
+          {# The cellular chips that used to live here duplicated the "Red
+             celular" card, which is the only place that should own that state.
+             This panel is now purely about what hardware was discovered. #}
+          {% if device.discovered.get('pcf8574') %}
+            <span class="badge text-bg-light border">PCF8574</span>
+          {% endif %}
+          {% if device.discovered.get('ds18b20_count') %}
+            <span class="badge text-bg-light border">DS18B20 × {{ device.discovered.get('ds18b20_count') }}</span>
+          {% endif %}
+          {% for addr in device.discovered.get('ds18b20', []) %}
+            <span class="badge text-bg-light border"><code>{{ addr }}</code></span>
+          {% endfor %}
+        </div>
+        <details>
+          <summary class="small text-muted">JSON completo</summary>
+          <pre class="json-box bg-light border rounded p-3 mb-0 mt-2 small"><code>{{ device.discovered|json_pretty }}</code></pre>
+        </details>
+        {% else %}
+        <p class="text-muted mb-0">Todavia no reporto recursos.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+</details>
+<div class="row g-4">
+  <div class="col-xl-7">
+    <div class="card">
+      <div class="card-header">Eventos</div>
+      {% if recent_events %}
+      <ul class="event-list">
+        {% for event in recent_events %}
+        <li class="event-item">
+          <div class="event-main">
+            <div class="event-body">
+              <div class="event-title">
+                {% set sev = event|event_severity %}
+                {% if sev == 'warning' %}
+                  <span class="badge text-bg-warning text-dark">{{ sev }}</span>
+                {% elif sev == 'error' %}
+                  <span class="badge text-bg-danger">{{ sev }}</span>
+                {% elif event.type == 'test_call' and (event.message or '').startswith('Remote hangup') %}
+                  <span class="badge text-bg-success">corte</span>
+                {% elif event.type == 'test_call' and (event.message or '').startswith('Call done') %}
+                  <span class="badge text-bg-success">ok</span>
+                {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
+                  <span class="badge text-bg-success">ok</span>
+                {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
+                  <span class="badge text-bg-light border">progreso</span>
+                {% else %}
+                  <span class="badge text-bg-light border">{{ sev }}</span>
+                {% endif %}
+                <code class="small">{{ event.type }}</code>
+              </div>
+              <div class="event-message" title="{{ event.message or 'Sin mensaje' }}">{{ event.message or 'Sin mensaje' }}</div>
+              <div class="event-time mt-1">{{ event.started_at|datetime_local }}</div>
+            </div>
+            <button
+              class="icon-btn"
+              type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#event-payload-{{ event.id }}"
+              aria-expanded="false"
+              aria-controls="event-payload-{{ event.id }}"
+              title="Ver payload"
+            >
+              <i class="bi bi-eye"></i>
+            </button>
+          </div>
+          <div class="collapse" id="event-payload-{{ event.id }}">
+            <div class="payload-panel">
+              <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ event.payload|json_pretty }}</code></pre>
+            </div>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="p-3 text-muted">Sin eventos.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-xl-5">
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Modem</span>
+        {% if modem_trace_event %}
+        <span class="small text-muted">{{ modem_trace_event.started_at|datetime_local }}</span>
+        {% endif %}
+      </div>
+      {% if modem_trace_event and modem_trace_event.payload.get('modem_log') %}
+      <pre class="modem-log">{% for line in modem_trace_event.payload.get('modem_log').splitlines() %}{% if line.startswith('>>') %}<span class="tx">{{ line }}</span>
+{% elif line.startswith('<<') %}<span class="rx">{{ line }}</span>
+{% else %}{{ line }}
+{% endif %}{% endfor %}</pre>
+      <div class="px-3 py-2 small text-muted border-top">{{ modem_trace_event.message }}</div>
+      {% else %}
+      <div class="p-3 text-muted small">
+        Traza AT de la ultima prueba de llamada o del intento LTE.
+        Si MQTT estaba caido, el dump se publica cuando el broker vuelve (cable o LTE).
+        En llamadas, el corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>.
+        No se publica en vivo: un dump al terminar, para no saturar MQTT.
+      </div>
       {% endif %}
     </div>
   </div>
@@ -963,7 +879,23 @@
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
+          // The picker above toggles visibility, but a legend in the canvas is
+          // what maps a colour back to a sensor once the lines are on screen.
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true, padding: 14 },
+          },
+          tooltip: {
+            // The {x, y} points carry no label of their own, so name the
+            // timestamp explicitly in the header.
+            callbacks: {
+              title: function (items) {
+                if (!items.length) return '';
+                return new Date(items[0].parsed.x).toLocaleString();
+              },
+            },
+          },
         },
         scales: {
           x: {
@@ -974,8 +906,9 @@
               tooltipFormat: 'dd/MM/yyyy HH:mm',
               displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'dd/MM HH:mm' },
             },
-            ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0 },
+            ticks: { maxTicksLimit: 12, autoSkip: true, maxRotation: 0 },
             grid: { display: false },
+            title: { display: true, text: 'Fecha y hora' },
           },
           yClimate: {
             position: 'left',

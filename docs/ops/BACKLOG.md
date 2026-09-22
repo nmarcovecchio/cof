@@ -201,6 +201,38 @@ Nota de proceso: los tests de la sesion anterior pasaban porque SQLite devuelve
 datetimes naive. Cualquier test futuro de ventanas tiene que forzar datetimes
 aware (o correr contra Postgres) para no repetir este falso verde.
 
+### 9g. Pagina de dispositivo: duplicaciones y orden — RESUELTO
+
+La pagina de detalle mostraba el mismo dato en varios lugares y enterraba el
+grafico. Medido en `app.callonfail.com.ar/devices/cof-test` (1440 px):
+
+- **Estado celular 3 veces**: badge en el header, la card "Red celular" y chips
+  dentro de "Recursos descubiertos" (operador, CSQ, CREG, CEREG, APN, SMSC,
+  modelo, radio, IMS, voz, CS). Los chips eran copia literal de la card. Se
+  eliminaron: "Recursos descubiertos" ahora solo lista **hardware** (SHT31,
+  Modem, PCF8574, DS18B20 y sus direcciones).
+- **Estado de config 2 veces**: la card "Configuracion" (arriba, col 1) y
+  "Ultimas configs" (abajo, col 2) mostraban ambas `version` + badge de status,
+  a ~1500 px de distancia, obligando a scrollear para cruzarlas. El historial se
+  fusiono dentro de "Configuracion".
+- **Grafico a media pagina**: vivia en un `col-xl-7` compitiendo con Modem,
+  Eventos y Configs, y medía 688 px de 1256. Ahora es ancho completo (1222 px) y
+  subio al segundo lugar, debajo del estado del equipo.
+- **Tercera representacion de la telemetria**: la tabla de columnas fijas
+  (`Temp 1`, `Temp 2`, `Hum`, `VAC`) repetia lo del grafico y encima usaba el
+  modelo viejo de columnas, no los alias. `VAC` ademas salia siempre `-` porque
+  `mains_voltage` es null. Se elimino; el CSV sigue existiendo para el crudo.
+- **Capacidades + Recursos** ocupaban lugar privilegiado con chips crudos: ahora
+  estan detras de un `<details>`. El alto del documento bajo de 3778 a 3058 px.
+
+Ademas se agrego al grafico la **leyenda** (mapeaba color -> sensor solo por el
+picker) y el **titulo del eje X** ("Fecha y hora"); los dos ejes Y ya tenian
+titulo. Los ticks pasaron de 8 a 12 con `autoSkip`, sin solape verificado.
+
+Queda pendiente decidir si la tabla de crudo vuelve **generada desde los alias**
+(no columnas fijas) con paginacion, para inspeccionar valores exactos sin bajar
+el CSV.
+
 ### 9d. Borrado de historial por alias — NO implementado
 
 Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda
@@ -221,7 +253,7 @@ que los separa es la **ventana** `[starts_at, ends_at)`. Entonces:
 - Ya existe el boton **Cerrar** (deja de registrar sin borrar). El borrado es la
   operacion destructiva y va aparte.
 
-### 9e. Reset de config desde el panel — NO implementado
+### 9h. Reset de config desde el panel — NO implementado
 
 Pedido para poder rearmar sensores y alias desde cero. Alcance acordado: reset
 de **config** (vuelve a los sensores por defecto y cierra las ventanas abiertas)

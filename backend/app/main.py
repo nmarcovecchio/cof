@@ -799,9 +799,6 @@ def create_app() -> Flask:
     @login_required
     def device_detail(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
-        recent_telemetry = (
-            Telemetry.query.filter_by(device_id=device.id).order_by(Telemetry.received_at.desc()).limit(20).all()
-        )
         recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
         recent_alarms = []
@@ -841,7 +838,6 @@ def create_app() -> Flask:
         return render_template(
             "device_detail.html",
             device=device,
-            recent_telemetry=recent_telemetry,
             recent_events=recent_events,
             recent_alarms=recent_alarms,
             configured_rules=rules,
