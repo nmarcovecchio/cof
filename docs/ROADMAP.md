@@ -52,10 +52,44 @@ Telegram / email con escalamiento (`docs/ops/NOTIFICATIONS.md`).
 - **Que existe en su lugar:** la telemetria y el ciclo de avisos se guardan en
   PostgreSQL (`Telemetry`, `Event`) y se consultan en la web (Alarmas y el
   detalle del equipo). Hay historial en pantalla, pero **no** exportable a PDF.
+  Desde 2026-09-22 el detalle del equipo tiene **grafico interactivo por rango
+  de fechas** y **export CSV** linea a linea (ver mas abajo), pero el PDF sigue
+  pendiente.
 - **Se muestra en:** `web/index.html` ("Historial y reporte PDF"),
   `web/frio/index.html` ("Reporte PDF por rango de fechas para auditoria").
 - **Planificado:** si, despues del core. Requiere diseno de reporte por rango
   de fechas y formato para auditoria de cadena de frio.
+
+---
+
+## Historial de telemetria: grafico y export CSV — implementado 2026-09-22
+
+Ya **no** es un pendiente de roadmap; se deja documentado porque el sitio sigue
+prometiendo el reporte PDF.
+
+- **Que hay:** en `/devices/<uid>` la card de Telemetria tiene un grafico
+  (Chart.js, CDN) con selector de rango (24 h / 7 d / 30 d o fechas a mano) y un
+  boton **Exportar CSV** que baja cada muestra del rango.
+- **Series:** se derivan de `cfg.sensors` del equipo. Cada sensor tiene un
+  **alias** (`name`, lo que ve el operador) y un **`payload_key`** (la clave del
+  frame del firmware donde esta el valor, ej. `humidity`, `temperature_1`,
+  `zmpt_raw`). Ver `backend/app/telemetry_series.py`.
+- **Sensor desconectado:** el alias es la identidad estable del sensor. Si un
+  sensor deja de reportar, su fila sigue en la config, asi que **la linea y la
+  columna del CSV siguen existiendo** - vacias en ese periodo - y cuando se
+  reconecta la misma serie vuelve a llenarse. No hay que reconfigurar nada y
+  ningun rango historico pierde una columna. La UI marca el sensor como
+  "sin datos en el rango" cuando no reporto nada en el periodo pedido.
+  El boton de quitar sensor solo lo saca de la config: **no borra historial**.
+- **Linea de 220V:** el firmware publica `mains_voltage` en `null`
+  (`firmware/src/mqtt_io.cpp`), asi que `mains_1` apunta a `zmpt_raw` y se
+  grafica rotulado como "ADC crudo, sin calibrar". Cuando el firmware calcule
+  RMS, alcanza con cambiar el `payload_key` del sensor a `mains_voltage`.
+- **Backend:** `GET /devices/<uid>/telemetry.json` (grafico, con tope de rango y
+  promedio por bucket) y `GET /devices/<uid>/telemetry.csv` (sin downsampling,
+  exporta todo). Ambos requieren sesion.
+- **Lo que sigue pendiente:** el PDF propiamente dicho, y la retencion de
+  telemetria (ver `docs/ops/BACKLOG.md`).
 
 ---
 

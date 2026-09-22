@@ -607,8 +607,49 @@
 <div class="row g-4">
   <div class="col-xl-7">
     <div class="card">
-      <div class="card-header">Telemetria</div>
-      <div class="table-responsive">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Telemetria</span>
+        <span class="small text-muted" id="telemetry-summary">&nbsp;</span>
+      </div>
+      <div class="card-body pb-2">
+        {% if telemetry_series %}
+        <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+          <div class="btn-group btn-group-sm" role="group" aria-label="Rango rapido">
+            <button type="button" class="btn btn-outline-secondary" data-range-hours="24">24 h</button>
+            <button type="button" class="btn btn-outline-secondary" data-range-hours="168">7 d</button>
+            <button type="button" class="btn btn-outline-secondary" data-range-days="{{ telemetry_max_days }}">
+              {{ telemetry_max_days }} d
+            </button>
+          </div>
+          <div>
+            <label class="form-label small mb-0" for="telemetry-from">Desde</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-from">
+          </div>
+          <div>
+            <label class="form-label small mb-0" for="telemetry-to">Hasta</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="telemetry-to">
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="telemetry-apply">Aplicar</button>
+          <a class="btn btn-sm btn-outline-secondary ms-auto" id="telemetry-export" href="#">
+            <i class="bi bi-download"></i> Exportar CSV
+          </a>
+        </div>
+        <div id="telemetry-alert" class="alert alert-warning py-2 small d-none" role="alert"></div>
+        <div id="telemetry-series-picker" class="d-flex flex-wrap gap-3 mb-2 small"></div>
+        <div class="position-relative" style="height: 320px;">
+          <canvas id="telemetry-chart"></canvas>
+          <div id="telemetry-empty" class="text-muted small position-absolute top-50 start-50 translate-middle d-none">
+            Sin datos en el rango seleccionado.
+          </div>
+        </div>
+        {% else %}
+        <p class="text-muted small mb-0">
+          Este equipo no tiene sensores graficables en su configuracion.
+        </p>
+        {% endif %}
+      </div>
+      {% if recent_telemetry %}
+      <div class="table-responsive border-top">
         <table class="table table-sm mb-0">
           <thead class="table-light">
             <tr>
@@ -628,12 +669,13 @@
               <td>{{ row.humidity if row.humidity is not none else '-' }}</td>
               <td>{{ row.mains_voltage if row.mains_voltage is not none else '-' }}</td>
             </tr>
-            {% else %}
-            <tr><td colspan="5" class="text-muted">Sin telemetria.</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% else %}
+      <div class="px-3 py-2 text-muted small border-top">Sin telemetria.</div>
+      {% endif %}
     </div>
   </div>
 
@@ -774,4 +816,226 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if telemetry_series %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const SERIES = {{ telemetry_series|tojson }};
+  const ENDPOINT = "{{ url_for('device_telemetry_json', device_uid=device.device_uid) }}";
+  const CSV_ENDPOINT = "{{ url_for('device_telemetry_csv', device_uid=device.device_uid) }}";
+  const MAX_DAYS = {{ telemetry_max_days }};
+
+  const fromInput = document.getElementById('telemetry-from');
+  const toInput = document.getElementById('telemetry-to');
+  const alertBox = document.getElementById('telemetry-alert');
+  const emptyBox = document.getElementById('telemetry-empty');
+  const summary = document.getElementById('telemetry-summary');
+  const exportLink = document.getElementById('telemetry-export');
+  const picker = document.getElementById('telemetry-series-picker');
+  let chart = null;
+
+  // datetime-local wants "YYYY-MM-DDTHH:MM" in local time, not ISO/UTC.
+  function toLocalInput(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+      + 'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+
+  function setRange(hours) {
+    const now = new Date();
+    const start = new Date(now.getTime() - hours * 3600 * 1000);
+    fromInput.value = toLocalInput(start);
+    toInput.value = toLocalInput(now);
+  }
+
+  function showAlert(message) {
+    if (!message) {
+      alertBox.classList.add('d-none');
+      alertBox.textContent = '';
+      return;
+    }
+    alertBox.textContent = message;
+    alertBox.classList.remove('d-none');
+  }
+
+  function query() {
+    // The inputs are local time; the API expects UTC. toISOString gives UTC.
+    const from = fromInput.value ? new Date(fromInput.value).toISOString() : '';
+    const to = toInput.value ? new Date(toInput.value).toISOString() : '';
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return params.toString();
+  }
+
+  function buildPicker() {
+    SERIES.forEach(function (item) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'form-check form-check-inline';
+      const input = document.createElement('input');
+      input.className = 'form-check-input';
+      input.type = 'checkbox';
+      input.id = 'series-' + item.id;
+      input.checked = true;
+      input.addEventListener('change', function () {
+        if (!chart) return;
+        const index = SERIES.findIndex((s) => s.id === item.id);
+        chart.setDatasetVisibility(index, input.checked);
+        chart.update();
+      });
+      const label = document.createElement('label');
+      label.className = 'form-check-label';
+      label.setAttribute('for', input.id);
+      label.innerHTML = '<span style="color:' + item.color + '">&#9632;</span> '
+        + item.label + (item.unit ? ' (' + item.unit + ')' : '')
+        + (item.note ? ' <span class="text-muted">&mdash; ' + item.note + '</span>' : '')
+        + (item.has_data ? '' : ' <span class="badge bg-secondary">sin datos en el rango</span>');
+      wrapper.appendChild(input);
+      wrapper.appendChild(label);
+      picker.appendChild(wrapper);
+    });
+  }
+
+  function refreshPicker(data) {
+    // A configured sensor that reported nothing across the range is shown
+    // explicitly rather than as an invisible flat line - usually a probe that
+    // is disconnected, which is worth surfacing on a cold-chain panel.
+    const byId = {};
+    (data.series || []).forEach(function (item) { byId[item.id] = item; });
+    (data.series || []).forEach(function (item) {
+      const input = document.getElementById('series-' + item.id);
+      if (!input) return;
+      const label = input.nextElementSibling;
+      const badge = label ? label.querySelector('.badge') : null;
+      if (item.has_data && badge) badge.remove();
+      if (!item.has_data && !badge) {
+        const span = document.createElement('span');
+        span.className = 'badge bg-secondary';
+        span.textContent = 'sin datos en el rango';
+        label.appendChild(document.createTextNode(' '));
+        label.appendChild(span);
+      }
+    });
+  }
+
+  function bucketLabel(seconds) {
+    if (seconds < 3600) return 'promedio cada ' + Math.round(seconds / 60) + ' min';
+    return 'promedio cada ' + Math.round(seconds / 3600) + ' h';
+  }
+
+  function render(data) {
+    const hasData = data.points && data.points.length > 0;
+    emptyBox.classList.toggle('d-none', hasData);
+
+    const labels = (data.points || []).map((point) => {
+      const date = new Date(point.t);
+      return date.toLocaleString();
+    });
+
+    const datasets = SERIES.map(function (item) {
+      return {
+        label: item.label + (item.unit ? ' (' + item.unit + ')' : ''),
+        data: (data.points || []).map((point) => point.v[item.id]),
+        borderColor: item.color,
+        backgroundColor: item.color,
+        yAxisID: item.axis === 'mains' ? 'yMains' : 'yClimate',
+        spanGaps: false,
+        tension: 0.15,
+        pointRadius: data.points.length > 200 ? 0 : 2,
+        borderWidth: 2,
+      };
+    });
+
+    const config = {
+      type: 'line',
+      data: { labels: labels, datasets: datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+        },
+        scales: {
+          x: {
+            ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0 },
+            grid: { display: false },
+          },
+          yClimate: {
+            position: 'left',
+            title: { display: true, text: 'Temperatura (\u00b0C) / Humedad (%)' },
+          },
+          yMains: {
+            position: 'right',
+            title: { display: true, text: 'Red electrica (ADC crudo)' },
+            grid: { drawOnChartArea: false },
+          },
+        },
+      },
+    };
+
+    if (chart) {
+      chart.data = config.data;
+      chart.options = config.options;
+      chart.update();
+    } else {
+      chart = new Chart(document.getElementById('telemetry-chart'), config);
+    }
+
+    const bits = [];
+    bits.push(data.total_samples + ' muestras');
+    bits.push(bucketLabel(data.bucket_seconds));
+    if (data.truncated) bits.push('rango truncado');
+    const idle = (data.series || []).filter((item) => !item.has_data);
+    if (idle.length) bits.push(idle.length + ' sensor(es) sin datos');
+    summary.textContent = bits.join(' · ');
+
+    refreshPicker(data);
+
+    if (data.truncated) {
+      showAlert('El rango tiene mas muestras de las que se pueden graficar; se muestran las primeras. Acota el rango para ver todo.');
+    }
+  }
+
+  function load() {
+    showAlert('');
+    const qs = query();
+    exportLink.href = CSV_ENDPOINT + (qs ? '?' + qs : '');
+    fetch(ENDPOINT + (qs ? '?' + qs : ''), { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'No se pudo cargar la telemetria.');
+          return body;
+        });
+      })
+      .then(render)
+      .catch(function (error) {
+        showAlert(error.message);
+        emptyBox.classList.remove('d-none');
+      });
+  }
+
+  document.querySelectorAll('[data-range-hours]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      setRange(parseInt(button.dataset.rangeHours, 10));
+      load();
+    });
+  });
+  document.querySelectorAll('[data-range-days]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      setRange(parseInt(button.dataset.rangeDays, 10) * 24);
+      load();
+    });
+  });
+  document.getElementById('telemetry-apply').addEventListener('click', load);
+
+  buildPicker();
+  setRange(24);
+  load();
+})();
+</script>
+{% endif %}
 {% endblock %}

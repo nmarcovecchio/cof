@@ -100,6 +100,11 @@ class Telemetry(db.Model):
     humidity = db.Column(db.Float, nullable=True)
     water_leak = db.Column(db.Boolean, nullable=True)
 
+    # Composite index for the date-range queries behind the telemetry charts and
+    # CSV export, which always filter device_id + received_at together. The two
+    # single-column indexes are not enough for a range on one device.
+    __table_args__ = (db.Index("ix_telemetry_device_received", "device_id", "received_at"),)
+
     device = db.relationship("Device", back_populates="telemetry")
 
 

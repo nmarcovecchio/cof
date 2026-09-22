@@ -1,12 +1,14 @@
+import csv
 import hashlib
 import hmac
+import io
 import json
 import math
 import os
 import re
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -40,6 +42,14 @@ from .models import Device, DeviceConfig, Event, Site, Telemetry, Tenant
 from .mqtt_util import publish_mqtt, publish_mqtt_raw
 from .notify import send_email, send_telegram
 from .phones import is_e164_phone, join_values, normalize_phone, parse_telegram_chats
+from .telemetry_series import (
+    AUX_COLUMNS,
+    bucket_rows,
+    bucket_seconds,
+    extract_aux_values,
+    extract_value,
+    series_for_device,
+)
 from .tts import MAX_TEXT_CHARS
 
 # Telemetry interval bounds, shared by the config form and by the POST handler.
@@ -57,6 +67,13 @@ from .tts import MAX_TEXT_CHARS
 TELEMETRY_INTERVAL_MIN_SECONDS = 10
 TELEMETRY_INTERVAL_MAX_SECONDS = 300
 
+# Telemetry history bounds. A 60 s cadence is ~1440 rows per device per day, so
+# an unbounded range would both melt the query and ship a multi-megabyte chart
+# payload to the browser. The window is capped and the chart is bucketed.
+TELEMETRY_MAX_RANGE_DAYS = 30
+TELEMETRY_CHART_MAX_ROWS = 50000
+TELEMETRY_CSV_MAX_ROWS = 200000
+
 
 def login_required(view):
     @wraps(view)
@@ -70,6 +87,69 @@ def login_required(view):
 
 def wants_json() -> bool:
     return request.args.get("format") == "json" or request.accept_mimetypes.best == "application/json"
+
+
+def parse_telemetry_range(default_hours: int = 24):
+    """Parse the from/to query args for the telemetry chart and CSV export.
+
+    Returns ``(from_dt, to_dt, error)``. Times are naive UTC because
+    ``Telemetry.received_at`` is a timestamptz that SQLAlchemy hands back aware.
+    A bare date means midnight; an omitted ``to`` means "now".
+    """
+    def parse(raw):
+        if not raw:
+            return None
+        raw = raw.strip()
+        try:
+            value = datetime.fromisoformat(raw)
+        except ValueError:
+            return "invalid"
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    from_dt = parse(request.args.get("from"))
+    to_dt = parse(request.args.get("to"))
+    if from_dt == "invalid" or to_dt == "invalid":
+        return None, None, "Formato de fecha invalido. Se espera ISO 8601 (ej. 2026-09-22T10:00)."
+    if to_dt is None:
+        to_dt = now
+    if from_dt is None:
+        from_dt = to_dt - timedelta(hours=default_hours)
+    if from_dt > to_dt:
+        return None, None, "El rango esta invertido: el inicio es posterior al fin."
+    if to_dt - from_dt > timedelta(days=TELEMETRY_MAX_RANGE_DAYS):
+        return None, None, f"El rango maximo es de {TELEMETRY_MAX_RANGE_DAYS} dias."
+    return from_dt, to_dt, None
+
+
+def telemetry_rows_for(device, from_dt, to_dt, limit):
+    """Rows for a device and range, oldest first, with a truncation flag."""
+    query = (
+        Telemetry.query.filter(
+            Telemetry.device_id == device.id,
+            Telemetry.received_at >= from_dt,
+            Telemetry.received_at <= to_dt,
+        )
+        .order_by(Telemetry.received_at.asc())
+        .limit(limit + 1)
+    )
+    rows = query.all()
+    truncated = len(rows) > limit
+    return rows[:limit], truncated
+
+
+def device_telemetry_series(device):
+    """Chartable series for a device, from its stored sensor configuration."""
+    try:
+        cfg = latest_config_payload(device)
+    except Exception:
+        app.logger.exception("latest_config_payload failed device=%s", device.device_uid)
+        cfg = {}
+    if isinstance(cfg, dict):
+        cfg = ensure_payload_keys(ensure_network_sensors(cfg))
+    return series_for_device(cfg)
 
 
 def cellular_signal(csq):
@@ -754,7 +834,71 @@ def create_app() -> Flask:
             contacts=resolve_contacts(device, latest_config_payload(device)),
             modem_jobs=active_modem_jobs(device),
             alarm_state=alarm_state,
+            telemetry_series=device_telemetry_series(device),
+            telemetry_max_days=TELEMETRY_MAX_RANGE_DAYS,
         )
+
+    @app.get("/devices/<device_uid>/telemetry.json")
+    @login_required
+    def device_telemetry_json(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        from_dt, to_dt, error = parse_telemetry_range()
+        if error:
+            return jsonify({"error": error}), 400
+        series = device_telemetry_series(device)
+        rows, truncated = telemetry_rows_for(device, from_dt, to_dt, TELEMETRY_CHART_MAX_ROWS)
+        resolution = bucket_seconds(from_dt, to_dt)
+        points, total = bucket_rows(rows, series, resolution)
+        return jsonify(
+            {
+                "device_uid": device.device_uid,
+                "from": from_dt.isoformat() + "Z",
+                "to": to_dt.isoformat() + "Z",
+                "bucket_seconds": resolution,
+                "series": series,
+                "points": points,
+                "total_samples": total,
+                "truncated": truncated,
+            }
+        )
+
+    @app.get("/devices/<device_uid>/telemetry.csv")
+    @login_required
+    def device_telemetry_csv(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        from_dt, to_dt, error = parse_telemetry_range()
+        if error:
+            return error, 400, {"Content-Type": "text/plain; charset=utf-8"}
+        series = device_telemetry_series(device)
+        rows, truncated = telemetry_rows_for(device, from_dt, to_dt, TELEMETRY_CSV_MAX_ROWS)
+        if truncated:
+            return (
+                f"El rango tiene mas de {TELEMETRY_CSV_MAX_ROWS} muestras. "
+                "Acota el rango para poder exportarlo.",
+                413,
+                {"Content-Type": "text/plain; charset=utf-8"},
+            )
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        header = ["fecha_hora", "device_id"]
+        header.extend(item["label"] + (f" ({item['unit']})" if item["unit"] else "") for item in series)
+        header.extend(label for _, label in AUX_COLUMNS)
+        writer.writerow(header)
+        for row in rows:
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            line = [row.received_at.isoformat() if row.received_at else "", device.device_uid]
+            line.extend(extract_value(payload, item) for item in series)
+            line.extend(extract_aux_values(payload).values())
+            writer.writerow(line)
+
+        filename = f"telemetria-{device.device_uid}-{from_dt:%Y%m%d}-{to_dt:%Y%m%d}.csv"
+        response = app.response_class(
+            buffer.getvalue().encode("utf-8-sig"),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+        return response
 
     @app.route("/devices/<device_uid>/config", methods=["GET", "POST"])
     @login_required
@@ -1273,6 +1417,42 @@ def ensure_network_sensors(cfg: dict) -> dict:
     return cfg
 
 
+# Sensors that shipped before the config carried a payload_key, mapped by id.
+# The key is what the firmware actually publishes (see mqtt_io.cpp), which is
+# NOT the "source": that one is a driver name ("sht31_humidity" is published as
+# "humidity"). Without this backfill a stored config cannot say where to read
+# its own sensor from, and the chart falls back to guessing by type - which is
+# how the second temperature probe ends up rendering the first probe's value.
+LEGACY_PAYLOAD_KEYS = {
+    "temp_1": "temperature_1",
+    "temp_2": "temperature_2",
+    "humidity_1": "humidity",
+    "mains_1": "zmpt_raw",
+}
+
+
+def ensure_payload_keys(cfg: dict) -> dict:
+    """Back-fill the payload_key on sensors from configs stored before it existed.
+
+    Done on read rather than as a DB migration: the operator's next save
+    persists it, and the network sensors (whose source already equals their
+    payload key) get one too so the field is uniform.
+    """
+    for sensor in cfg.get("sensors") or []:
+        if not isinstance(sensor, dict):
+            continue
+        if sensor.get("payload_key"):
+            continue
+        sensor_id = str(sensor.get("id") or "")
+        source = str(sensor.get("source") or "")
+        if sensor_id in LEGACY_PAYLOAD_KEYS:
+            sensor["payload_key"] = LEGACY_PAYLOAD_KEYS[sensor_id]
+        elif source:
+            # Connectivity and any sensor added later: the source IS the key.
+            sensor["payload_key"] = source
+    return cfg
+
+
 def default_device_config(device: Device) -> dict:
     return {
         "schema_version": 1,
@@ -1280,16 +1460,17 @@ def default_device_config(device: Device) -> dict:
         "device_id": device.device_uid,
         "telemetry_interval_seconds": 60,
         "sensors": [
-            {"id": "temp_1", "name": "DS18B20", "type": "temperature", "enabled": True, "source": "ds18b20"},
+            {"id": "temp_1", "name": "DS18B20", "type": "temperature", "enabled": True, "source": "ds18b20", "payload_key": "temperature_1"},
             {
                 "id": "temp_2",
                 "name": "SHT31 temperatura",
                 "type": "temperature",
                 "enabled": True,
                 "source": "sht31_temperature",
+                "payload_key": "temperature_2",
             },
-            {"id": "humidity_1", "name": "SHT31 humedad", "type": "humidity", "enabled": True, "source": "sht31_humidity"},
-            {"id": "mains_1", "name": "Red electrica", "type": "mains_voltage", "enabled": True, "source": "zmpt101b"},
+            {"id": "humidity_1", "name": "SHT31 humedad", "type": "humidity", "enabled": True, "source": "sht31_humidity", "payload_key": "humidity"},
+            {"id": "mains_1", "name": "Red electrica", "type": "mains_voltage", "enabled": True, "source": "zmpt101b", "payload_key": "zmpt_raw"},
             *[dict(spec) for spec in NETWORK_SENSORS],
         ],
         "outputs": [
@@ -1387,7 +1568,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
     except Exception:
         cfg = {}
     if isinstance(cfg, dict):
-        cfg = ensure_network_sensors(cfg)
+        cfg = ensure_payload_keys(ensure_network_sensors(cfg))
     # Warn about rules whose sensor has never carried a value. The concrete case is
     # mains_voltage: the firmware publishes it as null (only zmpt_raw is a real
     # reading), so a mains rule is accepted by the form, listed in the UI, and can

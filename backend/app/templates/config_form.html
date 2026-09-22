@@ -68,8 +68,10 @@
         <thead class="table-light">
           <tr>
             <th>ID</th>
-            <th>Nombre</th>
+            <th>Nombre (alias)</th>
             <th>Tipo</th>
+            <th>Campo de telemetria</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="sensors-tbody">
@@ -80,13 +82,28 @@
               <input type="text" class="form-control form-control-sm sensor-name" value="{{ s.name }}">
             </td>
             <td><span class="badge bg-secondary">{{ s.type }}</span></td>
+            <td>
+              <input type="text" class="form-control form-control-sm sensor-payload-key"
+                     value="{{ s.payload_key | default('', true) }}" placeholder="ej. humidity"
+                     {% if s.source and s.source.startswith('network_') %}readonly{% endif %}>
+            </td>
+            <td class="text-end">
+              {% if not (s.source and s.source.startswith('network_')) %}
+              <button type="button" class="btn btn-sm btn-outline-danger sensor-remove" title="Quitar del grafico">
+                <i class="bi bi-x-lg"></i>
+              </button>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     <div class="card-footer small text-muted">
-      Los sensores no se activan ni desactivan individualmente: las reglas de alarma de abajo son las que deciden que se vigila.
+      El <strong>alias</strong> es el nombre que vas a ver en el grafico y en el CSV, y se mantiene aunque el sensor se desconecte:
+      la linea queda vacia en ese periodo y vuelve a llenarse cuando lo reconectes. <strong>Campo de telemetria</strong> es la clave del
+      frame del firmware donde esta el valor (ej. <code>humidity</code>, <code>temperature_1</code>, <code>zmpt_raw</code>).
+      Quitar un sensor no borra el historial, solo deja de mostrarse.
       {# The per-sensor "Habilitado" switch was removed here. It was serialised and
          persisted but read by nothing - not the alarm engine (which only reads
          calling.enabled) and not the firmware (which never reads the sensors
@@ -353,6 +370,17 @@ function removeRule(btn) {
 
 EXISTING_RULES.forEach(r => addRule(r));
 
+// Removing a sensor only drops its row from the config: the telemetry already
+// stored is untouched, so the history stays queryable if it is ever re-added.
+document.getElementById('sensors-tbody').addEventListener('click', function (e) {
+  const button = e.target.closest('.sensor-remove');
+  if (!button) return;
+  const row = button.closest('tr');
+  const name = row.querySelector('.sensor-name').value || row.dataset.sensorId;
+  if (!confirm('Quitar el sensor "' + name + '" del grafico? El historial ya guardado no se borra.')) return;
+  row.remove();
+});
+
 // Build JSON and submit
 document.getElementById('config-form').addEventListener('submit', function(e) {
   e.preventDefault();
@@ -366,6 +394,7 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
       name: tr.querySelector('.sensor-name').value,
       type: tr.dataset.sensorType,
       source: tr.dataset.sensorSource,
+      payload_key: tr.querySelector('.sensor-payload-key').value.trim(),
     });
   });
 

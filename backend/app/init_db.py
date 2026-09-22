@@ -33,10 +33,19 @@ def ensure_schema_columns():
         "ALTER TABLE tenants ALTER COLUMN phone TYPE VARCHAR(512)",
     ]
 
+    # Composite index for the telemetry date-range queries. db.create_all() does
+    # not touch an existing table, so a table created before the index existed
+    # never gets it; IF NOT EXISTS keeps this idempotent on every boot.
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS ix_telemetry_device_received ON telemetry (device_id, received_at)",
+    ]
+
     with db.engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
         for statement in widen:
+            connection.execute(text(statement))
+        for statement in indexes:
             connection.execute(text(statement))
 
 

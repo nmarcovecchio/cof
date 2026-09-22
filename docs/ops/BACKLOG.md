@@ -105,6 +105,55 @@ internet**, no presencia de link.
 
 Complementa el punto 3.
 
+### 9b. Retencion de telemetria (crece sin limite)
+
+`Telemetry` no tiene ninguna politica de retencion: no hay job de limpieza ni
+`DELETE` programado (el unico precedente es `tts.cleanup_old_audio()`).
+
+**Numeros medidos** (no estimados): el frame que publica el firmware
+(`publishTelemetryNow()` en `firmware/src/mqtt_io.cpp`) serializa a **745
+bytes**; con el overhead de tabla/TOAST de Postgres redondea **~500 MB por
+equipo por año** a la cadencia de 60 s.
+
+| Alcance | 1 año |
+|---|---|
+| 1 equipo | ~0,5 GB |
+| 10 equipos | ~5 GB |
+| 100 equipos | ~50 GB |
+| 1000 equipos | ~496 GB (~41 GB/mes) |
+
+Lo que duele no es el disco sino las **filas**: a 60 s son 525.600 filas por
+equipo por año, y el `DELETE` de retencion tiene que mover esa misma cantidad.
+
+**Decidido para el MVP (2026-09-22): no hacer nada todavia.** Con un solo
+equipo el volumen es irrelevante. Se revisa cuando haya clientes reales, con
+datos de uso en mano.
+
+**Opcion a evaluar cuando toque** (piramide de agregados): el firmware publica
+cada 60 s una humedad/temperatura que cambia lento, asi que una muestra cada 5
+min es indistinguible para un grafico o una auditoria pero son **1/5 de los
+datos** (~100 MB/año por equipo). Crudo 60 s por 30 dias -> promedio 5 min por
+1 año -> promedio 1 h por 5 años. La contra: se pierde el detalle minuto a
+minuto mas alla de los 30 dias, asi que hay que confirmar que ningun cliente lo
+necesite antes de aplicarlo.
+
+El grafico y el export CSV ya acotan el rango (tope de 30 dias, ver
+`TELEMETRY_MAX_RANGE_DAYS` en `backend/app/main.py`), pero **eso solo protege la
+consulta, no el disco**.
+
+### 9c. `mains_voltage` siempre `null`
+
+El firmware publica `doc["mains_voltage"] = nullptr` y solo manda `zmpt_raw`
+(lectura cruda del ZMPT101B, sin calibrar). Consecuencias:
+
+- Las reglas de alarma sobre `mains_1` nunca disparan (el panel ya las marca
+  como inertes en `config_form.html`).
+- El grafico de la linea de 220V muestra el ADC crudo, rotulado como tal.
+
+Falta calcular RMS en el firmware para tener voltios reales. El backend ya lo
+soporta sin tocar codigo: alcanza con cambiar el `payload_key` del sensor
+`mains_1` de `zmpt_raw` a `mains_voltage` desde el formulario de config.
+
 ---
 
 ## P2 — Diferido a proposito (requiere acceso fisico al device)
