@@ -56,17 +56,112 @@ _BUCKETS = (
 # because no null ever reaches the renderer to trip `spanGaps: false`.
 #
 # Filling the empty buckets fixes that, but filling *every* one would cut the
-# line on any single missed reading (a 60 s cadence with a 300 s bucket leaves
-# gaps all the time). So a gap only becomes a visible break once it lasts
-# _GAP_MIN_EMPTY_BUCKETS buckets, and shorter gaps stay bridged.
+# line on any single missed reading. So a gap only becomes a visible break once
+# it lasts enough empty buckets, and shorter gaps stay bridged.
 #
-# Note this bounds the resolution of the feature: an outage shorter than the
-# bucket is invisible by construction. Over 30 days the bucket is 6 h, so a two
-# hour outage cannot be represented at that zoom regardless of this threshold.
-# 3 is a starting value; a device configured at the 300 s maximum cadence can
-# leave a stray empty bucket from clock skew alone, and one or two of those
-# should not read as an outage.
-_GAP_MIN_EMPTY_BUCKETS = 3
+# How many is "enough" depends on the bucket, not on taste. What makes an empty
+# bucket suspicious is how many real samples should have landed in it: with a
+# 60 s cadence a 1 min bucket holds one sample (so one lost reading empties it),
+# while a 6 h bucket holds 360 (so 360 consecutive losses are needed). A fixed
+# count would either invent cuts at 1 min or hide real outages at 6 h - at 30
+# days the old fixed 3 only fired after 18 h of silence.
+#
+# Hence the threshold scales down as the bucket grows: strict where a bucket is
+# one sample, lenient where an empty bucket is already proof of a long silence.
+_GAP_MIN_EMPTY_BUCKETS_BY_BUCKET = {
+    # bucket seconds -> empty buckets needed before the line breaks
+    60: 3,  # 1 min bucket: a couple of missed readings must not cut
+    300: 3,  # 5 min: 15 min of silence
+    3600: 2,  # 1 h: 2 h of silence
+    21600: 1,  # 6 h: an empty bucket is already 6 h with nothing
+}
+_GAP_MIN_EMPTY_BUCKETS = 3  # fallback for a bucket outside the table
+
+
+def _gap_threshold(resolution: int) -> int:
+    """Empty buckets needed before a gap is drawn as a break, for a resolution."""
+    return _GAP_MIN_EMPTY_BUCKETS_BY_BUCKET.get(int(resolution), _GAP_MIN_EMPTY_BUCKETS)
+
+
+# Detecting an outage from the *buckets* cannot work: bucketing averages, so a
+# bucket that holds a one-hour outage plus a few readings still has data and
+# never looks empty. At a 6 h bucket (30-day range) an outage would have to last
+# six hours to register, which is useless for spotting a short cut.
+#
+# The raw rows do carry that information, and they are already loaded to build
+# the buckets, so outages are measured there instead: walk the samples in order
+# and look at the delta between consecutive ones. That is exact to the second and
+# does not depend on the zoom.
+#
+# The question is which delta is an outage and which is just the normal cadence.
+# The cadence is configurable per device (10 s to 300 s) and can change over
+# time, so it is measured from the data instead of read from the config, which
+# would answer with today's value for a gap from months ago.
+#
+# The reference cadence is the *global* median, not one computed next to each
+# gap. A local window is fragile: a run of on-time samples beside an honest
+# 180 s LTE retry drags the local median down, the threshold lands exactly on
+# the retry, and a normal hiccup is reported as an outage (measured: ~5% false
+# positives on a jittery cadence). The global median is unaffected by a handful
+# of slow samples, so the threshold stays stable.
+_OUTAGE_MIN_SAMPLES = 8  # below this there is no cadence to measure
+_OUTAGE_CADENCE_MULTIPLIER = 3  # a gap is an outage past 3x the usual cadence
+_OUTAGE_MIN_SECONDS = 180  # absolute floor, so a bad estimate cannot invent cuts
+_OUTAGE_MARGIN_SECONDS = 60  # slack so a sample sitting on the edge is not a cut
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def detect_outages(rows, limit: int = 50) -> list[dict]:
+    """Silences in the raw telemetry, as ``[{from, to, seconds, samples}]``.
+
+    ``rows`` must be the raw samples, oldest first. Returns at most ``limit``
+    outages, longest first: a range with hundreds of one-reading hiccups should
+    not bury the one that actually took the site down.
+    """
+    stamps: list[int] = []
+    for row in rows:
+        at = _to_epoch(getattr(row, "received_at", None))
+        if at is not None:
+            stamps.append(at)
+    if len(stamps) < _OUTAGE_MIN_SAMPLES:
+        return []
+
+    stamps.sort()
+    deltas = [b - a for a, b in zip(stamps, stamps[1:]) if b > a]
+    if len(deltas) < _OUTAGE_MIN_SAMPLES:
+        return []
+
+    cadence = _median(deltas)
+    if cadence <= 0:
+        return []
+    threshold = max(cadence * _OUTAGE_CADENCE_MULTIPLIER, _OUTAGE_MIN_SECONDS) + _OUTAGE_MARGIN_SECONDS
+
+    outages = []
+    for index, delta in enumerate(deltas):
+        if delta < threshold:
+            continue
+        outages.append(
+            {
+                "from": _iso_utc(datetime.fromtimestamp(stamps[index], tz=timezone.utc)),
+                "to": _iso_utc(datetime.fromtimestamp(stamps[index + 1], tz=timezone.utc)),
+                # The delta spans the silence *plus* one normal cadence: the
+                # sample that closes the gap would have arrived one cadence
+                # after the last one anyway. Subtract it so the number the
+                # operator reads is the time actually missing.
+                "seconds": int(delta - cadence),
+                "cadence_seconds": int(cadence),
+            }
+        )
+
+    outages.sort(key=lambda item: item["seconds"], reverse=True)
+    return outages[:limit]
 
 
 def _as_float(value):
@@ -247,6 +342,73 @@ def extract_aux_values(payload: dict) -> dict:
     return {label: payload.get(key) for key, label in AUX_COLUMNS}
 
 
+def last_readings(device_id: int, windows: list, now: datetime, max_age_days: int = 7) -> list[dict]:
+    """The most recent reading of each active sensor, for the summary cards.
+
+    Answers "what is the room at right now" without making the operator open the
+    chart, so it must not lie about freshness: the caller gets ``at`` (the exact
+    instant of the sample) and the UI shows how long ago that was.
+
+    Only open windows are considered - a retired alias should not advertise a
+    reading it is no longer producing. The scan is bounded to ``max_age_days``
+    so a device that has been offline for months does not walk its whole history
+    for a number nobody should trust anyway; a sensor with no sample inside the
+    bound comes back with ``value=None`` and the UI says so.
+
+    One query, not one per sensor: the rows are already ordered newest first, so
+    the first row that yields a value for a sensor is that sensor's last reading
+    and the loop can stop early once every sensor has been filled.
+    """
+    from .models import Telemetry  # local import: keeps this module model-free for tests
+
+    active = [
+        w
+        for w in windows
+        if is_plottable(w) and getattr(w, "ends_at", None) is None
+    ]
+    if not active:
+        return []
+
+    since = now - timedelta(days=max_age_days)
+    rows = (
+        Telemetry.query.filter(
+            Telemetry.device_id == device_id,
+            Telemetry.received_at >= since,
+        )
+        .order_by(Telemetry.received_at.desc())
+        .limit(500)
+        .all()
+    )
+
+    found: dict[int, tuple] = {}
+    for candidate in rows:
+        if len(found) == len(active):
+            break
+        payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+        for window in active:
+            if window.id in found:
+                continue
+            reading = extract_value(payload, {"keys": [window.payload_key]})
+            if reading is not None:
+                found[window.id] = (reading, candidate.received_at)
+
+    out = []
+    for window in active:
+        label, unit, axis, _note = _label_and_axis(window)
+        value, at = found.get(window.id, (None, None))
+        out.append(
+            {
+                "id": f"w{window.id}",
+                "label": label,
+                "unit": unit,
+                "axis": axis,
+                "value": value,
+                "at": _iso_utc(at),
+            }
+        )
+    return out
+
+
 def bucket_seconds(from_dt: datetime, to_dt: datetime) -> int:
     """Recommended aggregation bucket for a range, in seconds."""
     span = to_dt - from_dt
@@ -268,14 +430,15 @@ def _fill_gaps(points: list[dict], series: list[dict], resolution: int) -> list[
     not claim the device was up (or down) before it ever reported, nor after it
     stopped. That also means a range whose whole span is empty stays empty.
 
-    Gaps shorter than ``_GAP_MIN_EMPTY_BUCKETS`` buckets are left alone, so the
-    line stays continuous across a single missed reading and the cut only means
-    something when it appears.
+    Gaps shorter than the resolution's threshold are left alone, so the line
+    stays continuous across a missed reading and the cut only means something
+    when it appears. See ``_gap_threshold``.
     """
     if len(points) < 2:
         return points
 
     resolution = max(int(resolution or 60), 1)
+    threshold = _gap_threshold(resolution)
     out: list[dict] = []
     for previous, current in zip(points, points[1:]):
         out.append(previous)
@@ -284,7 +447,7 @@ def _fill_gaps(points: list[dict], series: list[dict], resolution: int) -> list[
         if previous_epoch is None or current_epoch is None:
             continue
         missing = (current_epoch - previous_epoch) // resolution - 1
-        if missing < _GAP_MIN_EMPTY_BUCKETS:
+        if missing < threshold:
             # Too short to mean an outage; leave it bridged.
             continue
         for step in range(1, missing + 1):

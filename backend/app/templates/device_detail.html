@@ -105,6 +105,37 @@
   </div>
 </div>
 
+{% if last_readings %}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+      <div class="fw-semibold">Ultima lectura por sensor</div>
+      <div class="small text-muted">
+        El valor mas reciente que reporto cada sensor activo. La hora es la de esa muestra, no la de esta pantalla.
+      </div>
+    </div>
+    <div class="row g-2">
+      {% for reading in last_readings %}
+      <div class="col-6 col-md-4 col-xl-3">
+        <div class="reading-tile{% if reading.value is none %} is-stale{% endif %}">
+          <div class="reading-label" title="{{ reading.label }}">{{ reading.label }}</div>
+          {% if reading.value is none %}
+            <div class="reading-value text-muted">sin datos</div>
+            <div class="reading-when">Sin lecturas en los ultimos 7 dias.</div>
+          {% else %}
+            <div class="reading-value">
+              {{ reading.value|round(1) }}{% if reading.unit %} <span class="reading-unit">{{ reading.unit }}</span>{% endif %}
+            </div>
+            <div class="reading-when" data-reading-at="{{ reading.at }}">{{ reading.at|datetime_local }}</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
     <div class="card mb-4">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span>Telemetria</span>
@@ -135,8 +166,10 @@
         </div>
         <div id="telemetry-alert" class="alert alert-warning py-2 small d-none" role="alert"></div>
         <div id="telemetry-series-picker" class="d-flex flex-wrap gap-3 mb-2 small"></div>
+        <div id="telemetry-outages" class="mb-2"></div>
         <div class="position-relative" style="height: 380px;">
           <canvas id="telemetry-chart"></canvas>
+          <div id="telemetry-outage-marks" class="outage-marks" aria-hidden="true"></div>
           <div id="telemetry-empty" class="text-muted small position-absolute top-50 start-50 translate-middle d-none">
             Sin datos en el rango seleccionado.
           </div>
@@ -752,7 +785,11 @@
   const summary = document.getElementById('telemetry-summary');
   const exportLink = document.getElementById('telemetry-export');
   const picker = document.getElementById('telemetry-series-picker');
+  const outagesBox = document.getElementById('telemetry-outages');
+  const marksBox = document.getElementById('telemetry-outage-marks');
   let chart = null;
+  let lastOutages = [];
+  let lastPoints = [];
 
   // datetime-local wants "YYYY-MM-DDTHH:MM" in local time, not ISO/UTC.
   function toLocalInput(date) {
@@ -802,6 +839,8 @@
         const index = SERIES.findIndex((s) => s.id === item.id);
         chart.setDatasetVisibility(index, input.checked);
         chart.update();
+        // Toggling a series re-lays out the legend, which moves the plot area.
+        if (lastOutages.length) renderOutages(lastOutages, lastPoints);
       });
       const label = document.createElement('label');
       label.className = 'form-check-label';
@@ -940,10 +979,75 @@
     summary.textContent = bits.join(' · ');
 
     refreshPicker(data);
+    // Kept so the marks can be repositioned when the canvas resizes: the pixel
+    // position of an outage depends on the current axis, not on the data.
+    lastOutages = data.outages || [];
+    lastPoints = points;
+    renderOutages(lastOutages, lastPoints);
 
     if (data.truncated) {
       showAlert('El rango tiene mas muestras de las que se pueden graficar; se muestran las primeras. Acota el rango para ver todo.');
     }
+  }
+
+  // Outage marks. They are drawn as an HTML overlay rather than through a
+  // Chart.js annotation plugin: the requirement is a *minimum* width in pixels,
+  // and the axis scale cannot express that (a one-hour cut over 30 days is
+  // under 2 px, which reads as nothing).
+  function humanDuration(seconds) {
+    if (seconds < 3600) return Math.round(seconds / 60) + ' min';
+    const hours = seconds / 3600;
+    if (hours < 24) return (hours < 10 ? hours.toFixed(1) : Math.round(hours)) + ' h';
+    return (Math.round(hours / 24 * 10) / 10) + ' d';
+  }
+
+  function renderOutages(outages, points) {
+    marksBox.innerHTML = '';
+    if (!outages.length || !chart || !points.length) {
+      outagesBox.innerHTML = '';
+      return;
+    }
+
+    const xScale = chart.scales.x;
+    const area = chart.chartArea;
+    const MIN_WIDTH = 3; // px: below this a band is indistinguishable from a gridline
+    const totalSeconds = outages.reduce((sum, item) => sum + item.seconds, 0);
+
+    let drawn = 0;
+    outages.forEach(function (outage) {
+      const start = new Date(outage.from).getTime();
+      const end = new Date(outage.to).getTime();
+      const left = xScale.getPixelForValue(start);
+      const right = xScale.getPixelForValue(end);
+      if (!isFinite(left) || !isFinite(right)) return;
+      // Skip what falls outside the visible area so a mark never floats over
+      // the axes when the outage sits past the edge of the range.
+      if (right < area.left - 2 || left > area.right + 2) return;
+      const width = Math.max(right - left, MIN_WIDTH);
+      const mark = document.createElement('div');
+      mark.className = 'outage-mark';
+      mark.style.left = Math.max(area.left, left) + 'px';
+      mark.style.width = width + 'px';
+      mark.title = 'Sin datos del ' + new Date(start).toLocaleString()
+        + ' al ' + new Date(end).toLocaleString()
+        + ' (' + humanDuration(outage.seconds) + ')';
+      marksBox.appendChild(mark);
+      drawn += 1;
+    });
+
+    if (!drawn) {
+      outagesBox.innerHTML = '';
+      return;
+    }
+    const shown = outages.slice(0, 3).map(function (outage) {
+      return '<span class="outage-chip">' + new Date(outage.from).toLocaleString()
+        + ' · ' + humanDuration(outage.seconds) + '</span>';
+    }).join('');
+    const extra = outages.length > 3 ? '<span class="text-muted">y ' + (outages.length - 3) + ' mas</span>' : '';
+    outagesBox.innerHTML = '<div class="outage-summary">'
+      + '<strong class="text-danger">' + outages.length + '</strong> corte(s) de datos · '
+      + '<span class="text-muted">' + humanDuration(totalSeconds) + ' sin lecturas en total</span>'
+      + shown + extra + '</div>';
   }
 
   function load() {
@@ -981,7 +1085,69 @@
   buildPicker();
   setRange(24);
   load();
+
+  // ResizeObserver rather than a window listener: the canvas also changes width
+  // when the layout reflows (sidebar, zoom), where no window resize fires.
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () {
+      if (lastOutages.length) renderOutages(lastOutages, lastPoints);
+    }).observe(document.getElementById('telemetry-chart'));
+  } else {
+    window.addEventListener('resize', function () {
+      if (lastOutages.length) renderOutages(lastOutages, lastPoints);
+    });
+  }
 })();
 </script>
 {% endif %}
+<script>
+// Last-reading tiles: the server renders the exact timestamp (which is the
+// honest datum) and this appends how long ago it was, because "hace 4 min" is
+// what tells an operator whether the value is worth trusting. Kept outside the
+// telemetry_series guard: these tiles do not depend on the chart.
+(function () {
+  const tiles = document.querySelectorAll('[data-reading-at]');
+  if (!tiles.length) return;
+
+  function humanise(seconds) {
+    if (seconds < 60) return 'hace instantes';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return 'hace ' + minutes + ' min';
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return 'hace ' + hours + ' h';
+    const days = Math.floor(hours / 24);
+    return 'hace ' + days + ' d';
+  }
+
+  // Colour bands, in seconds, so a stale reading is visible without the
+  // operator doing the arithmetic. They only consider the gap between samples,
+  // which is the one thing the tile can know.
+  function toneFor(seconds) {
+    if (seconds > 3600) return ' is-old';
+    if (seconds > 900) return ' is-warn';
+    return '';
+  }
+
+  function paint() {
+    const base = Date.now();
+    tiles.forEach(function (el) {
+      const raw = el.getAttribute('data-reading-at');
+      if (!raw) return;
+      const at = new Date(raw);
+      if (isNaN(at.getTime())) return;
+      const seconds = Math.max(0, (base - at.getTime()) / 1000);
+      // Keep the server-rendered absolute timestamp and append the age, so the
+      // tile never loses the exact instant it is reporting.
+      const absolute = el.getAttribute('data-absolute') || el.textContent.trim();
+      el.setAttribute('data-absolute', absolute);
+      el.textContent = absolute + ' · ' + humanise(seconds);
+      el.className = 'reading-when' + toneFor(seconds);
+    });
+  }
+
+  paint();
+  // Refresh so an open tab does not show a frozen "hace instantes" for hours.
+  setInterval(paint, 60000);
+})();
+</script>
 {% endblock %}

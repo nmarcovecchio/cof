@@ -276,6 +276,76 @@ Impacto medido: 24 h con un apagon de 4 h -> 281 puntos (51 nulos, 2 cortes, el
 mayor de 4.00 h). 30 dias a resolucion de 6 h -> ~120 puntos, muy por debajo del
 cap de 50k filas, asi que no hay riesgo de inflar el payload.
 
+### 9j. Cortes cortos invisibles en rangos largos — RESUELTO
+
+Pedido: "si en 30 dias algo se corto 1 hora, querria verlo". Con 9i no se podia,
+y la razon no era el umbral.
+
+**Por que el bucketing lo impide.** Un bucket que contiene un corte de 1 h *mas*
+lecturas igual tiene datos, asi que nunca queda vacio:
+
+```
+30 d -> 120 buckets de 6 h
+  bucket 00:00-06:00: lecturas 00:00..03:20 | CORTE | 04:20..06:00
+                       -> promedia las 340 y da UN punto
+```
+
+A 6 h de bucket un corte tendria que durar 6 h para vaciarlo. La informacion la
+tira el promedio, no el umbral: bajarlo no lo arregla.
+
+**Solucion: medir los cortes sobre el crudo, no sobre los buckets.**
+`detect_outages()` recorre las muestras crudas -que ya se traen para armar los
+buckets, asi que no agrega queries- y mira el delta entre consecutivas. Es exacto
+al segundo e independiente del zoom. Se separan asi las dos resoluciones que
+estaban atadas:
+
+| | Resolucion | De que depende |
+|---|---|---|
+| La linea (valor) | bucket de 6 h a 30 dias | cuantos puntos se quieren |
+| Los cortes (silencio) | precision de segundos | los datos crudos |
+
+**Cadencia medida, no leida de la config.** El intervalo es configurable por
+equipo (10-300 s) y cambia en el tiempo, y no esta persistido por muestra, asi
+que leerlo de la config actual responderia con el valor de hoy para un hueco de
+hace meses. Se usa la **mediana global** de los deltas. Una mediana *local* se
+probo primero y era fragil: una racha de muestras puntuales al lado de un
+reintento honesto de 180 s bajaba la referencia, el umbral caia justo sobre el
+reintento y se reportaban ~5% de falsos positivos. La global no la mueven unos
+pocos valores lentos.
+
+Umbral: `max(3 x cadencia, 180 s) + 60 s` de margen. La duracion reportada resta
+una cadencia (el delta incluye el silencio *mas* el intervalo normal: un corte de
+1 h daba 3660 s a 60 s de cadencia).
+
+**Marcas en el grafico.** El corte se dibuja como banda vertical superpuesta al
+canvas, con **ancho minimo de 3 px**: una hora en 30 dias ocupa ~1,7 px de escala
+real, o sea menos que un pixel. La exageracion es deliberada - la alternativa era
+detectarlo bien y no verlo igual. Ademas hay un contador arriba del grafico
+("2 cortes de datos - 5 h sin lecturas en total") con las tres fechas mas largas,
+que es lo que garantiza que no se escape aunque las bandas se pisen.
+
+**Limite que queda:** la deteccion no distingue que sensor falto, solo que no
+llego ninguna muestra. Y si el rango supera el cap de 50.000 filas (a 10 s de
+cadencia, 30 dias = 259.200) el scan ve solo la parte que entra.
+
+Costo medido: 34 ms sobre 50.000 filas (0,68 us/fila), contra una query a
+Postgres que ya se hacia.
+
+### 9k. Ultima lectura por sensor — RESUELTO
+
+`last_readings()` devuelve el valor mas reciente de cada ventana activa, para
+responder "en cuanto esta la camara ahora" sin abrir el grafico.
+
+- Las tarjetas van **debajo del estado del equipo**, no grandes: el valor manda
+  pero la pagina sigue liderando con el estado.
+- Muestran valor + unidad, la **hora exacta** de la muestra y **cuanto hace**
+  (esto ultimo se calcula en el navegador), con color por antiguedad: gris al
+  dia, ambar pasados 15 min, rojo pasada 1 h. El dato viejo tiene que verse viejo.
+- Solo ventanas **abiertas**: un alias retirado no anuncia una lectura que ya no
+  produce.
+- Busqueda acotada a 7 dias y a las 500 filas mas recientes, en **una sola
+  query** (no una por sensor); si no encuentra nada, la tarjeta dice "sin datos".
+
 ### 9d. Borrado de historial por alias — NO implementado
 
 Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda

@@ -49,8 +49,10 @@ from .telemetry_series import (
     _to_epoch,
     bucket_rows,
     bucket_seconds,
+    detect_outages,
     extract_aux_values,
     extract_value,
+    last_readings,
     series_for_range,
     windows_for_range,
 )
@@ -852,6 +854,11 @@ def create_app() -> Flask:
                 datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24),
                 datetime.now(timezone.utc).replace(tzinfo=None),
             ),
+            last_readings=last_readings(
+                device.id,
+                device_sensor_windows(device),
+                datetime.now(timezone.utc).replace(tzinfo=None),
+            ),
             telemetry_max_days=TELEMETRY_MAX_RANGE_DAYS,
         )
 
@@ -876,6 +883,9 @@ def create_app() -> Flask:
                 "points": points,
                 "total_samples": total,
                 "truncated": truncated,
+                # Silences measured on the raw samples, not on the buckets: a
+                # short outage inside one bucket leaves no trace in `points`.
+                "outages": detect_outages(rows),
             }
         )
 
