@@ -154,6 +154,25 @@ Falta calcular RMS en el firmware para tener voltios reales. El backend ya lo
 soporta sin tocar codigo: alcanza con reasignar el `payload_key` de la ventana
 `mains_1` de `zmpt_raw` a `mains_voltage` desde el formulario de config.
 
+### 9e. `payload_key` derivado del driver — RESUELTO
+
+Al crear `SensorWindow` para equipos que ya existian, el backfill de
+`init_db.py` no tenia un `payload_key` explicito en la config y caia al
+`source` del sensor. Pero `source` es el **driver** (`ds18b20`,
+`sht31_temperature`, `zmpt101b`), **no** la clave que el firmware emite
+(`temperature_1`, `temperature_2`, `zmpt_raw`).
+
+El sintoma era muy confuso: el grafico mostraba los ejes y las fechas pero
+**ninguna linea**, porque las series existian con todos los valores en `null`.
+No es un problema del rango del eje Y. El resumen lo delataba con
+`N sensor(es) sin datos`.
+
+Arreglado con un mapa driver -> clave real (`FIRMWARE_PAYLOAD_KEYS`, espejo de
+`firmware/src/mqtt_io.cpp`) y una pasada de reparacion
+(`repair_sensor_window_keys`) que corre en cada arranque y reescribe solo las
+ventanas cuyo `payload_key` es un nombre de driver conocido. Un `payload_key`
+editado a mano no se toca, y la operacion es idempotente.
+
 ### 9d. Borrado de historial por alias — NO implementado
 
 Cuando un sensor se reasigna (camara A -> camara B), el historial viejo queda

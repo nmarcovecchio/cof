@@ -3,6 +3,15 @@ from .main import create_app
 from .models import Device, Site, Tenant, utcnow
 from sqlalchemy import inspect, text
 
+# Driver name -> the key the firmware actually emits in the telemetry payload.
+# Mirrors firmware/src/mqtt_io.cpp, where these keys are written literally.
+FIRMWARE_PAYLOAD_KEYS = {
+    "ds18b20": "temperature_1",
+    "sht31_temperature": "temperature_2",
+    "sht31_humidity": "humidity",
+    "zmpt101b": "zmpt_raw",
+}
+
 
 def ensure_schema_columns():
     inspector = inspect(db.engine)
@@ -76,6 +85,50 @@ def ensure_seed_data():
     db.session.commit()
 
 
+def sensor_payload_key(sensor: dict) -> str:
+    """The telemetry payload key a configured sensor reports under.
+
+    An explicit ``payload_key`` wins. Configs written before that field existed
+    only carry ``source``, which is the *driver* name (``ds18b20``,
+    ``sht31_temperature``, ...) rather than the key the firmware actually
+    emits. Falling back to the driver name silently produced windows whose key
+    never matched the payload, so every bucket came back null and the chart
+    drew no lines - so map the known drivers to their real keys instead.
+    """
+    explicit = str(sensor.get("payload_key") or "").strip()
+    if explicit:
+        return explicit
+    source = str(sensor.get("source") or "").strip()
+    if source in FIRMWARE_PAYLOAD_KEYS:
+        return FIRMWARE_PAYLOAD_KEYS[source]
+    # An unknown driver: the source is the best guess we have, and the operator
+    # can correct it from the config panel.
+    return source
+
+
+def repair_sensor_window_keys() -> int:
+    """Re-point windows whose payload_key is a driver name, not a payload key.
+
+    ``ensure_sensor_windows`` skips devices that already have windows, so a
+    device migrated with the old driver-name fallback keeps its broken keys
+    forever. This fixes those rows in place - it only rewrites a key when the
+    stored value is a known driver name, so a deliberately edited payload_key
+    is never touched.
+    """
+    from .models import SensorWindow
+
+    fixed = 0
+    for window in SensorWindow.query.all():
+        current = str(getattr(window, "payload_key", "") or "").strip()
+        replacement = FIRMWARE_PAYLOAD_KEYS.get(current)
+        if replacement and replacement != current:
+            window.payload_key = replacement
+            fixed += 1
+    if fixed:
+        db.session.commit()
+    return fixed
+
+
 def ensure_sensor_windows():
     """Give every device with a config one open window per configured sensor.
 
@@ -111,7 +164,7 @@ def ensure_sensor_windows():
             if not isinstance(sensor, dict):
                 continue
             sensor_id = str(sensor.get("id") or "").strip()
-            payload_key = str(sensor.get("payload_key") or sensor.get("source") or "").strip()
+            payload_key = sensor_payload_key(sensor)
             if not sensor_id or not payload_key:
                 continue
             db.session.add(
@@ -134,6 +187,9 @@ def main():
         ensure_schema_columns()
         ensure_seed_data()
         ensure_sensor_windows()
+        repaired = repair_sensor_window_keys()
+        if repaired:
+            print(f"Repaired {repaired} sensor window payload key(s)")
         print("Database initialized")
 
 
