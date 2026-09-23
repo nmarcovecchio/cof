@@ -580,9 +580,47 @@ El firmware publica `doc["mains_voltage"] = nullptr` y solo manda `zmpt_raw`
   como inertes en `config_form.html`).
 - El grafico de la linea de 220V muestra el ADC crudo, rotulado como tal.
 
-Falta calcular RMS en el firmware para tener voltios reales. El backend ya lo
-soporta sin tocar codigo: alcanza con reasignar el `payload_key` de la ventana
-`mains_1` de `zmpt_raw` a `mains_voltage` desde el formulario de config.
+**Correccion 2026-09-23: son DOS vias distintas, y el arreglo que decia este item
+solo cubre una.**
+
+- **Grafico:** resuelve por `payload_key` de la ventana. Reasignar el `payload_key`
+  de `zmpt_raw` a `mains_voltage` lo arregla, como decia el item.
+- **Alarmas:** **no** usan `payload_key`. `sensor_value()` (`alarms.py:156`) resuelve
+  por `SENSOR_ALIASES`, y para `mains_1` los alias son
+  `("mains_1", "mains_voltage")`. El firmware manda `mains_voltage: null` y
+  `zmpt_raw: <crudo>`, asi que la busqueda no encuentra **ninguno** de los dos y
+  devuelve `None`; `condition_holds()` devuelve `None` y
+  `evaluate_device_rules()` **saltea la regla en silencio**.
+
+O sea: reasignar el `payload_key` **no** hace disparar la alarma. Para que dispare
+hay que calcular RMS real en el firmware (y publicarlo en `mains_voltage`), o bien
+agregar `zmpt_raw` a los alias de `mains_1` en `alarms.py` - pero eso haria comparar
+un umbral contra un ADC crudo sin calibrar, que no es comparable entre equipos.
+
+**El backend ya lo admite.** `main.py:1977` marca estas reglas como inertes y el
+formulario avisa que el firmware todavia no calcula la tension. El sistema sabe que
+no funciona; ver abajo el desalineo con la web.
+
+**Falta:** calcular RMS en el firmware para tener voltios reales.
+
+### 9d. La web vende "corte de red electrica" y hoy no puede detectarlo
+
+**Hallazgo 2026-09-23.** `web/energia/index.html` lista **"Corte de red electrica en
+el tablero"** como alarma del pack de energia, y `docs/ROADMAP.md` lo reconoce sin
+marcarlo como no vendible. Hoy **no hay ninguna via que lo detecte**:
+
+- Por ZMPT (tension): depende de §9c, y la alarma no puede disparar.
+- Por contacto seco: las alarmas vecinas de esa misma pagina dicen "via contacto /
+  senal", pero IN1 (`P0` del PCF) esta mapeado a **fuga de agua** y IN2 (`P1`) es
+  **spare sin borne asignado** (`HARDWARE_V1.md`). O sea que no hay una entrada
+  libre para el corte de red.
+
+Es el mismo patron que §1 y §2 del roadmap (Modbus y SNMP): se anuncian funciones que
+no existen. La diferencia es que aca es una **alarma de seguridad**, no un extra.
+
+**A decidir (no es una decision de codigo):** o se implementa (RMS en firmware para
+la via ZMPT, o reasignar IN2 a corte de red), o se saca de la web y del roadmap hasta
+que exista.
 
 ### 9e. `payload_key` derivado del driver — RESUELTO
 
