@@ -124,14 +124,18 @@ alta con el alias del sensor y el operador en palabras ("Camara A mayor que
 Acepta placeholders:
 
 ```text
-{equipo}   {sitio}   {cliente}   {sensor}   {umbral}   {valor}   {regla}
+{equipo}   {sitio}   {cliente}   {sensor}   {umbral}   {regla}
 ```
 
 Ejemplo:
 
 ```text
-Alarma en {sitio}. {sensor} marca {valor} grados. Revise la camara.
+Alarma en {sitio}. El sensor {sensor} supero los 40 grados. Revise la camara.
 ```
+
+Si el numero importa, **se escribe en el texto**: queda pregrabado como cualquier
+otra palabra. El valor exacto de cada disparo no se dice por telefono, va por
+**SMS y email** (ver mas abajo, `{valor}` retirado).
 
 El texto custom afecta **solo la llamada**. El email, Telegram y el SMS siguen
 mandando el texto completo de la alarma con el sitio, la regla y el enlace de
@@ -168,25 +172,45 @@ Entonces:
 Dos reglas con el mismo texto (en el mismo equipo o en otro) comparten **un solo
 archivo**, tanto en el servidor como en el modem.
 
-### `{umbral}` vs `{valor}`: la unica diferencia que importa
+### `{valor}` esta retirado
 
-| Placeholder | Cuando se conoce | Que se pregrabra |
-|---|---|---|
-| `{umbral}` y el resto | Al guardar la regla | Se graba con el numero ya dicho |
-| `{valor}` | Recien al dispararse | Se graba la **variante generica**, sin el numero |
+Todos los placeholders se resuelven **al guardar**. `{valor}` (la lectura del
+momento del disparo) **ya no existe**, y no es una limitacion pendiente sino una
+decision:
 
-Si el texto lleva `{valor}`, hay **dos** audios: la variante generica pregrabada
-y el texto exacto que el servidor sintetiza al disparar. El equipo intenta bajar
-el exacto:
+- Obligaba a sintetizar y bajar audio **durante la alarma**, que es justo el peor
+  momento para depender del VPS, de la red del sitio y del disco del modem.
+- Su respaldo sin internet decia *"un valor fuera de rango"*, y esa frase suele
+  ser **falsa**: una regla puede disparar por `menor que`, o ser una prueba manual
+  sin lectura. La llamada no degradaba a silencio, degradaba a una frase mentira.
+- Mezclaba un numero real con uno inventado: `{umbral}` se grababa con el numero
+  del umbral, asi que el audio podia decir un umbral verdadero y una lectura
+  fabricada en la misma frase.
 
-- Si tiene internet (Ethernet/WiFi) → baja el exacto y **dice el numero**.
-- Si no puede bajarlo (solo-LTE) → reproduce la **variante generica**.
+**Que usar en su lugar, segun el caso:**
 
-En los dos casos la llamada se hace. Lo unico que cambia es si dice el numero.
+| Que queres decir | Como |
+|---|---|
+| Un limite conocido ("supero los 40 grados") | Escribi el numero en el texto |
+| El umbral de la regla | `{umbral}`, se graba con el numero |
+| El valor exacto de cada disparo | Va por **SMS y email**, no por voz |
+
+El SMS y el email no necesitan sintesis ni descarga, viajan por el modem igual
+que la llamada, y pueden decir el numero exacto sin ningun costo. La llamada es
+el canal que **despierta a alguien**; el dato numerico va por el canal escrito.
+
+Una regla guardada antes de este cambio puede tener `{valor}` en su texto. El
+servidor **no la reescribe solo** (inventar un numero seria peor que el hueco):
+la llamada la reproduce sin esa palabra, y el formulario de configuracion avisa
+cuales son para que el operador decida que poner. Un **guardado nuevo** que todavia
+use `{valor}` se rechaza con ese mismo aviso.
+
+### Boton "Escuchar"
 
 En la web hay un boton **Escuchar** al lado del texto: sintetiza y reproduce lo
 que va a decir la llamada. Si el texto ya estaba guardado, suena exactamente el
-archivo pregrabado.
+archivo pregrabado. Como todo el texto es resoluble al guardar, **lo que se
+escucha es siempre exactamente lo que va a sonar**, con o sin internet.
 
 **El audio del equipo es AMR; el del navegador es MP3.** Los navegadores no
 saben decodificar AMR (`canPlayType('audio/amr')` da vacio en Chrome, Firefox y
@@ -194,13 +218,6 @@ Safari), asi que el preview se transcodifica a MP3 del AMR real - el mismo
 archivo que va a sonar en la llamada - y no se re-sintetiza. El `.amr` que baja
 el equipo nunca se reemplaza por el MP3: son rutas distintas (`/audio/asset/` vs
 `/audio/asset-preview/`).
-
-### Boton "Escuchar" y que es cada cosa
-
-- Texto sin `{valor}`: lo que se escucha es **exactamente** lo que va a sonar,
-  siempre, con o sin internet.
-- Texto con `{valor}`: lo que se escucha es la **variante generica**. El numero
-  exacto depende de la lectura del momento y no se puede pregrabar.
 
 ### Archivos en el modem: por que no quedan sueltos
 

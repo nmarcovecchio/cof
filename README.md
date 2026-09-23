@@ -620,19 +620,24 @@ Hay **dos familias** de audio en el modem y no se pisan:
 
 | Archivo | Origen | Cuando suena |
 | --- | --- | --- |
-| `C:/a_<sha16>.amr` | El servidor sintetiza el `call_text` de cada regla **al guardar la config**, y el equipo lo baja con `syncRuleAudio()`. | Llamada de esa regla. Si el texto **no** lleva `{valor}`, es autocontenido y **no necesita red**. |
+| `C:/a_<sha16>.amr` | El servidor sintetiza el `call_text` de cada regla **al guardar la config**, y el equipo lo baja con `syncRuleAudio()`. | Llamada de esa regla. Es **autocontenido** y **no necesita red**. |
 | `C:/cof_fallback.wav` | `ota/audio/cof_fallback.wav`, anunciado por el manifest. | Ultimo recurso, si la regla no tiene audio local utilizable **y** la descarga del TTS falla. |
 
-La llamada usa, en orden: (1) el audio pregrabado **estatico** de la regla; (2) el
-TTS exacto bajado del servidor, si hay ruta; (3) la **variante generica** del audio
-de la regla (textos con `{valor}`); (4) recien ahi `C:/cof_fallback.wav`.
+La llamada usa, en orden: (1) el audio pregrabado de la regla; (2) el TTS bajado
+del servidor, si hay ruta y el asset local todavia no bajo; (3) recien ahi
+`C:/cof_fallback.wav`.
 
-El texto con `{valor}` no se puede pregrabar completo: el backend guarda la
-variante generica (que dice "un valor fuera de rango") y el numero exacto se baja
-al llamar. Ese es el unico caso que necesita red, y **solo si** hay lwIP: la
-descarga usa `HTTPClient` + `WiFiClientSecure`, que en un sitio solo-LTE no tienen
-ruta (el MQTT viaja por el socket `AT+CIPOPEN`, que no es lwIP). El respaldo no
-puede decir el sitio ni el valor: el ESP32 no tiene sintesis.
+Todo el texto de la llamada se resuelve **al guardar**, asi que el audio de la
+regla es siempre completo y la llamada no baja nada en el momento del disparo. El
+unico caso que necesita red es la descarga inicial del asset, que usa `HTTPClient`
++ `WiFiClientSecure` y en un sitio solo-LTE no tiene ruta (el MQTT viaja por el
+socket `AT+CIPOPEN`, que no es lwIP). El respaldo no puede decir el sitio ni el
+valor: el ESP32 no tiene sintesis.
+
+`{valor}` esta **retirado**: obligaba a sintetizar y bajar audio durante la alarma
+y su respaldo sin internet decia "un valor fuera de rango", que suele ser falso.
+El numero, si importa, se escribe en el texto y se graba; el valor exacto de cada
+disparo va por SMS y email. Ver `docs/ops/NOTIFICATIONS.md`.
 
 El equipo **solo borra archivos que empiezan con `a_`**, asi que ni el respaldo ni
 nada desconocido puede ser barrido por accidente.

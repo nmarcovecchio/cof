@@ -215,11 +215,14 @@ MQTT command:
 }
 ```
 
-`call_audio` is the pre-recorded asset for that rule. The device prefers the
-**local** file when it is static; when `dynamic` is true the local file is only
-the generic variant and is used as a fallback, because the text contains
-`{valor}` and the exact reading must be downloaded at call time. See
-`NOTIFICATIONS.md` § "Texto de la llamada, por regla".
+`call_audio` is the pre-recorded asset for that rule, and it is **always
+self-contained**: every placeholder is resolved at save time, so the device plays
+the local file and downloads nothing at call time.
+
+`dynamic` is part of the payload but is a fixed `false` now. It stays because the
+device parses it and a unit on older firmware uses it to decide whether the local
+file is complete; it no longer varies, because `{valor}` was retired. See
+`NOTIFICATIONS.md` § "`{valor}` esta retirado".
 
 Device downloads over **lwIP (Ethernet or WiFi)** - HTTPS, cert not verified - into
 RAM, deletes any previous `C:/tts.amr` (`AT+FSDEL`), uploads with `AT+CFTRANRX`,

@@ -253,12 +253,16 @@ the modem when the alarm fires, even if the link has since dropped. A site whose
 only uplink is LTE still cannot fetch it, and keeps playing the generic fallback
 until the modem's own HTTP path is implemented (see `docs/ops/BACKLOG.md` 8c).
 
-`{valor}` is the only placeholder that cannot be pre-recorded: the reading does
-not exist until the alarm fires. A text carrying it is stored as the **generic
-variant** (without the number); the server synthesizes the exact text at
-dispatch, the device downloads it when it has a route, and otherwise plays the
-generic variant. `{umbral}` is known at save time and **is** baked into the
-audio. See `docs/ops/NOTIFICATIONS.md` § "Texto de la llamada, por regla".
+`{valor}` is **retired**. Every placeholder is resolved at save time now: the
+reading used to be the one value that did not exist until the alarm fired, which
+forced a synthesis and a download during the alarm and made the offline fallback
+say "un valor fuera de rango" - a phrase that is often false, since a rule can
+fire on `menor que` or on a manual test with no reading at all. A number that
+matters is written into the text and baked in like any other word; the exact
+reading of each event travels by SMS and email. A rule saved before the change
+that still carries `{valor}` is played without it and flagged in the config form.
+`{umbral}` is known at save time and **is** baked into the audio. See
+`docs/ops/NOTIFICATIONS.md` § "Texto de la llamada, por regla".
 
 The `audio` array in this document still describes the modem **fallback** asset
 (`C:/cof_fallback.wav`), the last resort when neither the pre-recorded nor the

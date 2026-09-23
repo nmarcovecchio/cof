@@ -16,13 +16,27 @@ the same ``text_sha256`` and therefore to a single AMR on the server and a
 single file on the modem. Without it the same bytes would be copied once per
 rule until the 4 MiB modem filesystem filled up.
 
-Static vs dynamic
------------------
-``{valor}`` is the only placeholder that cannot be known at save time: it is
-the reading at the moment the alarm fires. A text carrying it is stored as the
-*generic* variant, with the reading replaced by a neutral phrase, so the call
-can still be made offline. ``{umbral}`` is static - the threshold is set in the
-form - so it *is* baked into the audio.
+Every placeholder is static now
+-------------------------------
+This used to carry a "dynamic" mode for ``{valor}``, the reading at the moment
+the alarm fires. It was removed on purpose:
+
+- The exact reading forced a synthesis + download **during the alarm**, which is
+  the worst possible moment to depend on the VPS, the site's uplink and the
+  modem's disk.
+- Its offline fallback said "un valor fuera de rango", and that phrase is often
+  simply false: a rule can fire on ``menor que``, or on a manual test with no
+  reading at all. So the call did not degrade into silence - it degraded into a
+  wrong sentence, which is worse.
+- The number mixed with a real one: ``{umbral}`` *was* baked in, so the audio
+  could say a true threshold and a fabricated reading in the same breath.
+
+The operator now writes the number into the text when the number matters ("el
+sensor {sensor} supero los 40 grados"), and it bakes in like any other static
+word. The exact reading of each event travels by SMS and email, which need no
+synthesis and no download at all.
+
+So a stored asset is always self-contained, and the call needs no network.
 """
 
 import hashlib
@@ -33,36 +47,29 @@ from .models import AudioAsset
 from .extensions import db
 from .tts import AUDIO_STORE_DIR, AUDIO_EXT, synthesize_to_path
 
-# The only placeholder whose value does not exist until the alarm fires.
-DYNAMIC_PLACEHOLDER = "valor"
-
-# What the generic variant says in place of the reading. It has to be a phrase
-# that reads naturally over the phone and does not imply a number was spoken.
-GENERIC_VALUE_WORDS = "un valor fuera de rango"
-
 # Any {token}: used to detect whether a text still has unresolved placeholders.
 _ANY_PLACEHOLDER = re.compile(r"\{[^{}]{0,40}\}")
+
+# Placeholder that used to be resolved at call time. Only referenced to detect
+# and reject it in already-saved rules and in the form: it is no longer part of
+# the supported set, because it cannot be pre-recorded. See the module docstring.
+RETIRED_PLACEHOLDER = "valor"
+
+
+def has_retired_placeholder(text: str) -> bool:
+    """True when a text still uses ``{valor}``.
+
+    Used to warn about rules saved before the placeholder was retired, and to
+    reject a save that would silently drop it.
+    """
+    return bool(
+        re.search(r"\{\s*" + RETIRED_PLACEHOLDER + r"\s*\}", text or "", flags=re.IGNORECASE)
+    )
 
 
 def normalize_spoken(text: str) -> str:
     """Collapse whitespace so cosmetic edits do not create a new audio asset."""
     return " ".join((text or "").split())
-
-
-def has_dynamic_placeholder(text: str) -> bool:
-    return bool(
-        re.search(r"\{\s*" + DYNAMIC_PLACEHOLDER + r"\s*\}", text or "", flags=re.IGNORECASE)
-    )
-
-
-def neutralize_dynamic(text: str) -> str:
-    """Replace the runtime reading with a phrase that can be pre-recorded."""
-    return re.sub(
-        r"\{\s*" + DYNAMIC_PLACEHOLDER + r"\s*\}",
-        GENERIC_VALUE_WORDS,
-        text or "",
-        flags=re.IGNORECASE,
-    )
 
 
 def drop_unknown_placeholders(text: str) -> str:
@@ -95,16 +102,17 @@ def ensure_asset(text: str) -> AudioAsset | None:
 
     Returns ``None`` for an empty text: a rule with no call text has nothing to
     pre-record and must keep whatever the generic alarm path does.
+
+    ``text`` must already have every placeholder resolved by the caller; a
+    leftover ``{...}`` is dropped rather than spoken.
     """
     spoken = normalize_spoken(text)
     if not spoken:
         return None
 
-    dynamic = has_dynamic_placeholder(spoken)
-    # The audio that actually gets stored never contains {valor}; the exact
-    # reading is a runtime concern. Static placeholders are resolved by the
-    # caller before we get here.
-    stored_text = normalize_spoken(drop_unknown_placeholders(neutralize_dynamic(spoken)))
+    stored_text = normalize_spoken(drop_unknown_placeholders(spoken))
+    if not stored_text:
+        return None
     text_sha = text_sha256(stored_text)
 
     existing = AudioAsset.query.filter_by(text_sha256=text_sha).first()
@@ -127,7 +135,9 @@ def ensure_asset(text: str) -> AudioAsset | None:
         text=stored_text,
         amr_sha256=digest,
         size_bytes=path.stat().st_size,
-        has_dynamic=dynamic,
+        # Always False now. The column stays because older rows carry the value
+        # and the device contract still has the field; see `dynamic` below.
+        has_dynamic=False,
     )
     db.session.add(asset)
     db.session.flush()
@@ -147,7 +157,12 @@ def prepare_call_audio(text: str) -> dict | None:
         "text_sha256": asset.text_sha256,
         "url": asset_url(asset.text_sha256),
         "bytes": asset.size_bytes,
-        "dynamic": asset.has_dynamic,
+        # Kept in the payload as a fixed False. It is part of the config contract
+        # the device parses, and a device on older firmware uses it to decide
+        # whether to prefer the local file. It no longer varies: every asset is
+        # self-contained. Removable only alongside a firmware change that stops
+        # reading it.
+        "dynamic": False,
         # The name the device must use on the modem filesystem. The ``a_``
         # prefix is the device's garbage-collection namespace: it only ever
         # deletes files starting with it, so nothing else can be swept by
@@ -157,14 +172,16 @@ def prepare_call_audio(text: str) -> dict | None:
 
 
 def resolve_static_placeholders(text: str, values: dict) -> str:
-    """Fill the placeholders that are known at save time.
+    """Fill every placeholder that is known at save time.
 
-    ``{valor}`` is deliberately left for the generic-variant pass; anything
-    unknown is dropped so it is never read aloud.
+    All of them are, now: what the template does not resolve is dropped, so a
+    leftover ``{valor}`` never reaches the synthesizer and is never read aloud
+    as punctuation. ``has_retired_placeholder`` is what surfaces it to the
+    operator instead of letting it vanish quietly.
     """
     resolved = normalize_spoken(text)
     for key, value in values.items():
-        if key.lower() == DYNAMIC_PLACEHOLDER:
+        if key.lower() == RETIRED_PLACEHOLDER:
             continue
         resolved = re.sub(
             r"\{\s*" + re.escape(key) + r"\s*\}",

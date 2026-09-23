@@ -858,11 +858,15 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    // A pre-recorded *static* file already on the modem is the best case: it is
-    // the only path that needs no internet, which is the whole point of the
-    // feature. A dynamic one is merely the generic variant, so it is used only
-    // as a fallback - preferring it would drop the reading the operator asked
-    // the call to say.
+    // A pre-recorded file already on the modem is the best case, and now the
+    // only one that matters: every asset is self-contained, because the backend
+    // no longer bakes a "generic variant" for a runtime reading. Playing it
+    // needs no internet at all, which is the whole point of the feature.
+    //
+    // Assets synced by an *older* backend can still be flagged dynamic; those
+    // are a generic variant missing the reading, so they are used only as a
+    // fallback. The check is kept for that transition and for devices that
+    // update firmware before the server.
     const String localRuleAudio = ruleAudioPathForSha(audioSha);
     const bool localIsGeneric = ruleAudioIsDynamic(audioSha);
     if (localRuleAudio.length() > 0 && !localIsGeneric) {
@@ -877,8 +881,8 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
         // LTE, MQTT rides the modem's AT socket and there is no route for
         // HTTPClient, so this always fails. Returning here is what made an
         // alarm call silently produce no call at all. Fall back, in order, to
-        // the rule's own generic pre-recorded audio and then to the canned
-        // asset: a generic spoken alarm beats no call.
+        // the rule's own pre-recorded audio and then to the canned asset: a
+        // spoken alarm beats no call.
         if (localRuleAudio.length() > 0) {
           publishTestCallProgress("Rule audio unavailable, using generic variant");
           Serial.printf("[call] %s; playing generic %s\n", audioErr.c_str(),

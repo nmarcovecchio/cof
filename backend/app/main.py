@@ -39,7 +39,7 @@ from .alarms import (
     rule_sensor_name,
     spoken_number,
 )
-from .call_audio import prepare_call_audio, resolve_static_placeholders
+from .call_audio import has_retired_placeholder, prepare_call_audio, resolve_static_placeholders
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
@@ -313,6 +313,20 @@ def validate_config_payload(payload):
             return (
                 f"La regla {index} (sensor {sensor}) no tiene un valor umbral valido. "
                 "Sin umbral la regla nunca se evalua, asi que no se guardo."
+            )
+        # Reject the retired placeholder instead of silently dropping it. A text
+        # that still says {valor} would be spoken without the reading - "El
+        # sensor SHT31 detecto , respecto al 40" - and the operator would only
+        # find out when the phone rang. Failing the save is the honest option;
+        # the form shows this same message next to the field.
+        text = str(rule.get("call_text") or "")
+        if has_retired_placeholder(text):
+            return (
+                f"La regla {index} usa {{valor}}, que ya no existe: no se puede "
+                "pregrabar y obligaria a sintetizar audio durante la alarma. "
+                "Escribi el numero directamente en el texto (por ejemplo "
+                "'supero los 40 grados') o usá {umbral}. El valor exacto de cada "
+                "disparo llega por SMS y email."
             )
     return None
 
@@ -1333,7 +1347,6 @@ def create_app() -> Flask:
             AUDIO_STORE_DIR,
             asset_filename,
             drop_unknown_placeholders,
-            neutralize_dynamic,
             normalize_spoken,
             text_sha256,
         )
@@ -1350,6 +1363,15 @@ def create_app() -> Flask:
         template = str(body.get("text") or "")
         if not template.strip():
             return jsonify({"error": "Escribí el texto de la llamada primero."}), 400
+        # Same reason the save refuses it: a {valor} here would be previewed as a
+        # sentence with a hole in it, and the operator would think it is fine.
+        if has_retired_placeholder(template):
+            return jsonify({
+                "error": (
+                    "{valor} ya no existe: no se puede pregrabar. Escribí el número "
+                    "directamente en el texto, o usá {umbral}."
+                )
+            }), 400
 
         # The form sends the sensor name it is about to save; falling back to the
         # persisted config only when the browser did not provide one keeps the
@@ -1369,9 +1391,7 @@ def create_app() -> Flask:
                 "umbral": spoken_number(body.get("threshold")),
             },
         )
-        stored_text = normalize_spoken(
-            drop_unknown_placeholders(neutralize_dynamic(static))
-        )[:MAX_CALL_TEXT_CHARS]
+        stored_text = normalize_spoken(drop_unknown_placeholders(static))[:MAX_CALL_TEXT_CHARS]
         if not stored_text:
             return jsonify({"error": "El texto quedó vacío después de resolver las variables."}), 400
 
@@ -1919,6 +1939,16 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         keys = SENSOR_ALIASES.get(sensor_id, (sensor_id,))
         if observed and not any(key in observed for key in keys):
             inert_sensors.append((sensor_id, sensor.get("name") or sensor_id, "nunca reporto un valor"))
+    # Rules saved before {valor} was retired. They are not broken - build_call_text
+    # drops the placeholder and the call still plays a pre-recorded file - but the
+    # sentence it says has a hole exactly where the reading used to be, and only
+    # the operator can decide what to put there now. Surfaced on the form rather
+    # than silently rewritten: guessing a number would be worse than the hole.
+    retired_placeholder_rules = [
+        (index, str(rule.get("description") or rule.get("sensor_id") or ""))
+        for index, rule in enumerate(rules or [], start=1)
+        if isinstance(rule, dict) and has_retired_placeholder(str(rule.get("call_text") or ""))
+    ]
     return render_template(
         "config_form.html",
         device=device,
@@ -1933,6 +1963,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         inert_sensors=inert_sensors,
         sensor_windows=device_sensor_windows(device),
         call_text_max=MAX_CALL_TEXT_CHARS,
+        retired_placeholder_rules=retired_placeholder_rules,
     )
 
 

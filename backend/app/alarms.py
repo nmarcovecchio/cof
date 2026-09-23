@@ -277,31 +277,38 @@ def build_call_text(device: Device, rule: dict, telemetry: dict | None = None) -
     alarm text - which is what every call used to say. This text is used ONLY
     for the call: email, Telegram and SMS keep the full text with the site, the
     rule and the ack link.
+
+    ``telemetry`` is accepted and ignored, kept only so the existing call sites
+    do not have to change in the same commit that retires ``{valor}``. The
+    reading is deliberately NOT spoken: it would force a synthesis during the
+    alarm. It travels by SMS and email instead.
     """
     template = _as_text(rule.get("call_text"))[:MAX_CALL_TEXT_CHARS]
     if not template:
         return ""
     sensor_id = str(rule.get("sensor_id") or "")
     description = _as_text(rule.get("description"))
-    value = None if telemetry is None else sensor_value(telemetry, sensor_id)
     values = {
         "equipo": _as_text(device.name),
         "sitio": _as_text(device.site.name if device.site else ""),
         "cliente": _as_text(device.tenant.name if device.tenant else ""),
         "sensor": rule_sensor_name(device, sensor_id) or sensor_id,
         "regla": description or sensor_id,
-        # Threshold is known at config time, so unlike {valor} it can be baked
-        # into the pre-recorded audio.
+        # Known at config time, like `{sensor}` and `{equipo}`, so it is baked
+        # into the pre-recorded audio. Threshold is the whole reason a static
+        # call is useful: it names the limit that was crossed.
         "umbral": spoken_number(rule.get("threshold")),
-        # Never leave the template's braces empty: a manual test fires without a
-        # telemetry frame and "Valor actual ." reads like a bug over the phone.
-        "valor": "sin lectura" if value is None or str(value).strip() == "" else str(value),
     }
+    # `{valor}` is NOT resolved here. It used to be, and that is exactly what
+    # forced a synthesis + download during the alarm and made the offline
+    # fallback say "un valor fuera de rango" (often false). It is a retired
+    # placeholder now; if a saved rule still carries it, the text is spoken
+    # without it and the operator gets warned at save time. See call_audio.py.
     spoken = " ".join(template.split())
     for key, value in values.items():
         spoken = re.sub(r"\{\s*" + key + r"\s*\}", value, spoken, flags=re.IGNORECASE)
-    # An unknown {placeholder} is dropped: reading "abre llave valor cierra
-    # llave" into a customer's phone is worse than omitting the word.
+    # An unknown or retired {placeholder} is dropped: reading "abre llave valor
+    # cierra llave" into a customer's phone is worse than omitting the word.
     spoken = re.sub(r"\{[^{}]{0,40}\}", " ", spoken)
     return " ".join(spoken.split())[:MAX_CALL_TEXT_CHARS]
 
