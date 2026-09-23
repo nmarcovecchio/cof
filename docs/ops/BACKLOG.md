@@ -146,6 +146,39 @@ cualquier otra cosa como socket muerto (`sockOpen = false`), lo que aborta el
 CONNECT de MQTT. El PDF del A76XX no esta en el arbol (`docs/modem/` solo tiene el
 README), asi que hay que abrirlo antes de tocar esto.
 
+### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
+
+`pollModem()` (`firmware/src/main.cpp`) tiene gate `!state.lteMqttTransport`:
+
+```cpp
+const uint32_t modemEvery = lanConnected() ? kModemIntervalMs : kModemRetryNoLanMs;
+if (now - lastModemMs >= modemEvery && !state.callInProgress && !state.audioSyncInProgress &&
+    !state.lteMqttTransport) {
+  lastModemMs = now;
+  pollModem();
+}
+```
+
+Y la escalera `resetModemRadio()` vive **dentro** de `pollModem()`, despues de
+`refreshCellularStatus()`. O sea: con el PDP de LTE arriba y MQTT montado sobre el
+socket AT (`lteMqttTransport == true`), **la unica recuperacion de radio que tiene
+el firmware queda deshabilitada** - justo en el escenario de un sitio sin LAN,
+donde no hay a quien recurrir.
+
+Importa porque la causa conocida de "modem sordo" (`NO SERVICE`, `CSQ 99,99`,
+`AT+CNACT?` ERROR, ver §6) necesita esa escalera. El gate esta para no intercalar
+`sendAT` con un `AT+CIPOPEN` abierto (mismo motivo que §4), asi que no es un
+descuido: es una limitacion asumida. Pero el efecto neto es que un equipo
+solo-LTE que se queda sin radio no se recupera solo.
+
+**Como cerrarlo:** encadenar la comprobacion de servicio, no `pollModem()` entero.
+`radioReportsService()` ya existe y es barata, pero hoy la alimenta
+`refreshCellularStatus()`, que tambien es `sendAT` y tiene el mismo problema. Hace
+falta una via que no use el UART compartido: leer si el socket AT sigue vivo (un
+`CIPEVENT`/`IPCLOSE` inesperado, o el keepalive de MQTT fallando de forma
+sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la escalera.
+Decidir junto con §4.
+
 ---
 
 ## P1 — Backend / panel
