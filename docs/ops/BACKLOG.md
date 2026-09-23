@@ -275,6 +275,33 @@ disenarla:
   chico**. Cualquier calculo de cuantos audios entran tiene que salir de `AT+FSMEM`
   de la unidad, no del ejemplo del fabricante.
 
+#### Prueba end-to-end del probe (0.2.69)
+
+Las sondas de arriba confirman que los **comandos existen**, pero no que un `GET`
+funcione en esta unidad: no dicen que CID necesita el stack HTTP, donde cae el
+archivo, ni que hace el flag de `HTTPREADFILE`. Por eso 0.2.69 extiende
+**Sondear modem** para correr la secuencia completa contra `example.com`
+(estable, ~1 KB, HTTP plano, sin depender de nuestro DNS ni de Caddy mientras el
+transporte mismo no esta probado):
+
+```text
+AT+FSMEM                          -> memoria antes
+AT+HTTPPARA="CID",1
+AT+HTTPPARA="URL","http://example.com/"
+AT+HTTPACTION=0                   -> espera +HTTPACTION: <method>,<status>,<len>
+AT+HTTPREADFILE="C:/probe_http.txt",1
+AT+FSMEM                          -> memoria despues (el delta = lo que escribio)
+AT+FSLS=C:/                       -> el nombre real; puede no estar soportado
+```
+
+El probe sigue siendo **de solo lectura** sobre los assets de alarma: escribe
+`probe_http.txt`, un nombre fuera del namespace `a_`. Nada del audio se toca.
+
+**Interpretacion:** si `FSMEM after` sube ~1 KB y `FSLS` lista el archivo, la via
+es real y el audio por LTE se puede implementar con ella. Si `HTTPACTION` devuelve
+`status` 0 o no llega la URC, el problema es el PDP/CID del stack HTTP y hay que
+resolverlo antes de tocar el camino del audio.
+
 ### 8d. Tope de audios por equipo (resuelto 0.2.68, silencioso hasta 0.2.67)
 
 El equipo guarda **40 audios distintos** (`kRuleAudioMax` en `ota_config.cpp`).

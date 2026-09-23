@@ -390,12 +390,61 @@ void runModemProbe(const String& commandId) {
   publishModemProbe(String("HTTPINIT ") + (httpOk ? "ok" : "fail"), httpOk, commandId);
 
   const bool readFileOk = sendAT("AT+HTTPREADFILE=?", "OK", 3000);
-  if (httpOk) {
-    sendAT("AT+HTTPTERM", "OK", 5000);
-  }
   publishModemProbe(
       String("HTTPREADFILE=") + (readFileOk ? "SUPPORTED" : "unsupported"),
       readFileOk, commandId);
+
+  // End-to-end fetch. The capability answers above say the commands exist; they
+  // say nothing about whether a GET works on this PDP stack, which CID it needs,
+  // where the file lands, or what the read-file flag does. Those are exactly the
+  // unknowns that would otherwise need a serial console, so run the real
+  // sequence and report what happened.
+  //
+  // Against example.com on purpose: stable, ~1 KB, plain HTTP, and no dependency
+  // on our own DNS or Caddy while the transport itself is still unproven.
+  if (httpOk && readFileOk) {
+    String before;
+    sendAT("AT+FSMEM", "+FSMEM:", 5000, &before);
+    publishModemProbe("FSMEM before " + probeFirstLine(before), true, commandId);
+
+    const bool cidOk = sendAT("AT+HTTPPARA=\"CID\",1", "OK", 5000);
+    const bool urlOk =
+        sendAT("AT+HTTPPARA=\"URL\",\"http://example.com/\"", "OK", 5000);
+    publishModemProbe(
+        String("HTTPPARA cid=") + (cidOk ? "ok" : "fail") +
+            " url=" + (urlOk ? "ok" : "fail"),
+        urlOk, commandId);
+
+    String action;
+    const bool acted = sendAT("AT+HTTPACTION=0", "+HTTPACTION:", 45000, &action);
+    publishModemProbe(
+        "HTTPACTION " + (acted ? probeFirstLine(action) : String("no URC within 45s")),
+        acted, commandId);
+
+    // The whole design hinges on this one: does the body land in C:/ ?
+    String read;
+    const bool readOk =
+        sendAT("AT+HTTPREADFILE=\"C:/probe_http.txt\",1", "OK", 20000, &read);
+    publishModemProbe(String("HTTPREADFILE fi=") + (readOk ? "ok" : "fail"), readOk,
+                      commandId);
+
+    String after;
+    sendAT("AT+FSMEM", "+FSMEM:", 5000, &after);
+    publishModemProbe("FSMEM after " + probeFirstLine(after), true, commandId);
+
+    // Best effort: not every unit implements FSLS, and an ERROR here is itself
+    // an answer. It is the only way to see the filename the modem actually wrote.
+    String ls;
+    if (sendAT("AT+FSLS=C:/", "+FSLS:", 8000, &ls)) {
+      publishModemProbe("FSLS " + probeFirstLine(ls), true, commandId);
+    } else {
+      publishModemProbe("FSLS unsupported", false, commandId);
+    }
+  }
+
+  if (httpOk) {
+    sendAT("AT+HTTPTERM", "OK", 5000);
+  }
 
   publishModemProbe("end", true, commandId);
 }
