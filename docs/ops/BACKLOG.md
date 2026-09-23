@@ -152,40 +152,53 @@ falta una via que no use el UART compartido: leer si el socket AT sigue vivo (un
 sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la escalera.
 Decidir junto con §4.
 
-### 6d. MQTT sobre LTE: la IP del broker queda congelada, LTE nunca se libera
+### 6d. RESUELTO en 0.2.71: la IP cacheada del broker
 
-**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).** Cuando MQTT
-viaja por LTE, `cachedMqttIp` **no se actualiza por ninguna via**, y el equipo puede
-quedar pegado a LTE para siempre.
+**Resuelto y compilado (sin verificar en hardware).** La correccion importante de
+este analisis, porque el diagnostico inicial estaba mal en dos puntos.
 
-`cachedMqttIp` se aprende del connect real, pero solo si no vas por LTE
-(`mqtt_io.cpp:530`):
+**Lo que se creia:** que con MQTT por LTE la IP quedaba congelada y el equipo
+quedaba "pegado a LTE sin salida automatica".
 
-```cpp
-if (!state.lteMqttTransport) {
-  cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
-```
+**Lo que es en realidad:**
 
-Y el resolver solo adopta un cambio de DNS si MQTT esta **caido**
-(`net_paths.cpp:124`):
+1. **El equipo si se recuperaba solo**, en 6 min, por el watchdog de silencio
+   (`kMqttSilenceRestartMs`). `cachedMqttIp` vive en RAM, asi que el reboot la
+   limpia y `serviceBrokerResolve()` la rellena desde DNS. No era un equipo
+   perdido; era un recovery feo que dependia del reboot que el propio diseño
+   queria evitar.
 
-```cpp
-if (!state.mqttConnected && resolved != cachedMqttIp) {
-```
+2. **Rompe mas de lo que se pensaba.** `cachedMqttIp` no lo usan solo los probes
+   de LAN: `resolveLteMqttPeer()` la prefiere **por encima del DNS del modulo**
+   (`lte_pdp.cpp:20`). Con la IP vieja, el connect de LTE tambien fallaba, asi que
+   el sintoma no era "LTE anda pero no vuelvo a la LAN" sino "se cae todo".
 
-Con MQTT arriba por LTE, `state.mqttConnected` es `true`: las dos vias quedan
-cerradas. La IP se congela en la del ultimo connect por LAN.
+3. **El disparador es angosto.** Hace falta LAN conectada *pero degradada* (para
+   que LTE lleve MQTT) **y** que el broker cambie de IP. En un sitio solo-LTE no
+   ocurre: `serviceBrokerResolve()` retorna temprano sin LAN, asi que el modulo
+   resuelve fresco en cada intento. Por eso no es critico.
 
-**Consecuencia:** si el broker se movio de IP, `pollWifiPath()` / `pollEthernetPath()`
-prueban una direccion muerta y fallan; `wifiInternetUp` / `ethInternetUp` nunca se
-promueven y `serviceNetworkPaths()` nunca libera LTE. Es el mismo problema que
-`serviceBrokerResolve` describe ("los probes testean la direccion vieja y demoten un
-path sano"), pero visto desde el lado LTE. Peor: un sitio solo-LTE que se queda sin
-LTE no tiene la escalera de radio (§6c) y queda incomunicado.
+**Causa raiz:** la cache se aprendia del connect por LAN y, mientras MQTT iba por
+LTE, no habia **ninguna** via que la actualizara ni que la invalidara: el connect
+solo cachea con `!lteMqttTransport` (`mqtt_io.cpp:530`) y el resolver solo adopta
+un cambio con MQTT caido (`net_paths.cpp:124`).
 
-**Como cerrarlo:** permitir adoptar un DNS repoint mientras MQTT va por LTE (el
-argumento de "no me corras de una direccion probada" no aplica: esa direccion no la
-esta usando MQTT). Alternativa: re-resolver al entrar en `lteMqttTransport`.
+**Fix (0.2.71):** flag `lteForceDnsResolve`.
+
+- `connectMqttIfNeeded()` lo levanta cuando un connect por LTE falla, y lo baja
+  cuando un connect sale bien.
+- `resolveLteMqttPeer()` con el flag puesto consulta `AT+CDNSGIP` en vez de
+  confiar en la cache, y **guarda la respuesta fresca en `cachedMqttIp`** - es la
+  unica via que puede repuntar la cache con el MQTT arriba por LTE.
+- Si el DNS del modulo no contesta, prefiere la IP vieja antes que el hostname:
+  `CIPOPEN` quiere un literal, asi que un hostname fallaria el open de una.
+
+**Bug hermano encontrado en el camino:** `saveMqttConfig()`
+(`ota_config.cpp:176`) cambiaba `state.mqttHost` sin invalidar `cachedMqttIp`, o
+sea que la cache quedaba apuntando al broker **anterior**. Ahora la limpia, y
+`serviceBrokerResolve()` la rellena desde el hostname nuevo.
+
+---
 
 ### 6e. WiFi sano no se promueve desde LTE, y no se reporta
 

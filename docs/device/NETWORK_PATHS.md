@@ -136,9 +136,14 @@ Two rules keep it from doing harm:
   overwrite an address learned from a real connect, which is stronger evidence.
 - It adopts a changed answer only while MQTT is **down**. A broker that moves
   otherwise leaves the probes testing a dead address and demoting a healthy LAN
-  path, and the only way out was the 6-minute silence reboot. Gating on
-  `!mqttConnected` lets that heal while making it impossible for a transient or
-  poisoned answer to knock us off a working address.
+  path. Gating on `!mqttConnected` lets that heal while making it impossible for a
+  transient or poisoned answer to knock us off a working address.
+
+  That gate is why the LTE path needed its own escape hatch: while MQTT rides LTE,
+  `mqttConnected` stays true, so this resolver never adopts anything and the cache
+  would stay frozen. `LteMqttClient`'s peer resolver used to prefer the cache too,
+  so a stale address broke LTE itself. See `lteForceDnsResolve` in
+  `docs/ops/BACKLOG.md` §6d.
 
 Before this, the unset-IP window was covered only by MQTT connect failures
 demoting the path, which still works - this just makes it not the only mechanism.
@@ -191,7 +196,7 @@ Audited 2026-09-23 by reading the code (`BACKLOG` §6d-§6g carry the open items
 | WiFi | healthy AP appears | yes, but slow | **not promoted optimistically**; waits for a probe (§6e) |
 | LTE | Ethernet healthy again | yes | recovery probe (60 s) + 3 s settle |
 | LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()` (§6e) |
-| LTE | broker IP changed | **no** | `cachedMqttIp` frozen while on LTE (§6d) |
+| LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
 | any | LAN up but degraded, on LTE | **pathological** | `canUseLan()` probes block the loop (§6f) |
 
 Three things are worth knowing before touching any of this:
@@ -201,10 +206,13 @@ Three things are worth knowing before touching any of this:
   not set the WiFi flag. Any path that requires `wifiInternetUp` (releasing LTE,
   for one) therefore waits for a successful probe. See §6e before "fixing" this:
   the asymmetry with `applyPreferredRoute()` may be deliberate.
-- **`cachedMqttIp` cannot be learned or repointed while MQTT rides LTE.** The
-  connect path only caches it when `!lteMqttTransport`, and the resolver only
-  adopts a change while MQTT is down - so with LTE carrying MQTT both are closed.
-  A moved broker leaves the LAN probes testing a dead address. See §6d.
+- **`cachedMqttIp` is a shortcut, not an authority.** While MQTT rides LTE nothing
+  used to refresh it - the connect path only caches when `!lteMqttTransport`, and
+  the resolver only adopts a change while MQTT is down. A stale entry poisoned both
+  the LAN probes **and** `resolveLteMqttPeer()`, which preferred it over the
+  modem's own DNS. Since 0.2.71 a failed LTE connect sets `lteForceDnsResolve`, so
+  the next attempt asks the modem and repoints the cache from that answer. If you
+  touch `resolveLteMqttPeer()` or `saveMqttConfig()`, keep that invalidation.
 - **`canUseLan()` is called from `maintainLteFallback()` on every loop pass** and
   performs blocking probes (up to ~3 s) with no throttle, unlike the path polls.
   It only bites in the degraded-LAN state, which is reachable while on LTE. See
