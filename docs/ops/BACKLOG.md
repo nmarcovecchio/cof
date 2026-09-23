@@ -152,6 +152,102 @@ falta una via que no use el UART compartido: leer si el socket AT sigue vivo (un
 sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la escalera.
 Decidir junto con §4.
 
+### 6d. MQTT sobre LTE: la IP del broker queda congelada, LTE nunca se libera
+
+**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).** Cuando MQTT
+viaja por LTE, `cachedMqttIp` **no se actualiza por ninguna via**, y el equipo puede
+quedar pegado a LTE para siempre.
+
+`cachedMqttIp` se aprende del connect real, pero solo si no vas por LTE
+(`mqtt_io.cpp:530`):
+
+```cpp
+if (!state.lteMqttTransport) {
+  cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
+```
+
+Y el resolver solo adopta un cambio de DNS si MQTT esta **caido**
+(`net_paths.cpp:124`):
+
+```cpp
+if (!state.mqttConnected && resolved != cachedMqttIp) {
+```
+
+Con MQTT arriba por LTE, `state.mqttConnected` es `true`: las dos vias quedan
+cerradas. La IP se congela en la del ultimo connect por LAN.
+
+**Consecuencia:** si el broker se movio de IP, `pollWifiPath()` / `pollEthernetPath()`
+prueban una direccion muerta y fallan; `wifiInternetUp` / `ethInternetUp` nunca se
+promueven y `serviceNetworkPaths()` nunca libera LTE. Es el mismo problema que
+`serviceBrokerResolve` describe ("los probes testean la direccion vieja y demoten un
+path sano"), pero visto desde el lado LTE. Peor: un sitio solo-LTE que se queda sin
+LTE no tiene la escalera de radio (§6c) y queda incomunicado.
+
+**Como cerrarlo:** permitir adoptar un DNS repoint mientras MQTT va por LTE (el
+argumento de "no me corras de una direccion probada" no aplica: esa direccion no la
+esta usando MQTT). Alternativa: re-resolver al entrar en `lteMqttTransport`.
+
+### 6e. WiFi sano no se promueve desde LTE, y no se reporta
+
+**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).**
+`markEthernetUp()` marca la salud optimista al obtener IP, con comentario explicito
+(`net_paths.cpp:561`):
+
+```cpp
+// Optimistic: a fresh IP is treated as a working path until the probe says
+// otherwise. This keeps boot fast and avoids double-switching.
+ethInternetUp = true;
+```
+
+El evento de WiFi **no hace eso**: `ARDUINO_EVENT_WIFI_STA_GOT_IP`
+(`net_paths.cpp:667`) setea `wifiConnected`, `wifiSsid` y `wifiIpAddress`, y nunca
+`wifiInternetUp`. Como `serviceNetworkPaths()` exige el flag para liberar LTE
+(`net_paths.cpp:522`), asociarse a un WiFi sano estando en LTE **no** libera LTE
+hasta que `pollWifiPath()` logre un probe: 10 s de intervalo + 3 s de settle, en el
+mejor caso.
+
+Efecto visible: el panel reporta "sale por LTE" durante esa ventana aunque WiFi
+este perfecto.
+
+**Ojo antes de tocarlo:** `docs/device/NETWORK_PATHS.md` argumenta que gatear WiFi
+en `wifiInternetUp` "would achieve nothing", asi que la asimetria puede ser
+deliberada. Confirmar con el motivo original antes de agregar el flag optimista.
+
+### 6f. `canUseLan()` hace probes bloqueantes sin throttle en el hot path
+
+**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).**
+`canUseLan()` (`net_paths.cpp:316`) delega en `lanPathReachable()`, que llama
+`probeMqttOnInterface()` hasta dos veces, cada una con `probe.connect(..., 1500)`
+mas dos `applyPreferredRoute()`: **hasta ~3 s bloqueando el loop**. No tiene ningun
+timestamp de throttle, a diferencia de `pollEthernetPath()` / `pollWifiPath()`.
+
+Se llama desde `maintainLteFallback()` (`main.cpp:201`), que es la primera linea de
+`connectMqttIfNeeded()` y corre **en cada pasada del loop** (~20 ms). El estado que
+lo dispara es "LAN conectada pero marcada sin internet", y estando en LTE se alcanza
+asi (`net_paths.cpp:422`):
+
+```cpp
+} else if (ethInternetUp) {
+  ethInternetUp = false;      // baja la salud sin tocar ethernetConnected
+```
+
+Resultado: **cada pasada paga el probe completo**, estancando sensores, display y el
+propio MQTT sobre LTE. Se dispara al enchufar el cable en un router sin uplink
+mientras el equipo va por LTE.
+
+**Como cerrarlo:** throttle por timestamp en `lanPathReachable()` (mismo patron que
+los polls), o no llamar `canUseLan()` desde el hot path.
+
+### 6g. Deuda: `pauseWiFiRadio()` y el respaldo de WiFi temporizado no se usan
+
+**Hallazgo 2026-09-23.** Codigo sin callers: `pauseWiFiRadio()`
+(`net_paths.cpp:234`, solo declarada en `cof_api.h:135`) y
+`scheduleWifiBackup()` / `maintainWifiBackup()` (`net_paths.cpp:272-288`). Como nada
+setea `wifiBackupDueMs`, `maintainWifiBackup()` retorna en su primera linea.
+
+No es un bug de switching, pero engana al que lee: parece que existe un respaldo de
+WiFi temporizado y no existe. Sacarlo o conectarlo.
+
 ---
 
 ## P1 — Backend / panel

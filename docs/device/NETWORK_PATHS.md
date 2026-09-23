@@ -176,6 +176,40 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
   flag is down, MQTT still refuses it (via `lanHasInternet()`) and LTE carries the
   broker while the default route stays on WiFi as a best effort.
 
+## Switching matrix: which transitions work
+
+Audited 2026-09-23 by reading the code (`BACKLOG` §6d-§6g carry the open items).
+"Healthy" means the interface reaches the broker; a link with DHCP but no uplink is
+**not** healthy.
+
+| From | Event | Switches? | Notes |
+|---|---|---|---|
+| Ethernet | cable out | yes | `markEthernetDown()` -> WiFi or LTE |
+| Ethernet | link up, no internet | yes | demoted by probe (2 fails) or a failed MQTT connect |
+| WiFi | associated, no internet | yes | `pollWifiPath()` demotes; LTE takes over |
+| WiFi | AP drops | yes | `WIFI_STA_DISCONNECTED` -> LTE |
+| WiFi | healthy AP appears | yes, but slow | **not promoted optimistically**; waits for a probe (§6e) |
+| LTE | Ethernet healthy again | yes | recovery probe (60 s) + 3 s settle |
+| LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()` (§6e) |
+| LTE | broker IP changed | **no** | `cachedMqttIp` frozen while on LTE (§6d) |
+| any | LAN up but degraded, on LTE | **pathological** | `canUseLan()` probes block the loop (§6f) |
+
+Three things are worth knowing before touching any of this:
+
+- **`wifiInternetUp` is never set on association.** `markEthernetUp()` sets
+  `ethInternetUp = true` optimistically, but `ARDUINO_EVENT_WIFI_STA_GOT_IP` does
+  not set the WiFi flag. Any path that requires `wifiInternetUp` (releasing LTE,
+  for one) therefore waits for a successful probe. See §6e before "fixing" this:
+  the asymmetry with `applyPreferredRoute()` may be deliberate.
+- **`cachedMqttIp` cannot be learned or repointed while MQTT rides LTE.** The
+  connect path only caches it when `!lteMqttTransport`, and the resolver only
+  adopts a change while MQTT is down - so with LTE carrying MQTT both are closed.
+  A moved broker leaves the LAN probes testing a dead address. See §6d.
+- **`canUseLan()` is called from `maintainLteFallback()` on every loop pass** and
+  performs blocking probes (up to ~3 s) with no throttle, unlike the path polls.
+  It only bites in the degraded-LAN state, which is reachable while on LTE. See
+  §6f.
+
 ## Publishing liveness
 
 `enforceMqttSilenceWatchdog()` reboots after `kMqttSilenceRestartMs` (6 min)
