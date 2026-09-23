@@ -305,10 +305,24 @@ bool lanPathReachable() {
   if (cachedMqttIp == IPAddress((uint32_t)0)) {
     return false;
   }
+  // This runs from canUseLan(), which maintainLteFallback() calls on every loop
+  // pass - and the state that reaches it (an interface connected but flagged
+  // without internet) persists for as long as LTE carries MQTT. Without this
+  // throttle every pass paid two 1500 ms probes plus two route flips, stalling
+  // sensors, display and MQTT itself. The verdict is latched between probes so
+  // the answer stays fresh without the cost.
+  const uint32_t now = millis();
+  if (lastLanReachableProbeMs != 0 && now - lastLanReachableProbeMs < kLanReachableProbeIntervalMs) {
+    return lanReachableLatch;
+  }
+  lastLanReachableProbeMs = now == 0 ? 1 : now;
+  lanReachableLatch = false;
   if (state.ethernetConnected && probeMqttOnInterface(true)) {
+    lanReachableLatch = true;
     return true;
   }
   if (state.wifiConnected && probeMqttOnInterface(false)) {
+    lanReachableLatch = true;
     return true;
   }
   return false;

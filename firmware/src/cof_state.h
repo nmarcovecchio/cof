@@ -149,6 +149,10 @@ extern uint32_t wifiBackupDueMs;
 extern uint8_t wifiAuthFailCount;
 extern uint32_t lastEthProbeMs;
 extern uint8_t ethProbeFails;
+// lanPathReachable() verdict, latched so canUseLan() can be called on every loop
+// pass without paying for the probes each time. See kLanReachableProbeIntervalMs.
+extern uint32_t lastLanReachableProbeMs;
+extern bool lanReachableLatch;
 extern uint32_t noLanSinceMs;
 extern uint32_t ethernetUpAtMs;
 extern uint32_t ethernetHoldoffUntilMs;

@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.71"
+#define COF_FIRMWARE_VERSION "0.2.72"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -93,6 +93,13 @@ constexpr uint32_t kEthernetHoldoffMs = 20000;
 // Ethernet marked down with the cable still in: its DHCP lease survives a
 // router reboot, so no GOT_IP event ever fires again. Re-probe on this cadence.
 constexpr uint32_t kPathRecoverProbeIntervalMs = 60UL * 1000UL;
+// lanPathReachable() is reached from canUseLan(), which maintainLteFallback()
+// runs on every loop pass (~20 ms). Each call costs up to two 1500 ms probes plus
+// two route flips, and the state that reaches it ("interface connected but
+// flagged without internet") lasts as long as LTE is up - so it used to block the
+// whole loop continuously. Same cadence as the path polls, which is the point:
+// those already probe and cache the same verdict.
+constexpr uint32_t kLanReachableProbeIntervalMs = 10000;
 // While MQTT runs over LTE, settle a recovered better path for this long before
 // tearing the PDP down, so a flapping link cannot cause a reconnect storm.
 constexpr uint32_t kPathPreemptSettleMs = 3000;
