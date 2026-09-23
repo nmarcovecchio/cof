@@ -20,6 +20,11 @@ forma de saber que estaba desactualizado durante **cinco releases** (0.2.55 a
 
 ### 0. Un equipo solo-LTE nunca se puede actualizar (hallazgo 2026-09-23)
 
+**CONFIRMADO EN HARDWARE el 2026-09-23.** `cof-test` saliendo por LTE: el OTA desde
+el panel devolvio `ota_check: accepted` y el equipo **siguio en 0.2.70** con el
+manifest anunciando 0.2.72. El servidor estaba bien (el binario del VPS tenia el
+sha256 correcto); el corte es del lado del equipo.
+
 `checkManifest()` lee el manifest con `httpGetString()`, que arranca asi:
 
 ```c
@@ -39,6 +44,13 @@ lwIP), pero aca el sintoma es mas grave porque no depende de una descarga fallid
 ni siquiera se intenta. Y como `performOta()` usa `networkConnected()` (que **si**
 cuenta LTE), la asimetria es accidental, no deliberada: el OTA se negaria en
 `httpGetString` mucho antes de llegar a `performOta`.
+
+**Mitigado en el panel (commit `53b5407`).** El boton ya no publica a ciegas:
+`device_ota_block_reason()` en `backend/app/main.py` rechaza antes de enviar y
+avisa por que. El boton queda deshabilitado con la razon en el tooltip y una alerta
+debajo, asi que ya no se puede creer que el OTA funciono cuando no puede. Sigue
+siendo una mitigacion, **no un arreglo**: el equipo sigue sin poder actualizarse
+solo.
 
 **Impacto directo en el trabajo en curso:** esto es lo que hace que B tenga un
 bootstrap de una sola vez. El firmware que implementa la via HTTP nativa del
