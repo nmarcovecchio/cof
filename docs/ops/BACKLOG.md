@@ -318,7 +318,7 @@ no puede ocurrir, ver 8c). Falta:
    cable de red desconectado): tiene que decir `Audio not on device` y sonar el
    respaldo, **no** quedarse sin llamada.
 
-### 8f. Limpieza de la migracion de audio (columnas viejas en produccion)
+### 8f. Limpieza de la migracion de audio
 
 `{valor}` se retiro (ver `NOTIFICATIONS.md`) y no habia ninguna regla guardada
 usandolo, asi que **no queda codigo de compatibilidad**: se borraron
@@ -333,21 +333,25 @@ sabe leer el formato viejo `{"path":...,"dynamic":...}` ademas del nuevo (string
 plano). Es una decena de lineas y evita que un equipo que actualiza por OTA pierda
 el audio que ya tenia y lo vuelva a bajar entero por LTE.
 
-**Pendiente, del lado del servidor:** la columna `audio_assets.has_dynamic` sigue
-existiendo en la base de produccion (la migracion de borrado no se corrio). El
-codigo ya no la escribe ni la lee, pero **todo `SELECT` de SQLAlchemy la sigue
-incluyendo**, asi que borrarla no es opcional si alguien corre un
-`ALTER TABLE ... DROP COLUMN` a mano. Verificacion pendiente contra el VPS:
+**Resuelto en `init_db.py`:** `ensure_schema_columns()` ahora inspecciona
+`audio_assets` y, si la columna sigue ahi, corre
+`ALTER TABLE audio_assets DROP COLUMN has_dynamic`. Es idempotente (guardado por
+la inspeccion) y corre en el mismo arranque del contenedor que el codigo nuevo,
+asi que no hay ventana en la que el modelo y la tabla no coincidan.
+
+Hacia falta hacerlo, no era cosmetico: la columna se creo como `nullable=False`
+con default del lado de Python, o sea `NOT NULL` **sin** default en el DDL. Una
+vez que el modelo deja de declararla, cada `INSERT` en `audio_assets` deja de
+nombrarla y Postgres rechaza la fila por violacion de not-null. El `DROP` no
+pierde informacion util: el unico valor era `False`.
+
+Verificacion opcional despues del deploy:
 
 ```sql
--- Debe dar 0. Si da >0, hay assets de la variante generica todavia.
-SELECT count(*) FROM audio_assets WHERE has_dynamic;
+-- No debe existir. Si existe, init_db no corrio.
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'audio_assets' AND column_name = 'has_dynamic';
 ```
-
-Si da 0, la columna y las filas genericas huerfanas (assets que se sintetizaron
-para textos con `{valor}` y ya nadie referencia: el store es content-addressed y
-no tiene GC) se pueden limpiar. En el modem las poda `syncRuleAudio()` solo cuando
-la config deja de pedirlos. Son de pocos KB.
 
 ### 9. Alarma de OTA rechazada / version estancada
 

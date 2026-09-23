@@ -17,6 +17,7 @@ def ensure_schema_columns():
     inspector = inspect(db.engine)
     device_columns = {column["name"] for column in inspector.get_columns("devices")}
     tenant_columns = {column["name"] for column in inspector.get_columns("tenants")}
+    audio_columns = {column["name"] for column in inspector.get_columns("audio_assets")}
 
     statements = []
     if "hardware_profile" not in device_columns:
@@ -49,12 +50,30 @@ def ensure_schema_columns():
         "CREATE INDEX IF NOT EXISTS ix_telemetry_device_received ON telemetry (device_id, received_at)",
     ]
 
+    # Dropped columns.
+    #
+    # {valor} was retired, and with it the "generic variant" concept: an asset is
+    # always self-contained now, so `has_dynamic` is written and read by nothing.
+    #
+    # It cannot just be left in the table, even though the model stopped
+    # declaring it. The column is `nullable=False` with a Python-side default, so
+    # the DDL is NOT NULL with no server default; once the model omits it, every
+    # INSERT into audio_assets stops naming it and Postgres rejects the row with
+    # a not-null violation. Dropping it is the fix.
+    #
+    # Idempotent: guarded by the inspection above, so re-running is a no-op.
+    drops = []
+    if "has_dynamic" in audio_columns:
+        drops.append("ALTER TABLE audio_assets DROP COLUMN has_dynamic")
+
     with db.engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
         for statement in widen:
             connection.execute(text(statement))
         for statement in indexes:
+            connection.execute(text(statement))
+        for statement in drops:
             connection.execute(text(statement))
 
 
