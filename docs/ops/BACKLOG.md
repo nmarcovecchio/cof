@@ -139,11 +139,41 @@ mismo por FTPS. Si el modem baja su propio audio, el sitio solo-LTE deja de
 depender de lwIP para tener voz nueva, y de paso se abre la puerta al OTA por la
 misma via.
 
+**Confirmado en `cof-test` el 2026-09-23:** `AT+HTTPINIT` ok y
+`AT+HTTPREADFILE=?` **SUPPORTED**. La via existe en hardware real. Lo que falta
+es implementarla, resolviendo antes que `HTTPREADFILE` escribe respuestas HTTP en
+claro (servir el audio por HTTP, o configurar el contexto SSL del modem).
+
+
 **Como verificarlo sin acceso fisico:** boton **Sondear modem** en la pagina del
 dispositivo (comando MQTT `modem_probe`, firmware >= 0.2.62). Publica eventos
 `modem_probe` con `AT+FSMEM` (memoria libre de C:), `AT+CCALB?`,
 `AT+HTTPINIT` y `AT+HTTPREADFILE=?`. El ultimo dice si la via HTTP-a-archivo
 existe en esta unidad. Se saltea mientras hay llamada activa.
+
+#### Resultado en `cof-test` (0.2.62, 2026-09-23 07:41)
+
+| Sonda | Respuesta | Lectura |
+| --- | --- | --- |
+| `AT+FSMEM` | `C:(4194304,1146880)` | 4.00 MiB total, **2.91 MiB libres** |
+| `AT+CCALB?` | unsupported | No hay tono de alerta programable |
+| caps | `fs=YES play=YES` | El firmware puede subir y reproducir audio |
+| `AT+HTTPINIT` | ok | **El modem abre HTTP por su cuenta** |
+| `AT+HTTPREADFILE=?` | **SUPPORTED** | **Puede escribir la respuesta a `C:/`** |
+
+La via HTTP-a-archivo **existe en esta unidad**. Ojo con dos cosas antes de
+disenarla:
+
+- `AT+HTTPREADFILE` escribe el cuerpo de una respuesta HTTP **en claro**.
+  `app.callonfail.com.ar` es HTTPS, asi que para bajar el AMR por esta via hay
+  que servir el audio por HTTP (y el audio no es secreto), **o** configurar el
+  contexto SSL del modem con `AT+CSSLCFG="authmode",<ctx>,0` (sin verificacion de
+  CA, equivalente al `setInsecure()` que ya usa el firmware) y `AT+CSSLCFG="cacert"`
+  para verificacion real.
+- El C: real es **4.00 MiB**, no los ~10.8 MiB del ejemplo del manual: **63% mas
+  chico**. Cualquier calculo de cuantos audios entran tiene que salir de `AT+FSMEM`
+  de la unidad, no del ejemplo del fabricante.
+
 
 ### 9. Alarma de OTA rechazada / version estancada
 

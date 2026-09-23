@@ -124,9 +124,13 @@ or the measured value. See `docs/ops/NOTIFICATIONS.md`.
 
 ### How much audio fits, and where the limit really is
 
-The modem's C: is the roomy part: the A76XX manual documents a total of ~11 MB
-(`AT+FSMEM` -> `+FSMEM: C:(11348480,2201600)` in the vendor example). At AMR-NB
-12.2 kbps that is **hundreds** of short assets. Storage was never the constraint.
+Measured on the lab unit (`AT+FSMEM`, firmware 0.2.62, see **Sondear modem**):
+`C:(4194304,1146880)` - a **4.00 MiB** total, 1.09 MiB used, **2.91 MiB free**.
+Note this is **63% smaller** than the ~10.8 MiB in the vendor manual's example, so
+never size anything from that example. At AMR-NB 12.2 kbps the free space is
+**~33 minutes** of speech, i.e. **~199** assets of 10 s or **~24-33** of the
+60-80 s a `call_text` typically produces. Storage is not the constraint, and the
+design keeps hundreds of short assets available.
 
 The constraint is **RAM on the ESP32 during the call**, because
 `uploadAudioToModem()` buffers the entire file in one `malloc`. Two ceilings:

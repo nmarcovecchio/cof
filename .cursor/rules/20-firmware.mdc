@@ -82,10 +82,12 @@ la regla. No se borra porque sigue siendo el audio canonico de laboratorio.
 
 ### Cuanto audio entra y donde esta el techo
 
-El C: del modem es la parte holgada: el manual A76XX documenta ~11 MB totales
-(`AT+FSMEM` -> `+FSMEM: C:(11348480,2201600)` en el ejemplo del fabricante). En
-AMR-NB 12.2 kbps eso son **cientos** de assets cortos. Guardar varios audios no es
-el problema.
+Medido en la unidad de laboratorio (`AT+FSMEM`, firmware 0.2.62, boton **Sondear
+modem**): `C:(4194304,1146880)` -> **4.00 MiB** totales, 1.09 MiB usados, **2.91
+MiB libres**. Ojo: es **63% mas chico** que los ~10.8 MiB del ejemplo del manual
+A76XX, asi que **no dimensionar desde ese ejemplo**. Los 2.91 MiB libres son ~33
+minutos de AMR-NB 12.2 kbps: ~199 audios de 10 s, o ~24-33 de los 60-80 s que
+suele dar un `call_text`. Guardar varios audios no es el problema.
 
 El techo es la **RAM del ESP32 durante la llamada**: `uploadAudioToModem()`
 bufferea el archivo entero en un solo `malloc`. Dos limites: `PCNT` avanza de a
@@ -101,19 +103,24 @@ ensancharia la banda es AMR-WB (50-7000 Hz), que la nota de audio del modem
 (`TTS_LENGTH_SCALE`, `TTS_SENTENCE_SILENCE`), normalizar volumen antes de
 codificar, y otra voz Piper.
 
-### El modem puede bajar sus propios archivos (via abierta)
+### El modem puede bajar sus propios archivos (via confirmada en 0.2.62)
 
 `HTTPClient` necesita lwIP (Ethernet/WiFi), asi que en un sitio solo-LTE el audio,
 el manifest y el OTA **no llegan**. Pero el modem si tiene pila HTTP propia:
 `AT+HTTPINIT` -> `AT+HTTPPARA="URL",…` -> `AT+HTTPACTION` ->
 `AT+HTTPREADFILE="x.amr",1` guarda el cuerpo directo en `C:/`; `AT+CFTPSGETFILE`
-hace lo mismo por FTPS. Es la via para que un sitio sin LAN reciba voz nueva (y
-eventualmente OTA) sin depender de lwIP.
+hace lo mismo por FTPS.
 
-Para verificarlo en una unidad remota sin consola serial: boton **Sondear modem**
-en la pagina del dispositivo -> comando MQTT `modem_probe` (0.2.62+) -> eventos
-`modem_probe` con `AT+FSMEM`, `AT+CCALB?`, `AT+HTTPINIT` y `AT+HTTPREADFILE=?`.
-Ver `docs/ops/BACKLOG.md` §8c.
+**Medido en `cof-test`:** `AT+HTTPINIT` ok y `AT+HTTPREADFILE=?` **SUPPORTED**.
+La via existe. Dos avisos antes de disenarla: `HTTPREADFILE` escribe respuestas
+HTTP **en claro**, asi que hay que servir el audio por HTTP o configurar el
+contexto SSL del modem (`AT+CSSLCFG="authmode",<ctx>,0` sin CA, o `cacert` para
+verificacion real); y `AT+CCALB?` dio **unsupported** en esta unidad, asi que no
+hay tono de alerta programable.
+
+Para verificar otra unidad sin consola serial: boton **Sondear modem** en la
+pagina del dispositivo -> comando MQTT `modem_probe` (0.2.62+) -> eventos
+`modem_probe`. Ver `docs/ops/BACKLOG.md` §8c.
 
 
 Flask serves `https://app.callonfail.com.ar/ota/firmware.bin` from `ota/` (`OTA_DIR`).

@@ -239,13 +239,15 @@ Note on the modem's own TTS (`AT+CTTS`): the A76XX audio application note says i
 supports **Chinese and English only**, so it is not usable for Spanish call audio
 and must not be designed around as a dynamic-audio path.
 
-**Limits (measured, see `docs/voice/VOICE_SMS.md`):** the modem's C: holds
-hundreds of AMR assets (~11 MB, vendor example) - storage is not the constraint.
-The constraint is ESP32 RAM during the call: `uploadAudioToModem()` buffers the
-whole file, capping a transfer at 240 KB (~161 s of AMR-NB 12.2 kbps, against
-60-80 s of typical `call_text`). Voice quality cannot be raised within AMR-NB
-(already at its 12.2 kbps top mode); only AMR-WB would widen the band, and it is
-not documented as supported on this modem.
+**Limits (measured, see `docs/voice/VOICE_SMS.md`):** this unit reports
+`C:(4194304,1146880)` - 4.00 MiB total, 2.91 MiB free, which is 63% smaller than
+the vendor manual's ~10.8 MiB example. Never size from that example. The free
+space still holds ~199 assets of 10 s, so storage is not the constraint. The
+constraint is ESP32 RAM during the call: `uploadAudioToModem()` buffers the whole
+file, capping a transfer at 240 KB (~161 s of AMR-NB 12.2 kbps, against 60-80 s
+of typical `call_text`). Voice quality cannot be raised within AMR-NB (already at
+its 12.2 kbps top mode); only AMR-WB would widen the band, and it is not
+documented as supported on this modem.
 
 ### Runtime status
 
