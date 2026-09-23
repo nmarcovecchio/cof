@@ -375,6 +375,58 @@ def device_is_live(device) -> bool:
     return is_fresh(getattr(device, "last_seen_at", None))
 
 
+def device_ota_block_reason(device) -> str | None:
+    """Why an OTA check cannot work on this device right now, or None if it can.
+
+    The firmware reads the manifest with HTTPClient + WiFiClientSecure, which need
+    an lwIP interface: Ethernet or WiFi. MQTT over LTE rides the modem's own
+    AT+CIPOPEN socket, which lwIP cannot route, so `httpGetString()` bails out on
+    its `!lanConnected()` guard before the manifest is ever fetched - see
+    `firmware/src/ota_config.cpp`. The device still ACKs the command, so without
+    this check the button looks like it worked and the firmware silently never
+    updates (BACKLOG "un equipo solo-LTE nunca se puede actualizar").
+
+    Only definitive evidence blocks: a LAN interface up but explicitly flagged as
+    having no internet, or no LAN interface at all while the device reports LTE. A
+    device that does not report its network at all is allowed through, because a
+    unit too old to report it is exactly one that may need the update.
+    """
+    network = (getattr(device, "discovered", None) or {}).get("network") or {}
+    if not isinstance(network, dict):
+        return None
+    eth = network.get("ethernet") or {}
+    wifi = network.get("wifi") or {}
+    lte = network.get("lte") or {}
+    eth_up = bool(eth.get("up"))
+    wifi_up = bool(wifi.get("up"))
+    lte_up = bool(lte.get("up"))
+
+    # A LAN interface the device reports as up - and not explicitly flagged as
+    # lacking internet - is enough: the firmware only needs lwIP to exist.
+    if eth_up or wifi_up:
+        lan_internet = (eth_up and eth.get("internet") is not False) or (
+            wifi_up and wifi.get("internet") is not False
+        )
+        if lan_internet:
+            return None
+        return (
+            "OTA no disponible: hay LAN conectada pero el equipo la reporta sin salida a internet "
+            "(segun su ultimo reporte), asi que no podria bajar el firmware. No se envio nada. "
+            "Revisa que el router tenga internet y reintenta."
+        )
+
+    # No LAN at all. Refuse only when the device actually tells us it rides LTE: a unit
+    # too old to report its network is exactly one that may need this update, and we
+    # cannot prove it is on LTE, so we let it try rather than block on a guess.
+    if lte_up or str(network.get("active") or "") == "lte":
+        return (
+            "OTA no disponible: el equipo sale por LTE (segun su ultimo reporte) y no puede bajar "
+            "el manifest por esa via, asi que el firmware no se actualizaria. No se envio nada. "
+            "Enchufa Ethernet, o dale una WiFi con internet, y reintenta."
+        )
+    return None
+
+
 def cellular_is_current(cell, device=None) -> bool:
     # Threshold must track DEVICE_LIVE_SECONDS: cellular.received_at is stamped
     # only when a status message carries a cellular dict, and status is published
@@ -485,6 +537,10 @@ def create_app() -> Flask:
     @app.template_filter("device_live")
     def device_live_filter(device):
         return device_is_live(device)
+
+    @app.template_filter("ota_block_reason")
+    def ota_block_reason_filter(device):
+        return device_ota_block_reason(device)
 
     @app.template_filter("tenant_contacts")
     def tenant_contacts_filter(tenant):
@@ -1178,6 +1234,13 @@ def create_app() -> Flask:
                 "Si el WiFi tiene clave mala, pulsá Olvidar y después OTA.",
                 "warning",
             )
+            return redirect(url_for("device_detail", device_uid=device.device_uid))
+        # Refuse before publishing. The command would be ACKed by the firmware even
+        # though the manifest can never be fetched over LTE, so without this the
+        # operator gets a success message and a device that silently never updates.
+        block_reason = device_ota_block_reason(device)
+        if block_reason:
+            flash(block_reason, "warning")
             return redirect(url_for("device_detail", device_uid=device.device_uid))
         return send_device_command(device_uid, "ota_check", "OTA check command sent")
 

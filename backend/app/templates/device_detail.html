@@ -515,9 +515,11 @@
       <a class="btn btn-primary" href="{{ url_for('device_config', device_uid=device.device_uid) }}">
         <i class="bi bi-sliders"></i> Publicar config
       </a>
-      <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}">
+      {% set ota_block = device|ota_block_reason %}
+      <form method="post" action="{{ url_for('device_command_ota_check', device_uid=device.device_uid) }}"
+            {% if ota_block %}title="{{ ota_block }}"{% endif %}>
         {{ csrf_field() }}
-        <button class="btn btn-outline-secondary" type="submit">
+        <button class="btn btn-outline-secondary" type="submit" {% if ota_block %}disabled{% endif %}>
           <i class="bi bi-cloud-arrow-down"></i> OTA
         </button>
       </form>
@@ -541,6 +543,11 @@
       </form>
       {% endif %}
     </div>
+    {% if not device.archived_at and ota_block %}
+    <div class="alert alert-warning mt-3 mb-0" role="alert">
+      <i class="bi bi-exclamation-triangle"></i> {{ ota_block }}
+    </div>
+    {% endif %}
     {% if not device.archived_at %}
     <form class="test-actions" id="modem-test-form" method="post">
       {{ csrf_field() }}
