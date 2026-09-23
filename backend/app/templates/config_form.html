@@ -199,6 +199,14 @@
         <p class="text-muted mb-0" id="no-rules-msg">No hay reglas configuradas. Agregá una.</p>
       {% endif %}
     </div>
+    <div class="alert alert-danger py-2 px-3 mt-3 mb-0 small" id="audio-cap-warning" hidden>
+      <strong>Demasiados audios de llamada.</strong>
+      El equipo guarda <strong>{{ max_rule_audio_assets }}</strong> audios distintos y esta config pide
+      <strong><span id="audio-cap-count">0</span></strong>. Las reglas que sobren se quedarian
+      <strong>sin voz</strong>: la llamada diria el texto de respaldo en vez del que escribiste.
+      Revisá los textos de llamada. Ojo que dos reglas que dicen <em>exactamente lo mismo</em>
+      comparten un solo audio y cuentan como uno.
+    </div>
     </div>
   </div>
 
@@ -355,6 +363,7 @@ const EXISTING_RULES = {{ cfg.rules | default([]) | tojson }};
 const CONTACTS = {{ contacts | default([]) | tojson }};
 const CSRF_TOKEN = {{ csrf_token() | tojson }};
 const PREVIEW_URL = {{ url_for('device_call_audio_preview', device_uid=device.device_uid) | tojson }};
+const MAX_RULE_AUDIO_ASSETS = {{ max_rule_audio_assets | tojson }};
 
 async function previewCallAudio(row, statusEl, audioEl, buttonEl) {  const text = row.querySelector('.rule-call-text').value.trim();
   if (!text) {
@@ -583,6 +592,26 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
   };
   payload.sensors = sensors;
   payload.rules = rules;
+
+  // Refuse here, with the count visible, rather than bouncing off the server.
+  // The asset count is by content: the same text twice is one file on the device.
+  const distinctTexts = new Set();
+  rules.forEach(r => {
+    // Only a rough client-side stand-in: the server counts the *resolved* text
+    // (placeholders filled in), so this can undercount rules whose texts differ
+    // only in a placeholder that resolves to the same words. It catches the
+    // common case - many rules with clearly different texts - and the server
+    // check is the authority.
+    if (r.call_text && r.call_text.trim()) distinctTexts.add(r.call_text.trim());
+  });
+  const capWarning = document.getElementById('audio-cap-warning');
+  const capCount = document.getElementById('audio-cap-count');
+  if (capCount) capCount.textContent = distinctTexts.size;
+  if (capWarning) capWarning.hidden = distinctTexts.size <= MAX_RULE_AUDIO_ASSETS;
+  if (distinctTexts.size > MAX_RULE_AUDIO_ASSETS) {
+    if (capWarning) capWarning.scrollIntoView({block: 'center', behavior: 'smooth'});
+    return;
+  }
 
   document.getElementById('payload-hidden').value = JSON.stringify(payload);
   this.submit();

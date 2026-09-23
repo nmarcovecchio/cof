@@ -460,6 +460,7 @@ static void syncRuleAudio(JsonDocument& doc) {
   int preexisting = 0;   // already on the modem, left alone
   int pruned = 0;        // removed because the config no longer wants them
   int failed = 0;        // download errors
+  int skipped = 0;       // dropped because the asset cap was reached
 
   // 1. Desired set: one entry per distinct audio, keyed by sha16.
   std::map<String, String> desiredUrls;
@@ -474,7 +475,12 @@ static void syncRuleAudio(JsonDocument& doc) {
       continue;
     }
     if (desiredUrls.size() >= kRuleAudioMax && desiredUrls.count(ruleAudioKey(sha)) == 0) {
-      Serial.println("[audio] rule audio cap reached; skipping extra assets");
+      // Counted, not just logged: this rule's call will play the canned fallback
+      // instead of its own text, and with no event the operator has no way to
+      // find out. The device cannot say which rules lost - it only sees shas -
+      // but the count is enough for the web UI to flag the config.
+      Serial.printf("[audio] rule audio cap reached; skipping %s\n", ruleAudioKey(sha).c_str());
+      skipped++;
       continue;
     }
     desiredUrls[ruleAudioKey(sha)] = url;
@@ -525,7 +531,7 @@ static void syncRuleAudio(JsonDocument& doc) {
   // port, which is unreachable on a device with no physical access - exactly the
   // deployment this feature is for. One event per sync, not per file, so a
   // config save with many rules does not flood the event log.
-  if (installed > 0 || pruned > 0 || failed > 0) {
+  if (installed > 0 || pruned > 0 || failed > 0 || skipped > 0) {
     String message = String("call_audio: ") + (installed + preexisting) + " on device";
     if (installed > 0) {
       message += ", " + String(installed) + " downloaded";
@@ -536,7 +542,12 @@ static void syncRuleAudio(JsonDocument& doc) {
     if (failed > 0) {
       message += ", " + String(failed) + " failed";
     }
-    publishDeviceEvent("call_audio", failed > 0 ? "warning" : "info", message, "");
+    if (skipped > 0) {
+      message += ", " + String(skipped) + " skipped (cap)";
+    }
+    // A skipped asset is a warning even with no failed download: the call goes
+    // out with the fallback text, which is not what the operator configured.
+    publishDeviceEvent("call_audio", (failed > 0 || skipped > 0) ? "warning" : "info", message, "");
   }
 }
 

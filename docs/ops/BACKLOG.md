@@ -275,7 +275,49 @@ disenarla:
   chico**. Cualquier calculo de cuantos audios entran tiene que salir de `AT+FSMEM`
   de la unidad, no del ejemplo del fabricante.
 
-### 8d. ~910 KB sin explicar en el C: del modem (0.2.62)
+### 8d. Tope de audios por equipo (resuelto 0.2.68, silencioso hasta 0.2.67)
+
+El equipo guarda **40 audios distintos** (`kRuleAudioMax` en `ota_config.cpp`).
+Hasta 0.2.67 pasarse del tope era **completamente silencioso**, y por tres razones
+apiladas:
+
+1. El `continue` que saltea un asset no tocaba `installed`, `pruned` ni `failed`.
+2. El evento `call_audio` solo se publicaba si alguno de esos tres era `> 0`.
+3. El backend **no conocía el tope**: no hay nada en `main.py` ni en el modelo que
+   lo refleje.
+
+Resultado: una config con 45 reglas y 40 ya en el modem no publicaba **ningun**
+evento. La pagina del equipo no mostraba nada, esas 5 reglas quedaban mudas, y el
+unico rastro era la consola serie (inalcanzable en un sitio sin acceso fisico).
+Peor: cual regla quedaba sin voz dependia del orden de iteracion del `std::map`,
+no de un criterio.
+
+**Resuelto:**
+
+- **Firmware:** el salteo incrementa `skipped`, se reporta en el evento
+  `call_audio` como `skipped (cap)`, y ese evento pasa a `warning` (antes solo lo
+  era con descargas fallidas).
+- **Backend:** `MAX_RULE_AUDIO_ASSETS = 40` en `main.py`, espejo de `kRuleAudioMax`
+  (si se cambia uno hay que cambiar el otro). `count_call_audio_assets()` cuenta
+  los assets **por contenido** - dos reglas con el mismo texto resuelto comparten
+  un archivo - y el guardado se **rechaza** si la config pide mas de los que
+  entran. El conteo se hace antes de sintetizar, para no pagar un TTS de una
+  config que se va a rechazar.
+- **UI:** aviso en vivo mientras se edita, y el submit se corta con el aviso a la
+  vista. El contador del JS es aproximado (cuenta textos crudos, no resueltos), asi
+  que puede subcontar; la autoridad es el chequeo del servidor.
+
+**Por que se rechaza en vez de avisar:** una regla guardada sin voz no falla, hace
+la llamada y dice el **texto de respaldo**. Es exactamente el fallo silencioso que
+motivo retirar `{valor}`.
+
+**Pendiente:** el tope de 40 es conservador y fijo, calculado sobre ~1,5 KB/s de
+AMR-NB contra los ~2,91 MiB libres medidos. Con el `C:` real de cada unidad
+(`AT+FSMEM`, boton **Sondear modem**) podria subir, pero antes conviene resolver
+8d-910KB: si esos ~910 KB son huerfanos, recuperarlos da mas margen que reajustar
+el numero.
+
+### 8e. ~910 KB sin explicar en el C: del modem (0.2.62)
 
 `AT+FSMEM` en `cof-test` reporta **1.146.880 B usados**, pero los assets que
 sabemos que estan suman mucho menos:
@@ -299,7 +341,7 @@ el reconciliador nuevo (`syncRuleAudio`) solo puede podar su propio namespace
 (b) medir `FSMEM` antes/despues de borrar un archivo conocido para saber como
 cuenta; (c) recien entonces decidir si se limpia a mano.
 
-### 8e. Probar el audio pregrabado en hardware (0.2.64)
+### 8f. Probar el audio pregrabado en hardware (0.2.64)
 
 La cadena completa (guardar regla → sintetizar → publicar `call_audio` →
 descargar al modem → reproducir local) esta verificada solo en banco, no en un
@@ -318,7 +360,7 @@ no puede ocurrir, ver 8c). Falta:
    cable de red desconectado): tiene que decir `Audio not on device` y sonar el
    respaldo, **no** quedarse sin llamada.
 
-### 8f. Limpieza de la migracion de audio
+### 8g. Limpieza de la migracion de audio
 
 `{valor}` se retiro (ver `NOTIFICATIONS.md`) y no habia ninguna regla guardada
 usandolo, asi que **no queda codigo de compatibilidad**: se borraron

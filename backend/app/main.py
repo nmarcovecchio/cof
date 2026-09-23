@@ -77,6 +77,13 @@ from .tts import MAX_TEXT_CHARS
 TELEMETRY_INTERVAL_MIN_SECONDS = 10
 TELEMETRY_INTERVAL_MAX_SECONDS = 300
 
+# How many distinct pre-recorded call audios the device will hold. Mirrors
+# kRuleAudioMax in firmware/src/ota_config.cpp; keep the two in step. Over the
+# cap the firmware keeps whatever it iterates over first, so the excess rules
+# silently lose their voice and the call plays the fallback instead. The save is
+# refused rather than letting that happen quietly.
+MAX_RULE_AUDIO_ASSETS = 40
+
 # Telemetry history bounds. A 60 s cadence is ~1440 rows per device per day, so
 # an unbounded range would both melt the query and ship a multi-megabyte chart
 # payload to the browser. The window is capped and the chart is bucketed.
@@ -282,6 +289,46 @@ def attach_call_audio(device, payload) -> None:
             rule.pop("call_audio", None)
         else:
             rule["call_audio"] = info
+
+
+def count_call_audio_assets(device, payload) -> int:
+    """How many distinct pre-recorded assets this config asks the device to hold.
+
+    Counted by content, not by rule: two rules with the same spoken text share a
+    single file on the modem, so deduplicating by the resolved text mirrors what
+    ``syncRuleAudio()`` will actually request.
+
+    Resolves the same placeholders as ``attach_call_audio()``, but without
+    synthesizing anything: this runs before the save is accepted, and paying a
+    TTS pass for a config we are about to refuse would be worse.
+    """
+    sensor_names = {
+        str(sensor.get("id") or ""): str(sensor.get("name") or "")
+        for sensor in payload.get("sensors") or []
+        if isinstance(sensor, dict)
+    }
+    distinct: set[str] = set()
+    for rule in payload.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        template = str(rule.get("call_text") or "")
+        if not template.strip():
+            continue
+        sensor_id = str(rule.get("sensor_id") or "")
+        static = resolve_static_placeholders(
+            template,
+            {
+                "equipo": device.name,
+                "sitio": device.site.name if device.site else "",
+                "cliente": device.tenant.name if device.tenant else "",
+                "sensor": sensor_names.get(sensor_id) or sensor_id,
+                "regla": rule.get("description") or sensor_id,
+                "umbral": spoken_number(rule.get("threshold")),
+            },
+        )
+        if static.strip():
+            distinct.add(static)
+    return len(distinct)
 
 
 def validate_config_payload(payload):
@@ -1053,6 +1100,23 @@ def create_app() -> Flask:
             validation_error = validate_config_payload(payload)
             if validation_error:
                 return render_config_form(device, raw_payload, error=validation_error)
+
+            # Refuse a config the device cannot hold. Checked before synthesis so
+            # a config that would silently leave rules mute fails fast, with the
+            # count the operator needs to act on.
+            asset_count = count_call_audio_assets(device, payload)
+            if asset_count > MAX_RULE_AUDIO_ASSETS:
+                return render_config_form(
+                    device,
+                    raw_payload,
+                    error=(
+                        f"La config tiene {asset_count} audios de llamada distintos y el equipo "
+                        f"solo guarda {MAX_RULE_AUDIO_ASSETS}. Las reglas que sobren se quedarian "
+                        "sin voz y la llamada diria el texto de respaldo en vez del que escribiste. "
+                        "Revisá los textos de llamada: las reglas que dicen exactamente lo mismo "
+                        "comparten un solo audio."
+                    ),
+                )
 
             # Pre-record the call text before persisting. A TTS failure has to
             # stop the save here; a config saved with a rule whose audio is
@@ -1930,6 +1994,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         inert_sensors=inert_sensors,
         sensor_windows=device_sensor_windows(device),
         call_text_max=MAX_CALL_TEXT_CHARS,
+        max_rule_audio_assets=MAX_RULE_AUDIO_ASSETS,
     )
 
 
