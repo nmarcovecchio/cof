@@ -1,6 +1,7 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.67**.
+Estado: **2026-09-23**. Ultimo firmware publicado: **0.2.69** (pendiente de
+desplegar en el VPS; lo ultimo desplegado fue 0.2.66).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -15,7 +16,41 @@ arregla.
 
 Tres agujeros encontrados el 2026-09-21 al publicar 0.2.60. El device no tenia
 forma de saber que estaba desactualizado durante **cinco releases** (0.2.55 a
-0.2.59).
+0.2.59). El §0 de abajo es del 2026-09-23 y agrega un cuarto, mas de fondo.
+
+### 0. Un equipo solo-LTE nunca se puede actualizar (hallazgo 2026-09-23)
+
+`checkManifest()` lee el manifest con `httpGetString()`, que arranca asi:
+
+```c
+bool httpGetString(const String& url, String& out, uint32_t timeoutMs) {
+  if (!lanConnected()) {          // estado: ethernetConnected || wifiConnected
+    return false;
+  }
+```
+
+`lanConnected()` es Ethernet o WiFi **solamente**: no cuenta `lteDataUp`. Y
+`checkManifest()` es quien decide si hay version nueva. Consecuencia: en un sitio
+solo-LTE el manifest **nunca se lee**, el equipo nunca ve una version nueva y
+**jamas se actualiza solo**.
+
+Es la misma raiz que §8c (el audio y el OTA necesitan `HTTPClient`, que necesita
+lwIP), pero aca el sintoma es mas grave porque no depende de una descarga fallida:
+ni siquiera se intenta. Y como `performOta()` usa `networkConnected()` (que **si**
+cuenta LTE), la asimetria es accidental, no deliberada: el OTA se negaria en
+`httpGetString` mucho antes de llegar a `performOta`.
+
+**Impacto directo en el trabajo en curso:** esto es lo que hace que B tenga un
+bootstrap de una sola vez. El firmware que implementa la via HTTP nativa del
+modem solo puede llegar a un equipo que ya tenga LAN - que es justo el escenario
+que B viene a resolver. Unico camino: LAN (o flasheo a mano) **una vez**, y a
+partir de ahi B abre el OTA por LTE.
+
+**Como cerrarlo:** darle al manifest una via que no requiera lwIP, que es el mismo
+trabajo de §8c (`AT+HTTPINIT` -> `AT+HTTPPARA="URL"` -> `AT+HTTPACTION`, y leer el
+cuerpo). Ojo: `COF_MANIFEST_URL` apunta a `raw.githubusercontent.com`, **no** al
+VPS, asi que esa via tendria que alcanzar GitHub (o el manifest tiene que mudarse
+al VPS primero). Ver §8c y la prueba end-to-end del probe en 0.2.69.
 
 ### 1. El VPS nunca se sincroniza solo (causa raiz)
 

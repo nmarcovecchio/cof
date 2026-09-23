@@ -2,8 +2,34 @@
 
 ## Estado (retomar aca)
 
-Codigo en `main`. Proximo paso: **configurar el VPS**. Todavia no estan el bot
-de Telegram ni Gmail. No probar alarmas hasta tener eso y rebuild.
+**Audio de llamada:** cerrado en codigo, sin probar en hardware. Un texto de
+llamada se sintetiza **al guardar** y queda pregrabado en el equipo; la llamada lo
+reproduce sin bajar nada. `{valor}` esta retirado. El tope de 40 audios se rechaza
+al guardar. Todo esto esta en la 0.2.69, **publicada pero no desplegada**.
+
+Para retomarlo hace falta, en este orden:
+
+1. **En el VPS** (ver `docs/ops/VPS_CONFIG.md`), con LAN conectada una vez:
+
+   ```bash
+   cd /opt/callonfail
+   git pull
+   docker compose up -d --build
+   ```
+
+   El `--build` tiene que ir enseguida del `pull`: `init_db.py` corre la migracion
+   que borra `audio_assets.has_dynamic`, y si el contenedor viejo sigue arriba
+   mientras el repo ya tiene el modelo nuevo, los INSERT fallan.
+
+2. **OTA a 0.2.69** desde la pagina del equipo. Necesita LAN: un equipo sin LAN
+   no puede leer el manifest (`docs/ops/BACKLOG.md` §P0-0).
+
+3. **Boton "Sondear modem"** y mirar los eventos. Desde 0.2.69 el probe corre un
+   GET real contra `example.com` y publica cada paso. Es lo que decide si el audio
+   por LTE es viable sin tocar el equipo.
+
+**Notificaciones (Telegram/Gmail):** sigue pendiente. Todavia no estan el bot de
+Telegram ni Gmail. No probar alarmas hasta tener eso y rebuild.
 
 En `/opt/callonfail/.env` (no commitear secretos):
 
@@ -244,6 +270,9 @@ call_audio: 2 on device, 1 downloaded, 1 pruned
   lo esperado, no un error.
 - `K pruned` — borrados porque la config ya no los pide.
 - `J failed` — fallaron. El evento sale con severidad `warning`, no `info`.
+- `S skipped (cap)` — **no entraron**: la config pide mas audios distintos de los
+  que el equipo guarda. Esas reglas hacen la llamada pero dicen el texto de
+  respaldo, no el que escribiste. El evento tambien sale como `warning`.
 
 Sin este evento la unica senal era el log serie, inutil en un equipo sin acceso
 fisico. Un `NOT supported` en la sonda del modem explica un sync que no baja nada.
@@ -251,9 +280,24 @@ fisico. Un `NOT supported` en la sonda del modem explica un sync que no baja nad
 **Limite:** el ESP32 bufferiza el archivo en RAM antes de pasarlo al modem, con
 un tope de 180 KB (`kMaxAudioBytes` en `firmware/src/sms_voice.cpp`). A 12.2 kbps
 eso da ~118 s de audio por regla; un texto de 400 caracteres mide ~53 s, asi que
-hay ~2x de margen. Ademas se topea en 40 archivos distintos por
-equipo (`kRuleAudioMax`), por los 4 MiB del modem (2,91 MiB libres medidos en
+hay ~2x de margen. Ademas se topea en **40 archivos distintos por equipo**
+(`kRuleAudioMax`), por los 4 MiB del modem (2,91 MiB libres medidos en
 `cof-test`).
+
+### El tope de 40 audios
+
+El tope se cuenta **por contenido, no por regla**: dos reglas que dicen
+exactamente lo mismo comparten un solo archivo, tanto en el servidor como en el
+modem. Si dos reglas dicen lo mismo, ocupan **un** lugar.
+
+El servidor conoce el tope (`MAX_RULE_AUDIO_ASSETS` en `backend/app/main.py`) y
+**rechaza el guardado** si la config pide mas de los que entran, nombrando el
+conteo. Antes no lo sabia, y el firmware salteaba los que sobraban en silencio:
+la regla se guardaba, hacia la llamada, y decia el texto de respaldo. Ese es el
+mismo fallo silencioso que motivo retirar `{valor}`.
+
+Si el tope se cambia en un lado, hay que cambiarlo en el otro: son
+`kRuleAudioMax` (firmware) y `MAX_RULE_AUDIO_ASSETS` (backend).
 
 
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
