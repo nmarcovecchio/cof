@@ -106,14 +106,20 @@ El codigo esta: `SENSOR_ALIASES` mapea `net_ethernet` / `net_wifi` /
 (`fillConnectivityJson`) y `ensure_network_sensors()` los inyecta en el form. Lo
 que falta es la prueba end-to-end con una regla `lt 1`.
 
-### 8b. Probar el respaldo de audio de la llamada (0.2.61)
+### 8b. Probar el respaldo de audio de la llamada (0.2.61, revisar con 0.2.64)
 
-El fallback solo se activa en un sitio **sin Ethernet ni WiFi** (o simulando la
-falla de descarga). No se puede validar desde un banco con LAN: hay que
-desconectar el cable y sacar el WiFi del equipo, con el `C:/cof_fallback.wav` ya
-sincronizado, y confirmar que la llamada sale y el evento dice
-`TTS unavailable, using fallback`. Con eso se cierra tambien la duda de que el
-asset llegue al modem.
+Con 0.2.64 el orden de preferencia cambio, asi que este caso quedo mas acotado. La
+llamada usa, en orden: (1) el audio **pregrabado y estatico** de la regla, que no
+necesita red; (2) el TTS exacto bajado del servidor, si hay ruta; (3) la
+**variante generica** del audio de la regla; (4) recien ahi el
+`C:/cof_fallback.wav` congelado.
+
+O sea que el respaldo solo se activa si la regla **no tiene audio local
+utilizable** (p. ej. el sync nunca corrio) **y** la descarga del TTS falla. Para
+probarlo: equipo sin Ethernet ni WiFi, con `C:/cof_fallback.wav` ya sincronizado y
+una regla **sin** `call_text` previamente descargado, y confirmar que la llamada
+sale y el evento dice `TTS unavailable, using fallback`. Con eso se cierra tambien
+la duda de que el asset llegue al modem.
 
 ### 8c. El sitio solo-LTE no puede recibir nada (hallazgo 0.2.62)
 

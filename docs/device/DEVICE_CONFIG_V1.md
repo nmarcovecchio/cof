@@ -216,6 +216,13 @@ Controlled from the web:
 }
 ```
 
+**`max_attempts_per_alarm` is dead.** Only `calling.enabled` is read by the
+firmware (`firmware/src/ota_config.cpp`, `doc["calling"]["enabled"]`). Nothing
+reads `max_attempts_per_alarm`: retries are driven by the per-rule
+escalate/delay settings on the server. The web form still shows a "Máx. intentos
+por alarma" field for it and the JS still writes the value, so it looks
+configurable, but changing it has no effect.
+
 If `calling.enabled` is false, the device must not place phone calls even if the
 modem is ready. Alarm email, Telegram chat ID and phone number are stored on
 the tenant (see `docs/ops/NOTIFICATIONS.md`). Device `notifications` in this JSON
@@ -223,6 +230,14 @@ is a leftover override only.
 
 Audio assets should be dynamic. A customer may have no audio assets, one shared
 test audio, or different audios per alarm flow.
+
+**This `audio` array is dead in the current firmware.** No code reads it:
+`firmware/src/ota_config.cpp` only reads `audio` from the **manifest**
+(`checkManifest`), which is where the fallback asset is announced. The array is
+still emitted by `default_device_config()` in `backend/app/main.py`, so it shows
+up in every config payload, but changing it does nothing. The fallback is
+provisioned from `ota/manifest.json` -> `ota/audio/cof_fallback.wav` ->
+`C:/cof_fallback.wav`. Do not design against this array; use the manifest.
 
 **Current implementation (0.2.64):** rules with a `call_text` get a
 **pre-recorded** audio asset, synthesized once at config save and stored
@@ -263,10 +278,11 @@ and must not be designed around as a dynamic-audio path.
 the vendor manual's ~10.8 MiB example. Never size from that example. The free
 space still holds ~199 assets of 10 s, so storage is not the constraint. The
 constraint is ESP32 RAM during the call: `uploadAudioToModem()` buffers the whole
-file, capping a transfer at 240 KB (~161 s of AMR-NB 12.2 kbps, against 60-80 s
-of typical `call_text`). Voice quality cannot be raised within AMR-NB (already at
-its 12.2 kbps top mode); only AMR-WB would widen the band, and it is not
-documented as supported on this modem.
+file in one `malloc`, capping a transfer at **180 KB** (`kMaxAudioBytes = 180000`,
+`firmware/src/sms_voice.cpp`) - ~118 s of AMR-NB 12.2 kbps, against the ~53 s a
+400-character `call_text` measures at. Voice quality cannot be raised within AMR-NB
+(already at its 12.2 kbps top mode); only AMR-WB would widen the band, and it is
+not documented as supported on this modem.
 
 ### Runtime status
 

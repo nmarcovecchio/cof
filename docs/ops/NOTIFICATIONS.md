@@ -104,7 +104,14 @@ modem (`AT+CTTS` devuelve `ERROR` en este build). Por eso el respaldo dice un
 mensaje generico y **no** puede decir el nombre del sitio ni el valor medido: eso
 solo lo puede hacer el TTS del servidor, que necesita la descarga.
 
-Un sitio que vaya a operar **solo con LTE** tiene que tener el respaldo cargado.
+**Ojo:** ese `manifest.json` tambien se baja con `HTTPClient`, asi que el respaldo
+tampoco entra por LTE. Un sitio solo-LTE **no puede provisionarse a si mismo** ni
+el audio de las reglas ni el respaldo. La unica forma de que un equipo solo-LTE
+tenga voz es dejarlo provisionado **mientras todavia tiene LAN** (en el banco,
+antes de instalarlo), o esperar al HTTP nativo del modem
+(`docs/ops/BACKLOG.md` 8c). Por eso conviene instalar y sincronizar con el cable
+puesto, y no confiar en poder hacerlo despues por LTE.
+
 Se verifica en la pagina del equipo: el evento de la llamada dice que audio uso.
 
 ## Texto de la llamada, por regla
@@ -227,9 +234,11 @@ Sin este evento la unica senal era el log serie, inutil en un equipo sin acceso
 fisico. Un `NOT supported` en la sonda del modem explica un sync que no baja nada.
 
 **Limite:** el ESP32 bufferiza el archivo en RAM antes de pasarlo al modem, con
-un tope de 180 KB. A 12.2 kbps eso da ~118 s de audio por regla; un texto de 400
-caracteres esta muy por debajo. Ademas se topea en 40 archivos distintos por
-equipo, por los 4 MiB del modem (2,91 MiB libres medidos en `cof-test`).
+un tope de 180 KB (`kMaxAudioBytes` en `firmware/src/sms_voice.cpp`). A 12.2 kbps
+eso da ~118 s de audio por regla; un texto de 400 caracteres mide ~53 s, asi que
+hay ~2x de margen. Ademas se topea en 40 archivos distintos por
+equipo (`kRuleAudioMax`), por los 4 MiB del modem (2,91 MiB libres medidos en
+`cof-test`).
 
 
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
@@ -377,7 +386,9 @@ rearme por histeresis). **Disparar esta alarma** no espera la condicion del sens
 - [ ] Telefono `+549...` en el contacto
 - [ ] En la regla, tildar quien recibe SMS/email/Telegram/llamada
 - [ ] En el equipo, llamadas habilitadas si corresponde
-- [ ] Si el sitio opera **solo con LTE**, verificar que el respaldo de audio este
-      en el modem (`checkManifest`); sin eso la llamada no sale
+- [ ] Si el sitio va a operar **solo con LTE**, el respaldo de audio tiene que
+      haber quedado en el modem **antes** de quedarse sin LAN: el `checkManifest`
+      que lo baja tambien necesita Ethernet o WiFi. Sin respaldo y sin forma de
+      bajarlo, la llamada no sale. Verificar en el banco, con el cable puesto
 - [ ] **Disparar esta alarma** genera evento `alarm` y los avisos de esa regla
 - [ ] El enlace/boton confirma y silencia; al cerrarse la alarma el enlace muere

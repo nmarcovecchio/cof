@@ -191,7 +191,7 @@
         <ul class="mb-0 mt-2">
           <li><strong>Email</strong> y <strong>Telegram</strong>: solo el servidor. No necesitan el modem.</li>
           <li><strong>SMS</strong>: el modem del equipo, con SIM y cobertura. Puede salir sin internet, pero el disparo ya tuvo que llegar por MQTT.</li>
-          <li><strong>Llamada</strong>: el modem <em>y</em> el equipo tiene que poder bajar el audio del servidor. Si en el sitio no hay Ethernet ni WiFi y todo sale por LTE, la llamada <strong>no sale</strong>: queda registrada con el motivo. Cargá el audio de respaldo en el modem para cubrir ese caso.</li>
+          <li><strong>Llamada</strong>: el modem <em>y</em> el equipo tiene que haber podido bajar el audio del servidor, cosa que hace al guardar la config. Esa descarga necesita Ethernet o WiFi (LTE no sirve: no es una interfaz de red para el equipo). Si ya bajó, la llamada suena aunque la red se haya caído. Si en el sitio <strong>nunca</strong> hay Ethernet ni WiFi, el audio no se puede bajar y la llamada usa el respaldo generico que el equipo trae del <code>manifest.json</code>.</li>
         </ul>
       </details>
     <div id="rules-container">
@@ -291,7 +291,8 @@
                 Maximo {{ call_text_max }} caracteres.
               </div>
               <div class="alert alert-light border py-2 px-3 mt-2 mb-0 small">
-                Al guardar, el audio queda <strong>pregrabado en el equipo</strong> y la llamada no baja nada por internet.
+                Al guardar, el audio queda <strong>pregrabado en el equipo</strong>. Si el texto no lleva
+                <code>{valor}</code>, la llamada reproduce ese archivo local y <strong>no baja nada por internet</strong>.
                 <code>{umbral}</code> se graba con el numero del umbral.
                 <code>{valor}</code> es lo unico que no se puede pregrabar: la llamada dice el numero bajandolo del servidor,
                 y si el equipo no tiene internet reproduce la version grabada sin el numero.

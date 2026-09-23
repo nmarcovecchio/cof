@@ -122,6 +122,12 @@ call returns the download error and **no call is placed**. The fallback is a
 frozen generic phrase: the firmware has no TTS, so it cannot speak the site name
 or the measured value. See `docs/ops/NOTIFICATIONS.md`.
 
+**Provisioning a fallback also needs lwIP.** The manifest that announces the asset
+is fetched with the same `HTTPClient`, so a site with no Ethernet and no WiFi
+cannot download the fallback either. Such a unit must be provisioned **while it
+still has LAN** (at the bench, before installation); it cannot self-provision over
+LTE. See `docs/ops/BACKLOG.md` 8c.
+
 ### How much audio fits, and where the limit really is
 
 Measured on the lab unit (`AT+FSMEM`, firmware 0.2.62, see **Sondear modem**):
@@ -129,19 +135,25 @@ Measured on the lab unit (`AT+FSMEM`, firmware 0.2.62, see **Sondear modem**):
 Note this is **63% smaller** than the ~10.8 MiB in the vendor manual's example, so
 never size anything from that example. At AMR-NB 12.2 kbps the free space is
 **~33 minutes** of speech, i.e. **~199** assets of 10 s or **~24-33** of the
-60-80 s a `call_text` typically produces. Storage is not the constraint, and the
+~53 s a 400-character `call_text` measures at (a placeholder-heavy 89-character
+sample encoded to 11.8 s). Storage is not the constraint, and the
 design keeps hundreds of short assets available.
 
 The constraint is **RAM on the ESP32 during the call**, because
-`uploadAudioToModem()` buffers the entire file in one `malloc`. Two ceilings:
+`uploadAudioToModem()` buffers the entire file in one `malloc`. That single cap is
+the real ceiling:
 
 | Ceiling | Value | Why |
 |---|---|---|
-| Download | 240 KB | `PCNT` advances in 512-byte blocks, so the transfer stops at 480 blocks |
-| Modem upload | ~10 s of speech per burst | `PCNT` is a `uint16`, max 65,535; sent in 15 KB chunks |
+| Whole file in RAM | 180 KB | `kMaxAudioBytes = 180000` (`firmware/src/sms_voice.cpp`); a larger `Content-Length` is rejected with `TTS too large` before reading |
+| Modem upload | 512-byte chunks | `AT+CFTRANRX` declares the full size, then the buffer is written in 512-byte chunks with a 1 ms delay |
 
-240 KB of AMR-NB 12.2 kbps is ~161 s of speech. The per-rule `call_text` caps at
-400 characters, which is typically 60-80 s, so there is roughly 2x headroom.
+180 KB of AMR-NB 12.2 kbps is **~118 s** of speech. The per-rule `call_text` caps
+at 400 characters, which measures at ~0.13 s/char (~53 s for a placeholder-heavy
+text), so there is roughly 2x headroom.
+
+Neither ceiling is a modem `PCNT` limit: `PCNT` appears nowhere in the firmware,
+and there is no `uint16` counter in this path. The cap is the ESP32 buffer.
 
 ### Voice quality: what can actually move
 
@@ -209,14 +221,23 @@ the generic variant and is used as a fallback, because the text contains
 `{valor}` and the exact reading must be downloaded at call time. See
 `NOTIFICATIONS.md` § "Texto de la llamada, por regla".
 
-Device downloads over Ethernet (HTTPS, cert not verified) into RAM, deletes any
-previous `C:/tts.amr` (`AT+FSDEL`), uploads with `AT+CFTRANRX`, plays remote,
-then restores the previous modem audio path. If this fails, the event message
-is specific (`TTS HTTP 404`, `TTS too large`, `TTS no RAM`, etc.).
+Device downloads over **lwIP (Ethernet or WiFi)** - HTTPS, cert not verified - into
+RAM, deletes any previous `C:/tts.amr` (`AT+FSDEL`), uploads with `AT+CFTRANRX`,
+plays remote, then restores the previous modem audio path. LTE does not work here:
+MQTT rides the modem's `AT+CIPOPEN` socket, which is not an lwIP interface, so
+`HTTPClient` has no route. If this fails, the event message is specific
+(`TTS HTTP 404`, `TTS too large`, `TTS no RAM`, `TTS no network`, etc.).
 
 Rule audio files use their own namespace, `C:/a_<sha16>.amr`, and are the only
 names the device will ever delete during a config sync. See
 `syncRuleAudio()` in `firmware/src/ota_config.cpp`.
+
+`syncRuleAudio()` reports one `call_audio` event per sync (not per file, so a
+config with many rules cannot flood the log), with the counts of assets
+downloaded, pruned and failed. It only publishes when something changed. This is
+the only remote visibility into the audio sync on a unit with no serial access;
+without it the whole sync printed to a port nobody can reach. The device page
+renders it as `audio ok` / `audio con fallas` / `audio podado`.
 
 Admin test-call **bypasses** `calling.enabled`. Alarm-driven calls must not.
 

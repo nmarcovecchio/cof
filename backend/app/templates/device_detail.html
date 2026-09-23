@@ -556,7 +556,9 @@
         </button>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        El texto se usa en el SMS (160 caracteres) y, en la llamada, se convierte a AMR 8 kHz (hasta 800 caracteres, ~1 min).
+        El texto se usa en el SMS (160 caracteres) y, en la llamada, se convierte a AMR 8 kHz
+        (hasta 800 caracteres). El equipo bufferiza el audio entero en RAM antes de pasarlo al modem,
+        con un tope de 180 KB, que es lo que fija esos 800.
         El chip Voz verde solo si alguna llamada conecto.
       </p>
     </form>
