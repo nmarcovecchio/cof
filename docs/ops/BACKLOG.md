@@ -200,11 +200,11 @@ sea que la cache quedaba apuntando al broker **anterior**. Ahora la limpia, y
 
 ---
 
-### 6e. WiFi sano no se promueve desde LTE, y no se reporta
+### 6e. WiFi sano tarda en promoverse desde LTE, y no se reporta (cosmetico)
 
-**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).**
-`markEthernetUp()` marca la salud optimista al obtener IP, con comentario explicito
-(`net_paths.cpp:561`):
+**Estado 2026-09-23: NO se toca el firmware. Solo se corrigio la documentacion.**
+
+**El sintoma.** `markEthernetUp()` marca la salud optimista al obtener IP:
 
 ```cpp
 // Optimistic: a fresh IP is treated as a working path until the probe says
@@ -212,19 +212,33 @@ sea que la cache quedaba apuntando al broker **anterior**. Ahora la limpia, y
 ethInternetUp = true;
 ```
 
-El evento de WiFi **no hace eso**: `ARDUINO_EVENT_WIFI_STA_GOT_IP`
-(`net_paths.cpp:667`) setea `wifiConnected`, `wifiSsid` y `wifiIpAddress`, y nunca
-`wifiInternetUp`. Como `serviceNetworkPaths()` exige el flag para liberar LTE
-(`net_paths.cpp:522`), asociarse a un WiFi sano estando en LTE **no** libera LTE
-hasta que `pollWifiPath()` logre un probe: 10 s de intervalo + 3 s de settle, en el
-mejor caso.
+El evento de WiFi **no hace eso**: `ARDUINO_EVENT_WIFI_STA_GOT_IP` setea
+`wifiConnected`, `wifiSsid` y `wifiIpAddress`, y nunca `wifiInternetUp`. Como
+`serviceNetworkPaths()` exige el flag para liberar LTE, asociarse a un WiFi **sano**
+estando en LTE no libera LTE hasta que `pollWifiPath()` logre un probe: 10 s de
+intervalo + 3 s de settle, ~13 s en el mejor caso. En esa ventana el panel reporta
+"sale por LTE" aunque el WiFi este perfecto.
 
-Efecto visible: el panel reporta "sale por LTE" durante esa ventana aunque WiFi
-este perfecto.
+**La asimetria NO es deliberada: es un olvido.** El commit que introdujo los flags
+(`ec4fc57`, fw 0.2.55) dice que se setean *"optimistically on IP and demoted by a
+failed connect, publish or broker probe"*. Ethernet cumple; WiFi no se actualizo.
 
-**Ojo antes de tocarlo:** `docs/device/NETWORK_PATHS.md` argumenta que gatear WiFi
-en `wifiInternetUp` "would achieve nothing", asi que la asimetria puede ser
-deliberada. Confirmar con el motivo original antes de agregar el flag optimista.
+**Por que igual no se toca.** Marcar `wifiInternetUp = true` sin probar reabre el bug
+que ese mismo commit arreglo: *"a WiFi associated to a router with no uplink used to
+keep lanConnected() true forever, so LTE never engaged"*. Seria dar por sano un AP
+sin uplink, que es exactamente el caso que el probe existe para detectar. El
+comportamiento actual (probar primero, confiar despues) es el correcto; el problema
+es solo que prueba tarde.
+
+**Costo real:** ~13 s de LTE de mas en una transicion poco frecuente. No rompe nada,
+no pierde datos, no deja el equipo incomunicado. Cosmetico.
+
+**Si algun dia molesta**, el fix de bajo riesgo no es el flag optimista sino resetear
+el throttle de `pollWifiPath()` al recibir `GOT_IP` estando en LTE, para que pruebe
+en la pasada siguiente en vez de esperar hasta 10 s. Eso baja la espera a ~3 s **sin
+asumir salud**: el probe sigue decidiendo. Es viable porque `pollWifiPath()` corre
+antes de `serviceNetworkPaths()` en el loop, y desde 0.2.71 `cachedMqttIp` queda
+seteada tras un connect por LTE, asi que su gate de IP no lo bloquea.
 
 ### 6f. RESUELTO en 0.2.72: `canUseLan()` hacia probes bloqueantes en el hot path
 

@@ -165,16 +165,20 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
   `kPathRecoverProbeIntervalMs` (60 s). `serviceNetworkPaths()` then waits
   `kPathPreemptSettleMs` (3 s) of *stable* recovery before tearing the PDP down,
   so a flapping link cannot cause a reconnect storm.
-- `applyPreferredRoute()` decides the lwIP default route. Note the deliberate
-  asymmetry in the `Auto` branch: Ethernet is gated on `ethInternetUp`, WiFi is
-  gated only on `state.wifiConnected`. Gating WiFi on `wifiInternetUp` too would
-  look more consistent and would achieve nothing: a demoted health flag is not
-  proof that the interface is dead (it is set by two missed probes), and if both
-  flags are false there is no other default route to pick, so all this would do
-  is remove a route that might still work for OTA, NTP and audio downloads. The
-  case that actually mattered - a dead Ethernet holding the port - is handled by
-  the Ethernet gate plus `lanHasInternet()` in the MQTT/LTE decision. An earlier
-  version of this document claimed WiFi was gated as well; it never was.
+- `applyPreferredRoute()` decides the lwIP default route. Note the asymmetry in the
+  `Auto` branch: Ethernet is gated on `ethInternetUp`, WiFi is gated only on
+  `state.wifiConnected`. Gating WiFi on `wifiInternetUp` too would look more
+  consistent and would achieve nothing here: a demoted health flag is not proof
+  that the interface is dead (it is set by two missed probes), and if both flags
+  are false there is no other default route to pick, so all this would do is remove
+  a route that might still work for OTA, NTP and audio downloads. The case that
+  actually mattered - a dead Ethernet holding the port - is handled by the Ethernet
+  gate plus `lanHasInternet()` in the MQTT/LTE decision. An earlier version of this
+  document claimed WiFi was gated as well; it never was.
+
+  This paragraph is about *routing only*. It does **not** justify the same
+  asymmetry in the LTE-release decision, where `serviceNetworkPaths()` genuinely
+  does require `wifiInternetUp` - see the note above and §6e.
 - When Ethernet is demoted, `applyPreferredRoute()` will not fall back to a WiFi
   that has no link, otherwise every new TCP connection (including the MQTT
   reconnect) leaves through a dead path. If WiFi is associated but its own health
@@ -183,9 +187,10 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
 
 ## Switching matrix: which transitions work
 
-Audited 2026-09-23 by reading the code (`BACKLOG` §6d-§6g carry the open items).
-"Healthy" means the interface reaches the broker; a link with DHCP but no uplink is
-**not** healthy.
+Audited 2026-09-23 by reading the code. §6d and §6f are fixed (fw 0.2.71/0.2.72),
+§6e is documented-only by choice, §6g is dead code. None of it was validated on
+hardware. "Healthy" means the interface reaches the broker; a link with DHCP but no
+uplink is **not** healthy.
 
 | From | Event | Switches? | Notes |
 |---|---|---|---|
@@ -193,19 +198,21 @@ Audited 2026-09-23 by reading the code (`BACKLOG` §6d-§6g carry the open items
 | Ethernet | link up, no internet | yes | demoted by probe (2 fails) or a failed MQTT connect |
 | WiFi | associated, no internet | yes | `pollWifiPath()` demotes; LTE takes over |
 | WiFi | AP drops | yes | `WIFI_STA_DISCONNECTED` -> LTE |
-| WiFi | healthy AP appears | yes, but slow | **not promoted optimistically**; waits for a probe (§6e) |
+| WiFi | healthy AP appears | yes, but slow | data point: not promoted optimistically; probe decides (§6e) |
 | LTE | Ethernet healthy again | yes | recovery probe (60 s) + 3 s settle |
-| LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()` (§6e) |
+| LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()`, up to ~13 s (§6e) |
 | LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
 | any | LAN up but degraded, on LTE | yes, throttled | `canUseLan()` probes at most every 10 s (§6f) |
 
 Three things are worth knowing before touching any of this:
 
-- **`wifiInternetUp` is never set on association.** `markEthernetUp()` sets
-  `ethInternetUp = true` optimistically, but `ARDUINO_EVENT_WIFI_STA_GOT_IP` does
-  not set the WiFi flag. Any path that requires `wifiInternetUp` (releasing LTE,
-  for one) therefore waits for a successful probe. See §6e before "fixing" this:
-  the asymmetry with `applyPreferredRoute()` may be deliberate.
+- **`wifiInternetUp` is never set on association, and that is *not* deliberate.** The
+  commit that introduced the flags (fw 0.2.55) set them "optimistically on IP";
+  `markEthernetUp()` does, `ARDUINO_EVENT_WIFI_STA_GOT_IP` was left out. The
+  asymmetry with `applyPreferredRoute()` is therefore an oversight, not a design.
+  Do **not** "fix" it by adding the optimistic flag: a WiFi associated to a router
+  with no uplink would then look healthy and hold LTE off, which is the exact bug
+  0.2.55 fixed. Waiting for a probe is correct; it is only slow (~13 s, see §6e).
 - **`cachedMqttIp` is a shortcut, not an authority.** While MQTT rides LTE nothing
   used to refresh it - the connect path only caches when `!lteMqttTransport`, and
   the resolver only adopts a change while MQTT is down. A stale entry poisoned both
