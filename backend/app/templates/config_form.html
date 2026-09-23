@@ -277,11 +277,24 @@
               <label class="form-label small mb-1">Texto de la llamada (opcional)</label>
               <textarea class="form-control form-control-sm rule-call-text" rows="2"
                         placeholder="Ej: Alarma en {equipo}. El sensor {sensor} marca {valor}. Revise la camara."></textarea>
+              <div class="d-flex align-items-center gap-2 mt-1">
+                <button type="button" class="btn btn-sm btn-outline-secondary rule-call-preview">
+                  <i class="bi bi-play-fill"></i> Escuchar
+                </button>
+                <span class="rule-call-preview-status form-text mb-0"></span>
+                <audio class="rule-call-preview-audio d-none" controls preload="none"></audio>
+              </div>
               <div class="form-text">
                 Si lo dejás vacío, la llamada dice el texto generico de la alarma. Solo afecta la <strong>llamada</strong>:
                 el email, Telegram y el SMS siguen con el texto completo.
-                Placeholders: <code>{equipo}</code> <code>{sitio}</code> <code>{cliente}</code> <code>{sensor}</code> <code>{valor}</code> <code>{regla}</code>.
+                Placeholders: <code>{equipo}</code> <code>{sitio}</code> <code>{cliente}</code> <code>{sensor}</code> <code>{umbral}</code> <code>{valor}</code> <code>{regla}</code>.
                 Maximo {{ call_text_max }} caracteres.
+              </div>
+              <div class="alert alert-light border py-2 px-3 mt-2 mb-0 small">
+                Al guardar, el audio queda <strong>pregrabado en el equipo</strong> y la llamada no baja nada por internet.
+                <code>{umbral}</code> se graba con el numero del umbral.
+                <code>{valor}</code> es lo unico que no se puede pregrabar: la llamada dice el numero bajandolo del servidor,
+                y si el equipo no tiene internet reproduce la version grabada sin el numero.
               </div>
             </div>
           </div>
@@ -338,6 +351,53 @@ const SENSORS = [
 // Existing rules from server
 const EXISTING_RULES = {{ cfg.rules | default([]) | tojson }};
 const CONTACTS = {{ contacts | default([]) | tojson }};
+const CSRF_TOKEN = {{ csrf_token() | tojson }};
+const PREVIEW_URL = {{ url_for('device_call_audio_preview', device_uid=device.device_uid) | tojson }};
+
+async function previewCallAudio(row, statusEl, audioEl, buttonEl) {
+  const text = row.querySelector('.rule-call-text').value.trim();
+  if (!text) {
+    statusEl.textContent = 'Escribí un texto primero.';
+    return;
+  }
+  buttonEl.disabled = true;
+  statusEl.textContent = 'Generando audio…';
+  audioEl.classList.add('d-none');
+  try {
+    const sensorId = row.querySelector('.rule-sensor').value || '';
+    // Send the name the form is about to save, not the one persisted: if the
+    // sensor was just renamed, the stored config still has the old name and the
+    // preview would not match what actually gets recorded.
+    const sensor = SENSORS.find(s => s.id === sensorId);
+    const body = new URLSearchParams({
+      _csrf_token: CSRF_TOKEN,
+      text: text,
+      sensor_id: sensorId,
+      sensor_name: sensor ? sensor.name : '',
+      description: row.querySelector('.rule-description').value || '',
+      threshold: row.querySelector('.rule-threshold').value || '',
+    });
+    const resp = await fetch(PREVIEW_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: body,
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.url) {
+      statusEl.textContent = data.error || 'No se pudo generar el audio.';
+      return;
+    }
+    statusEl.textContent = data.cached
+      ? 'Audio ya guardado. Suena exactamente así en la llamada.'
+      : 'Audio generado (todavía no guardado).';
+    audioEl.src = data.url + (data.url.includes('?') ? '&' : '?') + 't=' + Date.now();
+    audioEl.classList.remove('d-none');
+  } catch (err) {
+    statusEl.textContent = 'Error de red al generar el audio.';
+  } finally {
+    buttonEl.disabled = false;
+  }
+}
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, ch => ({
@@ -417,6 +477,19 @@ function addRule(rule) {
   row.querySelectorAll('.rule-action').forEach(cb => {
     cb.addEventListener('change', () => syncActionContacts(row));
   });
+
+  const previewBtn = row.querySelector('.rule-call-preview');
+  if (previewBtn) {
+    const statusEl = row.querySelector('.rule-call-preview-status');
+    const audioEl = row.querySelector('.rule-call-preview-audio');
+    previewBtn.addEventListener('click', () => previewCallAudio(row, statusEl, audioEl, previewBtn));
+    // The audio is addressed by the text, so editing the text invalidates it.
+    row.querySelector('.rule-call-text').addEventListener('input', () => {
+      audioEl.classList.add('d-none');
+      audioEl.removeAttribute('src');
+      statusEl.textContent = '';
+    });
+  }
   syncActionContacts(row);
 
   document.getElementById('rules-container').appendChild(clone);

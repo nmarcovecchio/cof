@@ -9,6 +9,10 @@
 
 // Extracted verbatim from main.cpp, which used to hold every function
 
+// Defined below, used by applyDesiredConfig()/loadSavedMqttConfig() above them.
+static void syncRuleAudio(JsonDocument& doc);
+static void loadRuleAudioIndex();
+
 bool applyDesiredConfig(JsonDocument& doc) {
   pendingConfigError = "";
 
@@ -54,6 +58,11 @@ bool applyDesiredConfig(JsonDocument& doc) {
                 pendingConfigHash.c_str(),
                 telemetrySeconds,
                 callingEnabled ? "on" : "off");
+
+  // Pre-recorded call audio: downloads what this config asks for and prunes
+  // what it no longer uses. Safe to call unconditionally - an empty desired set
+  // is exactly how a rule that lost its call text gets its file removed.
+  syncRuleAudio(doc);
   return true;
 }
 void initOtaRollbackGuard() {
@@ -126,6 +135,7 @@ void loadSavedMqttConfig() {
   const String storedAudioVersion = preferences.getString("audioVersion", "");
   state.modemFallbackAudioReady =
       storedAudioVersion.length() > 0 && storedAudioVersion != "tts";
+  loadRuleAudioIndex();
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.observedVoicePath = preferences.getString("voiceOk", "");
   state.voiceIdentity = preferences.getString("voiceId", "");
@@ -368,6 +378,195 @@ bool performOta(const String& url, const String& newVersion, const String& expec
   ESP.restart();
   return true;
 }
+// --- Per-rule pre-recorded call audio --------------------------------------
+//
+// The backend synthesizes each rule's call text once, at save time, and puts a
+// content-addressed URL + modem path in the config. This syncs those files onto
+// the modem so a call plays a local file with no download - the whole point on
+// a site whose only uplink is LTE, where HTTPClient cannot reach the server.
+//
+// Garbage collection: everything this feature writes is named a_<sha16>.amr.
+// The modem's C: also holds the canned fallback asset and may hold leftovers
+// from older firmware with no way to enumerate the directory, so the device
+// deletes ONLY names in its own namespace and only those the current config no
+// longer asks for. Nothing outside a_* is ever touched.
+static constexpr const char* kRuleAudioPrefix = "a_";
+static constexpr const char* kRuleAudioPrefKey = "ruleAudio";
+static constexpr size_t kRuleAudioMax = 40;
+
+static String ruleAudioKey(const String& sha) {
+  return sha.substring(0, 16);
+}
+
+static void persistRuleAudioIndex() {
+  JsonDocument doc;
+  JsonObject obj = doc.to<JsonObject>();
+  for (const auto& entry : state.ruleAudioPaths) {
+    auto dyn = state.ruleAudioDynamic.find(entry.first);
+    JsonObject node = obj[entry.first].to<JsonObject>();
+    node["path"] = entry.second;
+    node["dynamic"] = (dyn != state.ruleAudioDynamic.end()) && dyn->second;
+  }
+  String out;
+  serializeJson(doc, out);
+  preferences.putString(kRuleAudioPrefKey, out);
+}
+
+static bool isRuleAudioName(const String& fileName) {
+  // Only a_<16 hex>.amr is ours to delete or trust.
+  if (!fileName.startsWith(kRuleAudioPrefix)) {
+    return false;
+  }
+  const int dot = fileName.lastIndexOf('.');
+  if (dot < 0) {
+    return false;
+  }
+  const String stem = fileName.substring(2, dot);
+  if (stem.length() != 16) {
+    return false;
+  }
+  for (size_t i = 0; i < stem.length(); i++) {
+    const char c = stem[i];
+    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    if (!hex) {
+      return false;
+    }
+  }
+  return fileName.substring(dot).equalsIgnoreCase(".amr");
+}
+
+static String modemFileBasename(const String& modemPath) {
+  const int slash = modemPath.lastIndexOf('/');
+  return slash >= 0 ? modemPath.substring(slash + 1) : modemPath;
+}
+
+static void deleteRuleAudioFile(const String& modemPath) {
+  const String fileName = modemFileBasename(modemPath);
+  if (!isRuleAudioName(fileName)) {
+    // Refuse to delete anything that is not ours: the fallback asset and any
+    // unknown leftover must survive a sync.
+    Serial.printf("[audio] refusing to delete non-namespace file %s\n", fileName.c_str());
+    return;
+  }
+  sendAT("AT+FSCD=C:", "OK", 3000);
+  sendAT("AT+FSDEL=" + fileName, "OK", 3000);
+  Serial.printf("[audio] pruned %s\n", fileName.c_str());
+}
+
+static void syncRuleAudio(JsonDocument& doc) {
+  if (!state.modemReady || !state.modemFileTransferSupported) {
+    Serial.println("[audio] rule audio sync skipped: modem FS unavailable");
+    return;
+  }
+
+  // 1. Desired set: one entry per distinct audio, keyed by sha16.
+  std::map<String, String> desiredUrls;
+  std::map<String, bool> desiredDynamic;
+  for (JsonObject rule : doc["rules"].as<JsonArray>()) {
+    JsonObject audio = rule["call_audio"];
+    if (audio.isNull()) {
+      continue;
+    }
+    const String sha = audio["text_sha256"] | "";
+    const String url = audio["url"] | "";
+    if (sha.length() < 16 || url.length() == 0) {
+      continue;
+    }
+    if (desiredUrls.size() >= kRuleAudioMax && desiredUrls.count(ruleAudioKey(sha)) == 0) {
+      Serial.println("[audio] rule audio cap reached; skipping extra assets");
+      continue;
+    }
+    desiredUrls[ruleAudioKey(sha)] = url;
+    desiredDynamic[ruleAudioKey(sha)] = audio["dynamic"] | false;
+  }
+
+  // 2. Prune anything we downloaded before that the config no longer wants.
+  //    Build the list first: deleteRuleAudioFile() issues AT traffic.
+  std::vector<String> stale;
+  for (const auto& entry : state.ruleAudioPaths) {
+    if (desiredUrls.count(entry.first) == 0) {
+      stale.push_back(entry.second);
+    }
+  }
+  for (const String& path : stale) {
+    deleteRuleAudioFile(path);
+    const String name = modemFileBasename(path);
+    const String key = name.substring(2, name.lastIndexOf('.'));
+    state.ruleAudioPaths.erase(key);
+    state.ruleAudioDynamic.erase(key);
+  }
+
+  // 3. Download what is missing. Skipping the ones already on the modem keeps
+  //    a config save from re-uploading every file over LTE.
+  for (const auto& entry : desiredUrls) {
+    const String key = entry.first;
+    auto found = state.ruleAudioPaths.find(key);
+    const bool haveFile = found != state.ruleAudioPaths.end() && found->second.length() > 0;
+    const bool dynamic = desiredDynamic.count(key) > 0 && desiredDynamic.at(key);
+    // A static audio is complete on its own: if it is there, do not re-upload.
+    // A dynamic one is only the generic variant, so it is uploaded once and
+    // then left alone; re-uploading it on every save would waste LTE.
+    if (haveFile) {
+      state.ruleAudioDynamic[key] = dynamic;
+      continue;
+    }
+    const String modemPath = String("C:/") + kRuleAudioPrefix + key + ".amr";
+    const String err = uploadAudioToModem(entry.second, modemPath, key);
+    if (err.length() > 0) {
+      Serial.printf("[audio] rule audio %s failed: %s\n", key.c_str(), err.c_str());
+      continue;
+    }
+    state.ruleAudioPaths[key] = modemPath;
+    state.ruleAudioDynamic[key] = dynamic;
+  }
+
+  persistRuleAudioIndex();
+  setStatus("Call audio ready");
+}
+
+static void loadRuleAudioIndex() {
+  state.ruleAudioPaths.clear();
+  state.ruleAudioDynamic.clear();
+  const String stored = preferences.getString(kRuleAudioPrefKey, "");
+  if (stored.length() == 0) {
+    return;
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, stored)) {
+    return;
+  }
+  for (JsonPair kv : doc.as<JsonObject>()) {
+    const String key(kv.key().c_str());
+    JsonObject node = kv.value().as<JsonObject>();
+    state.ruleAudioPaths[key] = node["path"] | "";
+    state.ruleAudioDynamic[key] = node["dynamic"] | false;
+  }
+}
+
+String ruleAudioPathForSha(const String& sha) {
+  if (sha.length() < 16) {
+    return "";
+  }
+  auto found = state.ruleAudioPaths.find(ruleAudioKey(sha));
+  if (found == state.ruleAudioPaths.end()) {
+    return "";
+  }
+  return found->second;
+}
+
+bool ruleAudioIsDynamic(const String& sha) {
+  if (sha.length() < 16) {
+    return false;
+  }
+  auto found = state.ruleAudioDynamic.find(ruleAudioKey(sha));
+  return found != state.ruleAudioDynamic.end() && found->second;
+}
+
+// Returns the modem path of the pre-recorded audio for a given text sha, or ""
+// when the device does not have it. Used by the call path to play a local file
+// without downloading anything.
+String ruleAudioPathForSha(const String& sha);
+
 void checkManifest(bool allowFirmwareUpdate) {
   String payload;
   setStatus("Check manifest");

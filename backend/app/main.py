@@ -27,6 +27,7 @@ from .alarms import (
     DEVICE_LIVE_SECONDS,
     MAX_CALL_TEXT_CHARS,
     SENSOR_ALIASES,
+    build_call_text,
     configured_rules_view,
     dispatch_alarm,
     find_rule,
@@ -35,7 +36,10 @@ from .alarms import (
     open_alarm_event,
     resolve_contacts,
     rule_key,
+    rule_sensor_name,
+    spoken_number,
 )
+from .call_audio import prepare_call_audio, resolve_static_placeholders
 from .contacts import normalize_contact, new_contact_id, sync_legacy_fields, tenant_contacts, tenant_telegram_chats
 from .modem_queue import active_modem_jobs, enqueue_modem_job, pump_modem_queue
 from .extensions import db
@@ -234,6 +238,52 @@ def to_config_number(value):
     return number
 
 
+def attach_call_audio(device, payload) -> None:
+    """Pre-record the call text of every rule, in place, at save time.
+
+    Runs before the config is stored so a synthesis failure aborts the save with
+    a real error instead of leaving a rule whose call would play nothing. The
+    result is a ``call_audio`` block per rule carrying the stable URL and the
+    ``a_`` modem path the device must use.
+
+    Sensor names are read from ``payload`` (the config being saved), NOT from
+    ``rule_sensor_name()``: that one reads the last *persisted* config, so a
+    sensor renamed in this very save would still be spoken with its old name.
+    """
+    # The name lives in the form/JSON being saved; this is the only place the
+    # brand-new value is available.
+    sensor_names = {
+        str(sensor.get("id") or ""): str(sensor.get("name") or "")
+        for sensor in payload.get("sensors") or []
+        if isinstance(sensor, dict)
+    }
+
+    for rule in payload.get("rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        template = str(rule.get("call_text") or "")
+        if not template.strip():
+            rule.pop("call_audio", None)
+            continue
+        sensor_id = str(rule.get("sensor_id") or "")
+        static = resolve_static_placeholders(
+            template,
+            {
+                "equipo": device.name,
+                "sitio": device.site.name if device.site else "",
+                "cliente": device.tenant.name if device.tenant else "",
+                "sensor": sensor_names.get(sensor_id) or sensor_id,
+                "regla": rule.get("description") or sensor_id,
+                "umbral": spoken_number(rule.get("threshold")),
+            },
+        )
+        info = prepare_call_audio(static)
+        if info is None:
+            rule.pop("call_audio", None)
+        else:
+            rule["call_audio"] = info
+
+
 def validate_config_payload(payload):
     """Return a Spanish error message for an unsaveable config, else None.
 
@@ -415,7 +465,10 @@ def create_app() -> Flask:
         def csrf_field():
             return Markup(f'<input type="hidden" name="_csrf_token" value="{get_csrf_token()}">')
 
-        return {"csrf_field": csrf_field}
+        # Also exposed as a value (not just a rendered input) so fetch() calls
+        # can send the token in the body, which is the only place csrf_protect
+        # looks for it.
+        return {"csrf_field": csrf_field, "csrf_token": get_csrf_token}
 
     @app.get("/")
     def index():
@@ -1001,6 +1054,18 @@ def create_app() -> Flask:
             if validation_error:
                 return render_config_form(device, raw_payload, error=validation_error)
 
+            # Pre-record the call text before persisting. A TTS failure has to
+            # stop the save here; a config saved with a rule whose audio is
+            # missing would dial and play silence.
+            try:
+                attach_call_audio(device, payload)
+            except Exception as exc:
+                return render_config_form(
+                    device,
+                    raw_payload,
+                    error=f"No se pudo preparar el audio de la llamada: {exc}",
+                )
+
             next_version = (latest_config.version + 1) if latest_config else 1
             payload["schema_version"] = payload.get("schema_version", 1)
             payload["device_id"] = device.device_uid
@@ -1158,6 +1223,29 @@ def create_app() -> Flask:
     def tts_audio_wav(audio_id):
         return _serve_tts_audio(audio_id, ".wav", "audio/wav")
 
+    @app.get("/audio/asset/<path:filename>")
+    def call_audio_asset(filename):
+        """Serve a stored call-audio asset.
+
+        Public on purpose (no login): the device fetches it without a session.
+        The name is a content hash, so it is not guessable in a way that leaks
+        anything, and caching is safe forever because the content is immutable.
+        """
+        from .call_audio import AUDIO_STORE_DIR
+
+        name = os.path.basename(filename or "")
+        if not re.fullmatch(r"[a-f0-9]{64}\.amr", name):
+            abort(404)
+        path = AUDIO_STORE_DIR / name
+        if not path.is_file():
+            abort(404)
+        data = path.read_bytes()
+        resp = app.response_class(data, mimetype="audio/amr")
+        resp.headers["Content-Length"] = str(len(data))
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["Content-Encoding"] = "identity"
+        return resp
+
     def _serve_tts_audio(audio_id, suffix, mimetype):
         if not re.fullmatch(r"[a-f0-9]{32}", audio_id or ""):
             abort(404)
@@ -1172,6 +1260,68 @@ def create_app() -> Flask:
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["Content-Encoding"] = "identity"
         return resp
+
+    @app.post("/devices/<device_uid>/alarms/call-audio-preview")
+    @login_required
+    def device_call_audio_preview(device_uid):
+        """Synthesize a rule's call text so the operator can hear it.
+
+        Reuses an existing asset when the text is already stored (instant, and
+        what the call will really sound like). Otherwise synthesizes an
+        ephemeral copy that the 15-minute sweeper deletes - previewing must not
+        litter the permanent store with audio nobody saved.
+        """
+        from .call_audio import (
+            AUDIO_STORE_DIR,
+            asset_url,
+            drop_unknown_placeholders,
+            neutralize_dynamic,
+            normalize_spoken,
+            text_sha256,
+        )
+        from .models import AudioAsset
+        from .tts import AUDIO_EXT, public_audio_url, synthesize_call_audio
+
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        body = request.get_json(silent=True) or request.form
+        template = str(body.get("text") or "")
+        if not template.strip():
+            return jsonify({"error": "Escribí el texto de la llamada primero."}), 400
+
+        # The form sends the sensor name it is about to save; falling back to the
+        # persisted config only when the browser did not provide one keeps the
+        # preview identical to what attach_call_audio() will record on save.
+        sensor_id = str(body.get("sensor_id") or "")
+        sensor_name = str(body.get("sensor_name") or "").strip() or (
+            rule_sensor_name(device, sensor_id) or sensor_id
+        )
+        static = resolve_static_placeholders(
+            template,
+            {
+                "equipo": device.name,
+                "sitio": device.site.name if device.site else "",
+                "cliente": device.tenant.name if device.tenant else "",
+                "sensor": sensor_name,
+                "regla": str(body.get("description") or ""),
+                "umbral": spoken_number(body.get("threshold")),
+            },
+        )
+        stored_text = normalize_spoken(
+            drop_unknown_placeholders(neutralize_dynamic(static))
+        )[:MAX_CALL_TEXT_CHARS]
+        if not stored_text:
+            return jsonify({"error": "El texto quedó vacío después de resolver las variables."}), 400
+
+        sha = text_sha256(stored_text)
+        existing = AudioAsset.query.filter_by(text_sha256=sha).first()
+        if existing is not None and (AUDIO_STORE_DIR / f"{sha}.{AUDIO_EXT}").is_file():
+            return jsonify({"url": asset_url(sha), "cached": True})
+
+        try:
+            _path, audio_id = synthesize_call_audio(stored_text)
+        except Exception as exc:
+            return jsonify({"error": f"No se pudo sintetizar: {exc}"}), 500
+        return jsonify({"url": public_audio_url(audio_id), "cached": False})
 
     @app.post("/devices/<device_uid>/alarms/trigger")
     @login_required

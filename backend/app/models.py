@@ -166,6 +166,31 @@ class DeviceModemJob(db.Model):
     device = db.relationship("Device", back_populates="modem_jobs")
 
 
+class AudioAsset(db.Model):
+    """One spoken call text, synthesized once and reused forever.
+
+    Content-addressed by ``text_sha256`` (the normalized spoken text), so two
+    rules - on the same device or on different ones - that say the same thing
+    share a single AMR file on disk and a single download to the modem. Without
+    this the device would re-download a byte-identical file per rule.
+
+    ``has_dynamic`` marks a text that carried ``{valor}``: the AMR stored here is
+    the *generic* variant (placeholders resolved to neutral words) and the exact
+    number is downloaded at call time. Static texts are fully self-contained, so
+    the call needs no network at all.
+    """
+
+    __tablename__ = "audio_assets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    text_sha256 = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    text = db.Column(db.Text, nullable=False)
+    amr_sha256 = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    has_dynamic = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class Event(db.Model):
     __tablename__ = "events"
 

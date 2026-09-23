@@ -224,16 +224,35 @@ is a leftover override only.
 Audio assets should be dynamic. A customer may have no audio assets, one shared
 test audio, or different audios per alarm flow.
 
-**Current implementation:** the **alarm** call does not use a device audio asset
-at all. The backend synthesizes the spoken text per call (`backend/app/tts.py`,
-Piper -> AMR-NB) and publishes `audio_url` in the `test_call` command, so the text
-can be customized per rule (`call_text`, see `docs/ops/NOTIFICATIONS.md`). The
-`audio` array in this document describes the modem **fallback** asset
-(`C:/cof_fallback.wav`), which the device plays only when it cannot download that
-AMR - a site with no Ethernet/WiFi, where `HTTPClient` has no route. Without the
-fallback the call is not placed at all. The ESP32 cannot synthesize speech, so the
-fallback is a frozen generic phrase: it cannot say the site name or the measured
-value.
+**Current implementation (0.2.63):** rules with a `call_text` get a
+**pre-recorded** audio asset, synthesized once at config save and stored
+content-addressed (`<sha256>.amr`) in `CALL_AUDIO_DIR`. The config carries a
+`call_audio` block per rule with the stable URL and the modem path
+`C:/a_<sha16>.amr`, and the device downloads it on config apply. The call then
+plays that **local** file, so once synced the call no longer depends on the
+network at alarm time. Two rules with the same text share one file.
+
+**Caveat:** the download at config-apply time still uses `HTTPClient` and so
+still needs lwIP (Ethernet/WiFi). A site with LAN wins - the audio is already on
+the modem when the alarm fires, even if the link has since dropped. A site whose
+only uplink is LTE still cannot fetch it, and keeps playing the generic fallback
+until the modem's own HTTP path is implemented (see `docs/ops/BACKLOG.md` 8c).
+
+`{valor}` is the only placeholder that cannot be pre-recorded: the reading does
+not exist until the alarm fires. A text carrying it is stored as the **generic
+variant** (without the number); the server synthesizes the exact text at
+dispatch, the device downloads it when it has a route, and otherwise plays the
+generic variant. `{umbral}` is known at save time and **is** baked into the
+audio. See `docs/ops/NOTIFICATIONS.md` § "Texto de la llamada, por regla".
+
+The `audio` array in this document still describes the modem **fallback** asset
+(`C:/cof_fallback.wav`), the last resort when neither the pre-recorded nor the
+downloaded AMR is available. The ESP32 cannot synthesize speech, so the fallback
+is a frozen generic phrase.
+
+Rule audio lives under its own `a_` namespace and is the only thing a config
+sync will delete; the fallback and any unknown file are never touched. See
+`syncRuleAudio()` in `firmware/src/ota_config.cpp`.
 
 Note on the modem's own TTS (`AT+CTTS`): the A76XX audio application note says it
 supports **Chinese and English only**, so it is not usable for Spanish call audio

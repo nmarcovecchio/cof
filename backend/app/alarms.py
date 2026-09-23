@@ -253,6 +253,23 @@ def default_spoken_text(device: Device, rule: dict, telemetry: dict | None = Non
     return " ".join(" ".join(parts).split())[:MAX_CALL_TEXT_CHARS]
 
 
+def spoken_number(raw) -> str:
+    """Format a threshold the way a person says it.
+
+    ``-18.0`` reads better as ``-18`` than as ``-18.0`` over a phone line, and
+    an unparseable/absent threshold must not leave the word empty.
+    """
+    if raw is None:
+        return "sin umbral"
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return str(raw).strip() or "sin umbral"
+    if number == int(number):
+        return str(int(number))
+    return f"{number:g}"
+
+
 def build_call_text(device: Device, rule: dict, telemetry: dict | None = None) -> str:
     """Spoken text for the alarm call of one rule.
 
@@ -273,6 +290,9 @@ def build_call_text(device: Device, rule: dict, telemetry: dict | None = None) -
         "cliente": _as_text(device.tenant.name if device.tenant else ""),
         "sensor": rule_sensor_name(device, sensor_id) or sensor_id,
         "regla": description or sensor_id,
+        # Threshold is known at config time, so unlike {valor} it can be baked
+        # into the pre-recorded audio.
+        "umbral": spoken_number(rule.get("threshold")),
         # Never leave the template's braces empty: a manual test fires without a
         # telemetry frame and "Valor actual ." reads like a bug over the phone.
         "valor": "sin lectura" if value is None or str(value).strip() == "" else str(value),
@@ -515,6 +535,10 @@ def fire_rule_alarm(
         # Resolved here, once, for the whole cycle: the escalation to the next
         # phone reuses payload["text"], and it must not re-read the rule.
         "call_text": build_call_text(device, rule, telemetry) or default_spoken_text(device, rule, telemetry),
+        # Pre-recorded audio for this rule. The device plays the local file when
+        # it has it, which is what makes a call work with no internet. See
+        # syncRuleAudio() in the firmware.
+        "call_audio": dict(rule.get("call_audio") or {}),
         "email_contact_ids": _id_list(rule.get("email_contact_ids")),
         "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
         "call_contact_ids": _id_list(rule.get("call_contact_ids")),
@@ -700,6 +724,7 @@ def dispatch_alarm(
             {
                 "phone": call_phones[0],
                 "text": call_spoken,
+                "call_audio": extra.get("call_audio") or {},
                 "alarm_event_id": event.id,
                 "phone_index": 0,
                 "escalate_calls": escalate_calls,

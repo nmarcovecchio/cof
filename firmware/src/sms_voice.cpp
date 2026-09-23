@@ -287,16 +287,26 @@ String uploadAudioToModem(const String& url, const String& modemPath, const Stri
   const String response = readModemUntil(20000, "OK");
   state.audioSyncInProgress = false;
   if (response.indexOf("OK") >= 0) {
-    preferences.putString("audioVersion", audioVersion);
-    // The canned manifest asset is the one we keep as the offline fallback. The
-    // admin TTS upload uses audioVersion "tts" and writes to C:/tts.amr, which is
-    // deleted and rewritten on the next call - it must NOT be remembered as the
-    // fallback, or a failed download would play a stale phrase.
-    if (audioVersion != "tts") {
-      preferences.putString("fallbackAudioPath", modemPath);
-      state.modemFallbackAudioPath = modemPath;
-      state.modemFallbackAudioReady = true;
-      Serial.printf("[audio] fallback asset stored: %s\n", modemPath.c_str());
+    // Per-rule audio lives in its own namespace and is tracked by
+    // syncRuleAudio()'s own index. It must NOT touch audioVersion/fallback:
+    // this function's "audioVersion" is the *manifest* asset tracker, and
+    // treating a rule file as the fallback would (a) point the offline fallback
+    // at a rule-specific file and (b) make the real fallback asset look stale,
+    // re-downloading it on every manifest check.
+    const bool isRuleAudio = fileName.startsWith("a_");
+    if (!isRuleAudio) {
+      preferences.putString("audioVersion", audioVersion);
+      // The canned manifest asset is the one we keep as the offline fallback.
+      // The admin TTS upload uses audioVersion "tts" and writes to C:/tts.amr,
+      // which is deleted and rewritten on the next call - it must NOT be
+      // remembered as the fallback, or a failed download would play a stale
+      // phrase.
+      if (audioVersion != "tts") {
+        preferences.putString("fallbackAudioPath", modemPath);
+        state.modemFallbackAudioPath = modemPath;
+        state.modemFallbackAudioReady = true;
+        Serial.printf("[audio] fallback asset stored: %s\n", modemPath.c_str());
+      }
     }
     setStatus("Audio synced");
     return "";
@@ -811,7 +821,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   }
   return "Call not connected";
 }
-String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioUrl, const String& audioFormat) {
+String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioUrl, const String& audioFormat, const String& audioSha) {
   releaseLteMqttForModem();
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
@@ -848,7 +858,17 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    if (audioUrl.length() > 0) {
+    // A pre-recorded *static* file already on the modem is the best case: it is
+    // the only path that needs no internet, which is the whole point of the
+    // feature. A dynamic one is merely the generic variant, so it is used only
+    // as a fallback - preferring it would drop the reading the operator asked
+    // the call to say.
+    const String localRuleAudio = ruleAudioPathForSha(audioSha);
+    const bool localIsGeneric = ruleAudioIsDynamic(audioSha);
+    if (localRuleAudio.length() > 0 && !localIsGeneric) {
+      publishTestCallProgress("Using call audio on device");
+      state.modemAudioPath = localRuleAudio;
+    } else if (audioUrl.length() > 0) {
       publishTestCallProgress("Downloading TTS audio");
       const String ttsPath = ttsModemPathFor(audioUrl, audioFormat);
       const String audioErr = uploadAudioToModem(audioUrl, ttsPath, "tts");
@@ -856,16 +876,22 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
         // Downloading needs lwIP: Ethernet or WiFi. On a site whose only path is
         // LTE, MQTT rides the modem's AT socket and there is no route for
         // HTTPClient, so this always fails. Returning here is what made an
-        // alarm call silently produce no call at all. Fall back to the canned
-        // asset already on the modem when we know it is there; a generic spoken
-        // alarm beats no call.
-        if (!fallbackAudioAvailable()) {
+        // alarm call silently produce no call at all. Fall back, in order, to
+        // the rule's own generic pre-recorded audio and then to the canned
+        // asset: a generic spoken alarm beats no call.
+        if (localRuleAudio.length() > 0) {
+          publishTestCallProgress("Rule audio unavailable, using generic variant");
+          Serial.printf("[call] %s; playing generic %s\n", audioErr.c_str(),
+                        localRuleAudio.c_str());
+          state.modemAudioPath = localRuleAudio;
+        } else if (fallbackAudioAvailable()) {
+          publishTestCallProgress("TTS unavailable, using fallback");
+          Serial.printf("[call] %s; playing %s\n", audioErr.c_str(),
+                        state.modemFallbackAudioPath.c_str());
+          state.modemAudioPath = state.modemFallbackAudioPath;
+        } else {
           return audioErr;
         }
-        publishTestCallProgress("TTS unavailable, using fallback");
-        Serial.printf("[call] %s; playing %s\n", audioErr.c_str(),
-                      state.modemFallbackAudioPath.c_str());
-        state.modemAudioPath = state.modemFallbackAudioPath;
       } else {
         state.modemAudioPath = ttsPath;
       }

@@ -158,6 +158,17 @@ its highest mode (12.2 kbps, `backend/app/tts.py`) from Piper's
   `TTS_SENTENCE_SILENCE`), loudness normalization before encoding (AMR punishes
   quiet input), and trying another Piper voice of the same language.
 
+**Implemented in the encoder (`_encode_amr_nb` in `backend/app/tts.py`):**
+
+- `dynaudnorm=p=0.9:m=10` — loudness normalization. This is the change that is
+  actually audible: the codec is fixed, but a quiet recording sounds much worse
+  after AMR than a normalized one.
+- `adelay=400:all=1` — 400 ms of leading silence. `AT+CCMXPLAY` starts as soon
+  as the call is answered, so without this the greeting clips the first word.
+  Verified with ffmpeg: a 1.000 s input becomes 1.400 s.
+
+Both are applied to every asset, including the generic variants.
+
 **Do not** use the modem's own TTS (`AT+CTTS`) as a higher-quality path: on the
 A76XX it supports **Chinese and English only**, per its audio application note.
 It cannot speak Spanish.
@@ -166,7 +177,12 @@ VPS `.env` must include:
 
 ```text
 PUBLIC_BASE_URL=https://app.callonfail.com.ar
+CALL_AUDIO_DIR=/opt/cof-audio
 ```
+
+`CALL_AUDIO_DIR` is the permanent store of pre-recorded alarm audio. Unlike
+`TTS_DIR` it is **never** pruned by age: an asset must still be there months
+after the rule was saved.
 
 MQTT command:
 
@@ -175,22 +191,39 @@ MQTT command:
   "command": "test_call",
   "device_id": "cof-test",
   "phone": "+549...",
-  "text": "CallOnFail prueba de llamada",
+  "text": "Alarma en Camara 1: DS18B20 paso el limite de -18 grados, valor actual -25 grados.",
   "audio_url": "https://app.callonfail.com.ar/audio/tmp/<32-hex>.amr",
-  "audio_format": "amr_nb_8000"
+  "audio_format": "amr_nb_8000",
+  "call_audio": {
+    "text_sha256": "<64-hex>",
+    "url": "https://app.callonfail.com.ar/audio/asset/<64-hex>.amr",
+    "modem_path": "C:/a_<16-hex>.amr",
+    "dynamic": true
+  }
 }
 ```
+
+`call_audio` is the pre-recorded asset for that rule. The device prefers the
+**local** file when it is static; when `dynamic` is true the local file is only
+the generic variant and is used as a fallback, because the text contains
+`{valor}` and the exact reading must be downloaded at call time. See
+`NOTIFICATIONS.md` § "Texto de la llamada, por regla".
 
 Device downloads over Ethernet (HTTPS, cert not verified) into RAM, deletes any
 previous `C:/tts.amr` (`AT+FSDEL`), uploads with `AT+CFTRANRX`, plays remote,
 then restores the previous modem audio path. If this fails, the event message
 is specific (`TTS HTTP 404`, `TTS too large`, `TTS no RAM`, etc.).
 
+Rule audio files use their own namespace, `C:/a_<sha16>.amr`, and are the only
+names the device will ever delete during a config sync. See
+`syncRuleAudio()` in `firmware/src/ota_config.cpp`.
+
 Admin test-call **bypasses** `calling.enabled`. Alarm-driven calls must not.
 
-The canned `cof_test.wav` on the modem stays WAV; only spoken test-call audio
-is AMR. The alarm call fallback (`C:/cof_fallback.wav`) is WAV too, and is
-announced by `manifest.json` instead of being compiled in.
+The canned `C:/cof_fallback.wav` on the modem stays WAV; it is the last-resort
+fallback and is announced by `manifest.json` instead of being compiled in. The
+per-rule audios are AMR. `C:/cof_test.wav` is historical: `COF_MODEM_AUDIO_PATH`
+no longer points at it.
 
 ## Web / MQTT ops
 

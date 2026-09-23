@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.62"
+#define COF_FIRMWARE_VERSION "0.2.63"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -29,8 +29,10 @@
 #define COF_OLED_ADDRESS 0x3C
 #define COF_SHT31_ADDRESS 0x44
 
-// Modem filesystem target for the audio played during the call.
-#define COF_MODEM_AUDIO_PATH "C:/cof_test.wav"
+// Modem filesystem target for the canned fallback audio, played only when the
+// per-rule pre-recorded audio and the TTS download are both unavailable.
+// The per-rule files live under C:/a_<sha>.amr and are managed separately.
+#define COF_MODEM_AUDIO_PATH "C:/cof_fallback.wav"
 
 // Claro Argentina packet data. Voice/SMS still need CS/LTE attach.
 #define COF_MODEM_APN "internet.claro.com.ar"

@@ -108,6 +108,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallAudioUrl.trim();
         pendingTestCallAudioFormat = doc["audio_format"] | "";
         pendingTestCallAudioFormat.trim();
+        pendingTestCallAudioSha = doc["call_audio"]["text_sha256"] | "";
+        pendingTestCallAudioSha.trim();
         pendingTestCallCommandId = pendingCommandId;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Test call scheduled";

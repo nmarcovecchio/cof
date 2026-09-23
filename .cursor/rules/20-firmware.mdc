@@ -54,15 +54,42 @@ touching `scripts/release-fw.*`.
 
 ## Audio del modem
 
-`ota/manifest.json` anuncia **un solo** asset de audio, que el equipo baja al
-modem en el `checkManifest` normal (Serial `a`, o al arrancar):
+Hay **dos** familias de audio, y no se pisan:
 
-| Asset | Ruta en el modem | Para que |
-| --- | --- | --- |
-| `ota/audio/cof_fallback.wav` | `C:/cof_fallback.wav` | Respaldo de la llamada de alarma cuando el equipo no puede bajar el TTS del servidor (sitio solo-LTE). |
+| Familia | Ruta en el modem | Como llega | Para que |
+| --- | --- | --- | --- |
+| Audio por regla (pregrabado) | `C:/a_<sha16>.amr` | `call_audio` en la config, lo baja `syncRuleAudio()` | El texto de llamada de cada regla, sintetizado **una vez al guardar**. |
+| Respaldo | `C:/cof_fallback.wav` | `ota/manifest.json`, lo baja `checkManifest()` | Ultimo recurso cuando no hay audio de regla ni TTS descargable. |
 
-Es **WAV PCM 8000 Hz, mono, 16-bit** y hoy se genera **a mano**: no hay sintesis
-en el firmware ni en el pipeline de release. Tampoco sirve el TTS del modem
+### Audio por regla y el namespace `a_`
+
+Al guardar la config, el backend sintetiza el `call_text` de cada regla y lo deja
+en `CALL_AUDIO_DIR` como `<sha256>.amr` (direccionado por contenido: dos reglas
+con el mismo texto comparten **un solo** archivo y **una sola** descarga). La
+config baja al equipo el bloque `call_audio` con `text_sha256`, `url`,
+`modem_path` y `dynamic`.
+
+**Regla de oro: el equipo solo borra archivos que empiezan con `a_`.** El
+reconciliador (`syncRuleAudio()` en `src/ota_config.cpp`) descarga lo que falta y
+poda los `a_` que la config ya no pide. Nunca toca el respaldo ni un archivo
+desconocido: si `AT+FSLS` no existe, no hay forma de distinguir un huerfano de
+algo ajeno, asi que **no se limpia a ciegas**. El indice `sha -> path` vive en
+Preferences (`ruleAudio`), asi que sobrevive un corte de luz.
+
+`dynamic: true` significa que el texto lleva `{valor}` y el archivo local es solo
+la **variante generica**. En ese caso el equipo **no** debe preferirlo: intenta
+bajar el exacto y usa el generico como respaldo, o la llamada nunca diria el
+numero. Un texto **sin** `{valor}` es autocontenido y se reproduce local sin red.
+
+`ota/audio/cof_test.wav` queda como el audio de prueba historico: ya no lo
+reproduce la llamada de alarma y `COF_MODEM_AUDIO_PATH` **ya no apunta ahi** (ahora
+es `C:/cof_fallback.wav`). No se borra porque sigue siendo el audio canonico de
+laboratorio.
+
+### Respaldo WAV y como rehacerlo
+
+Es **WAV PCM 8000 Hz, mono, 16-bit** y se genera **a mano**: no hay sintesis en
+el firmware ni en el pipeline de release. Tampoco sirve el TTS del modem
 (`AT+CTTS`): en el A76XX soporta **solo chino e ingles**, no espanol. Para
 rehacerlo, con el mismo Piper del backend:
 
@@ -75,10 +102,6 @@ ffmpeg -y -i /tmp/raw.wav -ac 1 -ar 8000 -c:a pcm_s16le ota/audio/cof_fallback.w
 Despues hay que **subir `audio.version`** y recalcular el `sha256` en `ota/` y en
 `actual_version/`; el firmware sincroniza cuando la version cambia, no cuando
 cambia el archivo.
-
-`ota/audio/cof_test.wav` queda como el audio de prueba historico: ya no lo
-reproduce la llamada de alarma, que ahora usa el TTS del servidor con el texto de
-la regla. No se borra porque sigue siendo el audio canonico de laboratorio.
 
 ### Cuanto audio entra y donde esta el techo
 
@@ -99,9 +122,11 @@ dar 60-80 s: hay ~2x de margen.
 La calidad **no** se sube dentro de AMR-NB: ya se codifica en su modo mas alto
 (12.2 kbps, `backend/app/tts.py`) desde Piper `daniela-high`. Lo unico que
 ensancharia la banda es AMR-WB (50-7000 Hz), que la nota de audio del modem
-**no** documenta como soportado. Lo barato que si ayuda: prosodia
-(`TTS_LENGTH_SCALE`, `TTS_SENTENCE_SILENCE`), normalizar volumen antes de
-codificar, y otra voz Piper.
+**no** documenta como soportado. Lo barato que si ayuda **y ya esta aplicado** en
+`_encode_amr_nb()`: normalizacion de volumen (`dynaudnorm=p=0.9:m=10`, lo mas
+perceptible) y **400 ms de silencio inicial** (`adelay=400:all=1`) porque
+`AT+CCMXPLAY` arranca apenas contestan y se come la primera palabra. Ademas:
+prosodia (`TTS_LENGTH_SCALE`, `TTS_SENTENCE_SILENCE`) y otra voz Piper.
 
 ### El modem puede bajar sus propios archivos (via confirmada en 0.2.62)
 

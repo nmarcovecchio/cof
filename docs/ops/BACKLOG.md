@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-21**. Ultimo firmware publicado y desplegado: **0.2.60**.
+Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.62**.
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -174,6 +174,44 @@ disenarla:
   chico**. Cualquier calculo de cuantos audios entran tiene que salir de `AT+FSMEM`
   de la unidad, no del ejemplo del fabricante.
 
+### 8d. ~910 KB sin explicar en el C: del modem (0.2.62)
+
+`AT+FSMEM` en `cof-test` reporta **1.146.880 B usados**, pero los assets que
+sabemos que estan suman mucho menos:
+
+| Archivo | Bytes |
+| --- | --- |
+| `C:/cof_fallback.wav` | 85.410 |
+| `C:/cof_test.wav` | 40.044 |
+| `C:/tts.amr` + `C:/tts.wav` (estimado) | ~90.000 |
+| **Total explicado** | **~215 KB** |
+
+Sobran **~910 KB**. No se puede afirmar que sean huerfanos: el firmware viejo
+pudo dejar archivos sin enumerar, y `AT+FSMEM` cuenta en bloques. Tampoco hay hoy
+forma de listar el directorio (no se probo `AT+FSLS`).
+
+**Por que importa:** si son huerfanos, se comen el 31% de los 2,91 MiB libres, y
+el reconciliador nuevo (`syncRuleAudio`) solo puede podar su propio namespace
+`a_*`, no archivos desconocidos.
+
+**Como cerrarlo:** (a) agregar `AT+FSLS` al `modem_probe` para listar de verdad;
+(b) medir `FSMEM` antes/despues de borrar un archivo conocido para saber como
+cuenta; (c) recien entonces decidir si se limpia a mano.
+
+### 8e. Probar el audio pregrabado en hardware (0.2.63)
+
+La cadena completa (guardar regla → sintetizar → publicar `call_audio` →
+descargar al modem → reproducir local) esta verificada solo en banco, no en un
+equipo real. **Probar con LAN conectada** (con el cable desconectado la descarga
+no puede ocurrir, ver 8c). Falta:
+
+1. Guardar una regla con texto **sin** `{valor}` y confirmar que la llamada suena
+   **sin** bajar nada (probar con el cable de red desconectado).
+2. Guardar una regla **con** `{valor}` y confirmar los dos caminos: con red dice
+   el numero; sin red reproduce la variante generica.
+3. Cambiar el texto de una regla y confirmar que el audio viejo **se borra** del
+   modem (`[audio] pruned ...` en el log serie) y no queda suelto.
+4. Borrar el texto de la regla y confirmar que se poda.
 
 ### 9. Alarma de OTA rechazada / version estancada
 

@@ -114,10 +114,10 @@ caracteres). Si esta vacio se usa el texto generico de la alarma, leido en voz
 alta con el alias del sensor y el operador en palabras ("Camara A mayor que
 -18"), no con los ids de la config (`temp_1 gt -18`).
 
-Acepta placeholders, resueltos en el servidor al disparar:
+Acepta placeholders:
 
 ```text
-{equipo}   {sitio}   {cliente}   {sensor}   {valor}   {regla}
+{equipo}   {sitio}   {cliente}   {sensor}   {umbral}   {valor}   {regla}
 ```
 
 Ejemplo:
@@ -133,8 +133,77 @@ confirmacion. Un placeholder desconocido se descarta en vez de leerse.
 El escalamiento al siguiente telefono reusa el mismo texto (viaja en el job), asi
 que no se re-evalua la regla entre llamadas.
 
-**Limite:** el texto se sintetiza al publicar el job de la llamada, asi que un
-sitio sin Ethernet/WiFi cae en el respaldo generico y **no** dice el texto custom.
+### El audio se pregrabra al guardar (no se sintetiza al llamar)
+
+Al guardar la config, el servidor sintetiza el texto de cada regla **una sola
+vez** y lo deja en un store permanente, direccionado por el hash del texto
+(`<sha256>.amr`). La config baja al equipo la URL estable y el nombre en el
+modem (`C:/a_<sha16>.amr`), y el equipo lo descarga al aplicar la config. Despues
+esa descarga **queda hecha**: una caida de red en el momento de la alarma ya no
+degrada la llamada, porque el texto esta en el modem.
+
+La llamada reproduce ese archivo **local**, sin bajar nada en el momento de la
+llamada.
+
+**Ojo con lo que esto resuelve y lo que no.** La descarga del asset al aplicar la
+config usa el mismo `HTTPClient` de siempre, que necesita lwIP (Ethernet/WiFi).
+Entonces:
+
+- **Sitio con LAN (aunque sea intermitente):** gana. El audio queda en el modem al
+  guardar la regla, y despues la llamada suena **aunque la red se haya caido**.
+  Antes, una caida de red en el momento de la alarma degradaba la llamada al
+  respaldo generico.
+- **Sitio solo-LTE:** **todavia no.** No puede bajar el audio al guardar, por el
+  mismo motivo por el que no podia antes (`HTTPClient` sin ruta). Sigue sonando el
+  respaldo. La via para cerrarlo es el HTTP nativo del modem
+  (`AT+HTTPREADFILE`, ver `docs/ops/BACKLOG.md` 8c), que es trabajo aparte.
+
+Dos reglas con el mismo texto (en el mismo equipo o en otro) comparten **un solo
+archivo**, tanto en el servidor como en el modem.
+
+### `{umbral}` vs `{valor}`: la unica diferencia que importa
+
+| Placeholder | Cuando se conoce | Que se pregrabra |
+|---|---|---|
+| `{umbral}` y el resto | Al guardar la regla | Se graba con el numero ya dicho |
+| `{valor}` | Recien al dispararse | Se graba la **variante generica**, sin el numero |
+
+Si el texto lleva `{valor}`, hay **dos** audios: la variante generica pregrabada
+y el texto exacto que el servidor sintetiza al disparar. El equipo intenta bajar
+el exacto:
+
+- Si tiene internet (Ethernet/WiFi) → baja el exacto y **dice el numero**.
+- Si no puede bajarlo (solo-LTE) → reproduce la **variante generica**.
+
+En los dos casos la llamada se hace. Lo unico que cambia es si dice el numero.
+
+En la web hay un boton **Escuchar** al lado del texto: sintetiza y reproduce lo
+que va a decir la llamada. Si el texto ya estaba guardado, suena exactamente el
+archivo pregrabado.
+
+### Boton "Escuchar" y que es cada cosa
+
+- Texto sin `{valor}`: lo que se escucha es **exactamente** lo que va a sonar,
+  siempre, con o sin internet.
+- Texto con `{valor}`: lo que se escucha es la **variante generica**. El numero
+  exacto depende de la lectura del momento y no se puede pregrabar.
+
+### Archivos en el modem: por que no quedan sueltos
+
+Todo lo que baja el equipo por esta funcion se llama `a_<sha16>.amr`, con el
+prefijo `a_` como namespace propio. Al aplicar una config, el equipo descarga lo
+que falta y **borra los `a_` que esa config ya no pide**. Nunca toca nada que no
+empiece con `a_`: ni el audio de respaldo (`C:/cof_fallback.wav`) ni cualquier
+resto de una version vieja. Un archivo desconocido en el modem se conserva, no
+se "limpia" a ciegas.
+
+El indice `sha -> archivo` sobrevive un corte de luz porque se guarda en las
+Preferences del ESP32; al arrancar se reconstruye sin volver a bajar los audios.
+
+**Limite:** el ESP32 bufferiza el archivo en RAM antes de pasarlo al modem, con
+un tope de 180 KB. A 12.2 kbps eso da ~118 s de audio por regla; un texto de 400
+caracteres esta muy por debajo. Ademas se topea en 40 archivos distintos por
+equipo, por los 4 MiB del modem (2,91 MiB libres medidos en `cof-test`).
 
 
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la

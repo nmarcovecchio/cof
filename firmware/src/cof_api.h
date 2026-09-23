@@ -147,6 +147,11 @@ void startWifiRadio();
 // ---- owned by ota_config ------------------------------------
 bool applyDesiredConfig(JsonDocument& doc);
 void checkManifest(bool allowFirmwareUpdate);
+// Modem path of the pre-recorded audio for a text sha, or "" if not on device.
+String ruleAudioPathForSha(const String& sha);
+// Whether that pre-recorded file is only the generic variant of a text that
+// carries {valor}, meaning the exact reading must still be fetched at call time.
+bool ruleAudioIsDynamic(const String& sha);
 void clearMqttConfig();
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000);
 void initOtaRollbackGuard();
@@ -183,7 +188,7 @@ String observeVoicePath(const String& radioDial, const String& radioConnect);
 int parseClccStatAt(const String& response, int tag);
 void persistObservedVoicePath(const String& path);
 void persistSkipGsm(bool skip);
-String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioUrl = "", const String& audioFormat = "");
+String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioUrl = "", const String& audioFormat = "", const String& audioSha = "");
 void pollIncomingSms();
 String prepareVoiceBearer();
 void processPendingSmsUrcs();
