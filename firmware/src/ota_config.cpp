@@ -118,6 +118,14 @@ void loadSavedMqttConfig() {
                                      static_cast<int>(kTelemetryIntervalMinSeconds),
                                      static_cast<int>(kTelemetryIntervalMaxSeconds))) * 1000UL;
   state.callingEnabled = preferences.getBool("callEn", preferences.getBool("callingEnabled", COF_ENABLE_CALLS != 0));
+  // Offline audio fallback. `audioVersion` is only set by a successful manifest
+  // audio sync (the admin TTS upload writes "tts" and reuses C:/tts.amr, which is
+  // deleted on the next call), so it is the proof that the canned asset is
+  // really on the modem. Without that proof we do not claim a fallback exists.
+  state.modemFallbackAudioPath = preferences.getString("fallbackAudioPath", COF_MODEM_AUDIO_PATH);
+  const String storedAudioVersion = preferences.getString("audioVersion", "");
+  state.modemFallbackAudioReady =
+      storedAudioVersion.length() > 0 && storedAudioVersion != "tts";
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.observedVoicePath = preferences.getString("voiceOk", "");
   state.voiceIdentity = preferences.getString("voiceId", "");

@@ -80,6 +80,8 @@ String pendingConfigHash = "";
 String pendingConfigError = "";
 bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
+bool pendingModemProbeCommand = false;
+String pendingModemProbeCommandId = "";
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioUrl = "";
@@ -661,6 +663,16 @@ void loop() {
   if (state.mqttConnected && pendingStatusReportCommand) {
     pendingStatusReportCommand = false;
     publishDeviceStatus("online", true);
+  }
+
+  // Gated off a live call so the probe's AT traffic cannot abort an active CSFB
+  // call; it just stays pending until the call finishes.
+  if (pendingModemProbeCommand && !state.callInProgress && !state.otaInProgress &&
+      !state.audioSyncInProgress) {
+    const String probeCommandId = pendingModemProbeCommandId;
+    pendingModemProbeCommand = false;
+    pendingModemProbeCommandId = "";
+    runModemProbe(probeCommandId);
   }
 
   if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {

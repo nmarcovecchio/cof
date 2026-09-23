@@ -91,6 +91,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingOtaCommand = true;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "OTA check scheduled";
+      } else if (pendingCommandName == "modem_probe") {
+        pendingModemProbeCommand = true;
+        pendingModemProbeCommandId = pendingCommandId;
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "Modem probe scheduled";
       } else if (pendingCommandName == "status_report") {
         pendingStatusReportCommand = true;
         pendingCommandStatus = "accepted";

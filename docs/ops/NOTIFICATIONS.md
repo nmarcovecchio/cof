@@ -60,6 +60,83 @@ Si varias alarmas piden llamada o SMS a la vez, el backend arma una **cola por
 equipo**: una operacion de modem a la vez. Termina la primera y recien sale la
 siguiente. No hay llamadas simultaneas (un modem no puede). Maximo 16 jobs.
 
+## Que necesita cada canal (y donde falla)
+
+El disparo lo hace el **servidor**: el equipo publica telemetria por MQTT y
+`mqtt_worker` evalua las reglas (`evaluate_device_rules`). El firmware **no**
+evalua reglas localmente, asi que sin ninguna via de MQTT (Ethernet, WiFi o LTE
+del modem) **no hay alarma**, por ningun canal. Es el piso del producto, no un
+detalle de configuracion.
+
+| Canal | Que necesita | Si falta |
+| --- | --- | --- |
+| Email | Solo el servidor (SMTP). | Queda `skipped: SMTP no configurado`. |
+| Telegram | Solo el servidor (bot). | Queda `skipped: TELEGRAM_BOT_TOKEN no configurado`. |
+| SMS | El **modem** del equipo con SIM y cobertura. Sale por el bearer CS, no necesita data. | Queda en la cola y falla con el resultado del modem. |
+| Llamada | El **modem** *y* que el equipo pueda **bajar el audio** del servidor, es decir lwIP: Ethernet o WiFi. | Ver abajo. |
+
+El equipo tiene un boton **Sondear modem** en su pagina (comando MQTT
+`modem_probe`, firmware >= 0.2.62) que publica eventos `modem_probe` con lo que el
+modem responde sobre si mismo: `AT+FSMEM` (memoria de `C:`), `AT+CCALB?`,
+`AT+HTTPINIT` y `AT+HTTPREADFILE=?`. Sirve para diagnosticar una unidad remota sin
+consola serial. El ultimo evento dice si el modem puede bajar archivos por su
+cuenta, que es la via para sacar a un sitio solo-LTE del problema de la llamada.
+
+**La llamada es la unica que necesita las dos cosas.** `placeCallAndPlayAudio()`
+descarga el AMR por HTTPS antes de marcar (`uploadAudioToModem`). En un sitio sin
+Ethernet y sin WiFi, MQTT viaja por el socket AT del modem (`AT+CIPOPEN`), que
+**no es una interfaz de lwIP**: `HTTPClient` no tiene ruta y la descarga falla
+siempre. Ese era el caso "la alarma quedo registrada pero no sono el telefono".
+
+Desde **0.2.61** la llamada no se pierde en ese caso:
+
+1. Intenta bajar el TTS del servidor (audio con el texto de esa regla).
+2. Si la descarga falla **y** el modem ya tiene el audio de respaldo, marca
+   igual y reproduce el respaldo. El evento registra
+   `TTS unavailable, using fallback`.
+3. Si tampoco hay respaldo, no marca y devuelve el error de descarga.
+
+El respaldo es el WAV que anuncia el `manifest.json`
+(`ota/audio/cof_fallback.wav` -> `C:/cof_fallback.wav`), que el equipo baja en el
+`checkManifest` normal. **Hoy es un WAV producido a mano y congelado**: no hay
+sintesis en el ESP32 (no tiene TTS, solo reproduce archivos) ni TTS del lado del
+modem (`AT+CTTS` devuelve `ERROR` en este build). Por eso el respaldo dice un
+mensaje generico y **no** puede decir el nombre del sitio ni el valor medido: eso
+solo lo puede hacer el TTS del servidor, que necesita la descarga.
+
+Un sitio que vaya a operar **solo con LTE** tiene que tener el respaldo cargado.
+Se verifica en la pagina del equipo: el evento de la llamada dice que audio uso.
+
+## Texto de la llamada, por regla
+
+Cada regla puede llevar un **Texto de la llamada** (opcional, hasta 400
+caracteres). Si esta vacio se usa el texto generico de la alarma, leido en voz
+alta con el alias del sensor y el operador en palabras ("Camara A mayor que
+-18"), no con los ids de la config (`temp_1 gt -18`).
+
+Acepta placeholders, resueltos en el servidor al disparar:
+
+```text
+{equipo}   {sitio}   {cliente}   {sensor}   {valor}   {regla}
+```
+
+Ejemplo:
+
+```text
+Alarma en {sitio}. {sensor} marca {valor} grados. Revise la camara.
+```
+
+El texto custom afecta **solo la llamada**. El email, Telegram y el SMS siguen
+mandando el texto completo de la alarma con el sitio, la regla y el enlace de
+confirmacion. Un placeholder desconocido se descarta en vez de leerse.
+
+El escalamiento al siguiente telefono reusa el mismo texto (viaja en el job), asi
+que no se re-evalua la regla entre llamadas.
+
+**Limite:** el texto se sintetiza al publicar el job de la llamada, asi que un
+sitio sin Ethernet/WiFi cae en el respaldo generico y **no** dice el texto custom.
+
+
 Al normalizarse se puede avisar por email, Telegram y/o SMS (configurable en la
 regla). El ciclo se ve en **Alarmas**.
 
@@ -180,7 +257,8 @@ el cliente de nuevo.
    - Email y Telegram salen ya (a los contactos de esa prueba: todos).
    - SMS si hay telefono.
    - Llamada solo si `Llamadas habilitadas` y hay telefono. Mismo camino CSFB
-     que **Probar llamada**.
+     que **Probar llamada**. Si la regla tiene **Texto de la llamada**, es lo que
+     se escucha; si no, el texto generico de la alarma.
 
 `Durante (seg)` es cuanto tiene que estar mal el sensor antes del primer
 disparo. `Rearmar si sigue prendida` es cuanto esperar, despues de un OK o
@@ -196,11 +274,15 @@ rearme por histeresis). **Disparar esta alarma** no espera la condicion del sens
 - [ ] Bot agregado al grupo del cliente
 - [ ] Chat ID `-100...` guardado en el cliente
 - [ ] **Probar Telegram** llega al grupo
+- [ ] **Sondear modem** en un equipo 0.2.62+: los eventos `modem_probe` responden
+      (memoria de `C:`, y si `HTTPREADFILE` esta soportado)
 - [ ] Gmail 2FA + App Password en `SMTP_*` e IMAP habilitado
 - [ ] Email del contacto cargado
 - [ ] **Probar email** llega
 - [ ] Telefono `+549...` en el contacto
 - [ ] En la regla, tildar quien recibe SMS/email/Telegram/llamada
 - [ ] En el equipo, llamadas habilitadas si corresponde
+- [ ] Si el sitio opera **solo con LTE**, verificar que el respaldo de audio este
+      en el modem (`checkManifest`); sin eso la llamada no sale
 - [ ] **Disparar esta alarma** genera evento `alarm` y los avisos de esa regla
 - [ ] El enlace/boton confirma y silencia; al cerrarse la alarma el enlace muere

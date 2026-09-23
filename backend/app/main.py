@@ -25,6 +25,7 @@ from .alarm_ack import ACK_VIA, acknowledge_by_token, acknowledge_device_from_ev
 from .alarm_log import friendly_step
 from .alarms import (
     DEVICE_LIVE_SECONDS,
+    MAX_CALL_TEXT_CHARS,
     SENSOR_ALIASES,
     configured_rules_view,
     dispatch_alarm,
@@ -1067,6 +1068,15 @@ def create_app() -> Flask:
     def device_command_status_report(device_uid):
         return send_device_command(device_uid, "status_report", "Status report command sent")
 
+    @app.post("/devices/<device_uid>/commands/modem-probe")
+    @login_required
+    def device_command_modem_probe(device_uid):
+        return send_device_command(
+            device_uid,
+            "modem_probe",
+            "Modem probe command sent. Results arrive as modem_probe events.",
+        )
+
     @app.post("/devices/<device_uid>/commands/set-wifi")
     @login_required
     def device_command_set_wifi(device_uid):
@@ -1567,10 +1577,10 @@ def default_device_config(device: Device) -> dict:
             {
                 "id": "test_call",
                 "enabled": False,
-                "description": "Audio de prueba. El archivo debe validarse con una llamada real.",
-                "url": "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/audio/cof_test.wav",
+                "description": "Audio de respaldo de la llamada de alarma. El equipo lo baja al modem y lo reproduce SOLO cuando no puede bajar el TTS del servidor (sitio sin Ethernet ni WiFi). El archivo debe validarse con una llamada real.",
+                "url": "https://app.callonfail.com.ar/ota/audio/cof_fallback.wav",
                 "sha256": "",
-                "modem_path": "C:/cof_test.wav",
+                "modem_path": "C:/cof_fallback.wav",
                 "format": "wav_pcm_8000_mono_16bit",
             }
         ],
@@ -1702,6 +1712,7 @@ def render_config_form(device, payload: str, error: str | None = None) -> str:
         live_seconds=DEVICE_LIVE_SECONDS,
         inert_sensors=inert_sensors,
         sensor_windows=device_sensor_windows(device),
+        call_text_max=MAX_CALL_TEXT_CHARS,
     )
 
 

@@ -616,10 +616,22 @@ como fallback y para pruebas.
 
 ## Audio de llamada
 
-El archivo inicial es:
+Hay **dos** audios en el modem y cumplen funciones distintas:
+
+| Archivo | Origen | Cuando suena |
+| --- | --- | --- |
+| `C:/tts.amr` | Lo sintetiza el servidor (Piper) y el equipo lo baja por HTTPS. | Llamada normal: dice el texto de la regla. |
+| `C:/cof_fallback.wav` | `ota/audio/cof_fallback.wav`, anunciado por el manifest. | Solo si el equipo **no pudo bajar** el TTS (sitio sin Ethernet ni WiFi). |
+
+El TTS necesita lwIP (Ethernet o WiFi) para bajar el archivo, asi que en un sitio
+solo-LTE la descarga falla siempre. Desde 0.2.61 ese caso **igual marca** y
+reproduce el respaldo generico, en vez de no llamar. El respaldo no puede decir el
+sitio ni el valor: el ESP32 no tiene sintesis.
+
+El respaldo se rehace a mano (no hay pipeline):
 
 ```text
-ota/audio/cof_test.wav
+ota/audio/cof_fallback.wav
 ```
 
 Formato:
@@ -631,13 +643,13 @@ WAV PCM, 8000 Hz, mono, 16-bit
 El firmware lo sube al modem como:
 
 ```text
-AT+CFTRANRX="C:/cof_test.wav",<bytes>
+AT+CFTRANRX="C:/cof_fallback.wav",<bytes>
 ```
 
 Y durante la llamada lo reproduce hacia el remoto:
 
 ```text
-AT+CCMXPLAY="C:/cof_test.wav",1,0
+AT+CCMXPLAY="C:/cof_fallback.wav",1,0
 ```
 
 ## Pantalla OLED

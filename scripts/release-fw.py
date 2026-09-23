@@ -57,6 +57,40 @@ def find_pio() -> str:
     sys.exit("pio not found. Install PlatformIO or add it to PATH.")
 
 
+def sync_audio_assets(manifest: dict) -> list[str]:
+    """Refresh the sha256 of the audio asset the manifest points at.
+
+    The firmware only re-downloads the asset when `audio.version` changes, so a
+    changed WAV under the same version would never reach the modem. Bumping the
+    version automatically keeps that in sync with the file: if the bytes changed,
+    the version changes, so the device syncs.
+    """
+    audio = manifest.get("audio")
+    if not isinstance(audio, dict):
+        return []
+    filename = audio.get("filename")
+    if not filename:
+        return []
+    path = ROOT / "ota" / "audio" / filename
+    if not path.is_file():
+        sys.exit(f"manifest announces audio/{filename} but it does not exist")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if audio.get("sha256") != digest:
+        audio["sha256"] = digest
+        audio["version"] = bump_version(str(audio.get("version") or "0.0.0"))
+        print(f"Audio {filename}: sha256 changed -> version {audio['version']}", flush=True)
+    else:
+        print(f"Audio {filename}: unchanged (v{audio.get('version')})", flush=True)
+    return [str(path.relative_to(ROOT))]
+
+
+def bump_version(value: str) -> str:
+    numbers = [int(item) for item in re.findall(r"\d+", value or "")] + [0, 0, 0]
+    numbers = numbers[:3]
+    numbers[2] += 1
+    return ".".join(str(item) for item in numbers)
+
+
 def firmware_version() -> str:
     text = CONFIG_H.read_text(encoding="utf-8")
     match = re.search(r'#define\s+COF_FIRMWARE_VERSION\s+"([^"]+)"', text)
@@ -96,6 +130,7 @@ def main() -> int:
     manifest.setdefault("firmware", {})
     manifest["firmware"]["version"] = version
     manifest["firmware"]["sha256"] = sha256
+    audio_paths = sync_audio_assets(manifest)
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Updated {MANIFEST.relative_to(ROOT)} -> {version}", flush=True)
 
@@ -108,7 +143,7 @@ def main() -> int:
         print("Skipping git (--no-push).")
         return 0
 
-    paths_to_add = [str(OTA_BIN.relative_to(ROOT)), str(MANIFEST.relative_to(ROOT))]
+    paths_to_add = [str(OTA_BIN.relative_to(ROOT)), str(MANIFEST.relative_to(ROOT)), *audio_paths]
     if LEGACY_MANIFEST.is_file():
         paths_to_add.append(str(LEGACY_MANIFEST.relative_to(ROOT)))
     run(["git", "add", *paths_to_add])

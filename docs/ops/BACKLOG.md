@@ -101,6 +101,50 @@ Se agregaron en 0.2.55 (`Add Ethernet/WiFi/internet alarm sensors`). Falta
 confirmar en el panel que efectivamente disparan y que reportan **liveness de
 internet**, no presencia de link.
 
+El codigo esta: `SENSOR_ALIASES` mapea `net_ethernet` / `net_wifi` /
+`net_internet` a `network_*_ok`, el firmware los publica en cada frame
+(`fillConnectivityJson`) y `ensure_network_sensors()` los inyecta en el form. Lo
+que falta es la prueba end-to-end con una regla `lt 1`.
+
+### 8b. Probar el respaldo de audio de la llamada (0.2.61)
+
+El fallback solo se activa en un sitio **sin Ethernet ni WiFi** (o simulando la
+falla de descarga). No se puede validar desde un banco con LAN: hay que
+desconectar el cable y sacar el WiFi del equipo, con el `C:/cof_fallback.wav` ya
+sincronizado, y confirmar que la llamada sale y el evento dice
+`TTS unavailable, using fallback`. Con eso se cierra tambien la duda de que el
+asset llegue al modem.
+
+### 8c. El sitio solo-LTE no puede recibir nada (hallazgo 0.2.62)
+
+El problema del audio en sitio sin LAN no es del audio sino del **transporte**.
+Todo lo que el firmware baja lo baja con `HTTPClient` + `WiFiClientSecure`, que
+necesitan una interfaz lwIP (Ethernet o WiFi). En un sitio solo-LTE el MQTT viaja
+por el socket `AT+CIPOPEN` del modem, que no es lwIP, asi que **no hay ruta**
+para `HTTPClient`. Por el mismo motivo:
+
+| Que baja | De donde | Via |
+|---|---|---|
+| Audio de llamada | `app.callonfail.com.ar` | `HTTPClient` |
+| Manifest | `raw.githubusercontent.com` | `HTTPClient` |
+| Firmware (OTA) | `app.callonfail.com.ar` | `HTTPClient` |
+
+O sea que un equipo sin LAN **tampoco se puede OTA-ear solo**. Es el mismo agujero
+que el P0 de arriba, con otra cara.
+
+El modem si tiene pila HTTP propia y puede escribir directo a su C:
+(`AT+HTTPINIT`, `AT+HTTPPARA="URL",…`, `AT+HTTPACTION`, y
+`AT+HTTPREADFILE="x.amr",1` guarda el cuerpo en `C:/`). `AT+CFTPSGETFILE` hace lo
+mismo por FTPS. Si el modem baja su propio audio, el sitio solo-LTE deja de
+depender de lwIP para tener voz nueva, y de paso se abre la puerta al OTA por la
+misma via.
+
+**Como verificarlo sin acceso fisico:** boton **Sondear modem** en la pagina del
+dispositivo (comando MQTT `modem_probe`, firmware >= 0.2.62). Publica eventos
+`modem_probe` con `AT+FSMEM` (memoria libre de C:), `AT+CCALB?`,
+`AT+HTTPINIT` y `AT+HTTPREADFILE=?`. El ultimo dice si la via HTTP-a-archivo
+existe en esta unidad. Se saltea mientras hay llamada activa.
+
 ### 9. Alarma de OTA rechazada / version estancada
 
 Complementa el punto 3.

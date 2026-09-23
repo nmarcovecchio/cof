@@ -160,6 +160,15 @@ String ttsModemPathFor(const String& url, const String& format) {
   }
   return "C:/tts.wav";
 }
+bool fallbackAudioAvailable() {
+  // Playback capability, not file-transfer: the asset is already on the modem at
+  // this point, so what matters is that this module can play a file into a call.
+  // Whether the asset is really there is carried by modemFallbackAudioReady,
+  // which is only set by a successful manifest audio sync.
+  return state.modemFallbackAudioReady &&
+         state.modemFallbackAudioPath.length() > 0 &&
+         state.modemAudioPlaybackSupported;
+}
 String uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion) {
   if (!networkConnected()) {
     return "TTS no network";
@@ -279,6 +288,16 @@ String uploadAudioToModem(const String& url, const String& modemPath, const Stri
   state.audioSyncInProgress = false;
   if (response.indexOf("OK") >= 0) {
     preferences.putString("audioVersion", audioVersion);
+    // The canned manifest asset is the one we keep as the offline fallback. The
+    // admin TTS upload uses audioVersion "tts" and writes to C:/tts.amr, which is
+    // deleted and rewritten on the next call - it must NOT be remembered as the
+    // fallback, or a failed download would play a stale phrase.
+    if (audioVersion != "tts") {
+      preferences.putString("fallbackAudioPath", modemPath);
+      state.modemFallbackAudioPath = modemPath;
+      state.modemFallbackAudioReady = true;
+      Serial.printf("[audio] fallback asset stored: %s\n", modemPath.c_str());
+    }
     setStatus("Audio synced");
     return "";
   }
@@ -286,6 +305,100 @@ String uploadAudioToModem(const String& url, const String& modemPath, const Stri
   setStatus("Audio upload fail");
   return "TTS modem upload fail";
 }
+// --- Modem audio/storage probe ---------------------------------------------
+//
+// Answers "does this modem support the paths the alarm audio depends on?"
+// without a serial console: every line goes out as an MQTT `modem_probe` event,
+// readable from the device page. Meant to be run over OTA.
+//
+// Context: the firmware downloads audio/manifest/firmware with HTTPClient,
+// which needs an lwIP interface (Ethernet or WiFi). A site whose only path is
+// LTE cannot receive any of them. The modem has its own HTTP/FTP stack and can
+// write straight to its C: - these probes establish whether that is usable
+// here, which would let such a site fetch audio without lwIP.
+//
+// Read-only on purpose: nothing below deletes or rewrites the alarm assets.
+// Whether it is safe to break a call is enforced at the call site.
+static constexpr size_t kProbeMessageMax = 200;
+
+static String probeFirstLine(const String& raw) {
+  int start = 0;
+  while (start < static_cast<int>(raw.length())) {
+    const int nl = raw.indexOf('\n', start);
+    String line = (nl < 0) ? raw.substring(start) : raw.substring(start, nl);
+    line.trim();
+    // "OK" is the AT envelope, not the answer. Skip blanks plus the echo.
+    if (line.length() > 0 && !line.equalsIgnoreCase("OK") && !line.equalsIgnoreCase("ERROR")) {
+      return line;
+    }
+    if (nl < 0) {
+      break;
+    }
+    start = nl + 1;
+  }
+  return "";
+}
+
+static void publishModemProbe(const String& body, bool ok, const String& commandId) {
+  String message = "modem_probe: " + body;
+  if (message.length() > kProbeMessageMax) {
+    message = message.substring(0, kProbeMessageMax) + "...";
+  }
+  publishDeviceEvent("modem_probe", ok ? "info" : "warning", message, commandId);
+  // Keep the broker serviced between probes: some of these take seconds and the
+  // keepalive would otherwise lapse mid-probe.
+  waitWithMqtt(50);
+}
+
+void runModemProbe(const String& commandId) {
+  if (!state.modemReady) {
+    publishModemProbe("modem not ready", false, commandId);
+    return;
+  }
+
+  publishModemProbe("start fw=" COF_FIRMWARE_VERSION, true, commandId);
+
+  // Storage: total and used bytes on C:. The gap to the largest audio the
+  // firmware can transfer is what decides how many assets could fit.
+  String resp;
+  if (sendAT("AT+FSMEM", "+FSMEM:", 5000, &resp)) {
+    const String line = probeFirstLine(resp);
+    publishModemProbe(line.length() > 0 ? line : "FSMEM ok", true, commandId);
+  } else {
+    publishModemProbe("FSMEM unsupported/err", false, commandId);
+  }
+
+  // Alert-tone capability, best effort: absent from the V1.06 command manual,
+  // so an ERROR here is an answer too (means "do not design around it").
+  if (sendAT("AT+CCALB?", "OK", 3000, &resp)) {
+    const String line = probeFirstLine(resp);
+    publishModemProbe("CCALB " + (line.length() > 0 ? line : "ok"), true, commandId);
+  } else {
+    publishModemProbe("CCALB unsupported", false, commandId);
+  }
+
+  // Capability flags the firmware already relies on for audio upload/playback.
+  publishModemProbe(
+      "caps fs=" + String(state.modemFileTransferSupported ? "YES" : "NO") +
+          " play=" + String(state.modemAudioPlaybackSupported ? "YES" : "NO"),
+      true, commandId);
+
+  // The actual question the LTE-only design turns on: can the modem open HTTP
+  // on its own, and does it support writing the response body to a file?
+  const bool httpOk = sendAT("AT+HTTPINIT", "OK", 8000);
+  publishModemProbe(String("HTTPINIT ") + (httpOk ? "ok" : "fail"), httpOk, commandId);
+
+  const bool readFileOk = sendAT("AT+HTTPREADFILE=?", "OK", 3000);
+  if (httpOk) {
+    sendAT("AT+HTTPTERM", "OK", 5000);
+  }
+  publishModemProbe(
+      String("HTTPREADFILE=") + (readFileOk ? "SUPPORTED" : "unsupported"),
+      readFileOk, commandId);
+
+  publishModemProbe("end", true, commandId);
+}
+
 int parseClccStatAt(const String& response, int tag) {
   if (tag < 0) {
     return -1;
@@ -740,9 +853,22 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
       const String ttsPath = ttsModemPathFor(audioUrl, audioFormat);
       const String audioErr = uploadAudioToModem(audioUrl, ttsPath, "tts");
       if (audioErr.length() > 0) {
-        return audioErr;
+        // Downloading needs lwIP: Ethernet or WiFi. On a site whose only path is
+        // LTE, MQTT rides the modem's AT socket and there is no route for
+        // HTTPClient, so this always fails. Returning here is what made an
+        // alarm call silently produce no call at all. Fall back to the canned
+        // asset already on the modem when we know it is there; a generic spoken
+        // alarm beats no call.
+        if (!fallbackAudioAvailable()) {
+          return audioErr;
+        }
+        publishTestCallProgress("TTS unavailable, using fallback");
+        Serial.printf("[call] %s; playing %s\n", audioErr.c_str(),
+                      state.modemFallbackAudioPath.c_str());
+        state.modemAudioPath = state.modemFallbackAudioPath;
+      } else {
+        state.modemAudioPath = ttsPath;
       }
-      state.modemAudioPath = ttsPath;
     } else {
       setStatus("Sync test audio");
       checkManifest(false);

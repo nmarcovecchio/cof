@@ -224,6 +224,29 @@ is a leftover override only.
 Audio assets should be dynamic. A customer may have no audio assets, one shared
 test audio, or different audios per alarm flow.
 
+**Current implementation:** the **alarm** call does not use a device audio asset
+at all. The backend synthesizes the spoken text per call (`backend/app/tts.py`,
+Piper -> AMR-NB) and publishes `audio_url` in the `test_call` command, so the text
+can be customized per rule (`call_text`, see `docs/ops/NOTIFICATIONS.md`). The
+`audio` array in this document describes the modem **fallback** asset
+(`C:/cof_fallback.wav`), which the device plays only when it cannot download that
+AMR - a site with no Ethernet/WiFi, where `HTTPClient` has no route. Without the
+fallback the call is not placed at all. The ESP32 cannot synthesize speech, so the
+fallback is a frozen generic phrase: it cannot say the site name or the measured
+value.
+
+Note on the modem's own TTS (`AT+CTTS`): the A76XX audio application note says it
+supports **Chinese and English only**, so it is not usable for Spanish call audio
+and must not be designed around as a dynamic-audio path.
+
+**Limits (measured, see `docs/voice/VOICE_SMS.md`):** the modem's C: holds
+hundreds of AMR assets (~11 MB, vendor example) - storage is not the constraint.
+The constraint is ESP32 RAM during the call: `uploadAudioToModem()` buffers the
+whole file, capping a transfer at 240 KB (~161 s of AMR-NB 12.2 kbps, against
+60-80 s of typical `call_text`). Voice quality cannot be raised within AMR-NB
+(already at its 12.2 kbps top mode); only AMR-WB would widen the band, and it is
+not documented as supported on this modem.
+
 ### Runtime status
 
 Reported by firmware/backend after real operations:

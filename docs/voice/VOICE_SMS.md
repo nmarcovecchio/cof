@@ -95,7 +95,8 @@ works. Do not poll `AT` during an active CSFB in a way that aborts the call.
 ## Test call audio (AMR-NB)
 
 The text field on the device page is used for **SMS and spoken call audio**.
-SMS still caps at 160 characters. Call TTS accepts up to **800 characters**.
+SMS still caps at 160 characters. Call TTS accepts up to **800 characters**
+(the per-rule alarm call text caps at 400; see `docs/ops/NOTIFICATIONS.md`).
 
 Backend (`backend/app/tts.py`):
 
@@ -106,6 +107,56 @@ Backend (`backend/app/tts.py`):
 
 ESP32 RAM still buffers the whole file (`kMaxAudioBytes` 180 KB). AMR at 12.2 kbps
 fits ~**2 minutes** of speech; 800 characters is typically under a minute.
+
+### The audio download needs lwIP, so it needs Ethernet or WiFi
+
+`uploadAudioToModem()` fetches the AMR with `WiFiClientSecure` + `HTTPClient`
+**before dialing**. On a site whose only path is LTE, MQTT rides the modem's
+`AT+CIPOPEN` socket, which is not a lwIP interface, so there is no route for
+`HTTPClient` and the download always fails.
+
+Since **0.2.61** an alarm call does not die there: it falls back to the canned
+asset on the modem (`C:/cof_fallback.wav`, announced by `ota/manifest.json`) and
+dials anyway, reporting `TTS unavailable, using fallback`. Without that asset the
+call returns the download error and **no call is placed**. The fallback is a
+frozen generic phrase: the firmware has no TTS, so it cannot speak the site name
+or the measured value. See `docs/ops/NOTIFICATIONS.md`.
+
+### How much audio fits, and where the limit really is
+
+The modem's C: is the roomy part: the A76XX manual documents a total of ~11 MB
+(`AT+FSMEM` -> `+FSMEM: C:(11348480,2201600)` in the vendor example). At AMR-NB
+12.2 kbps that is **hundreds** of short assets. Storage was never the constraint.
+
+The constraint is **RAM on the ESP32 during the call**, because
+`uploadAudioToModem()` buffers the entire file in one `malloc`. Two ceilings:
+
+| Ceiling | Value | Why |
+|---|---|---|
+| Download | 240 KB | `PCNT` advances in 512-byte blocks, so the transfer stops at 480 blocks |
+| Modem upload | ~10 s of speech per burst | `PCNT` is a `uint16`, max 65,535; sent in 15 KB chunks |
+
+240 KB of AMR-NB 12.2 kbps is ~161 s of speech. The per-rule `call_text` caps at
+400 characters, which is typically 60-80 s, so there is roughly 2x headroom.
+
+### Voice quality: what can actually move
+
+AMR-NB is a narrowband codec by definition, and the backend already encodes at
+its highest mode (12.2 kbps, `backend/app/tts.py`) from Piper's
+`es_AR-daniela-high`, the high-quality model. So:
+
+- **Raising the bitrate does nothing.** 12.2 kbps is the top AMR-NB mode.
+- **AMR-WB** (50-7000 Hz instead of 300-3400) is the only real bandwidth
+  improvement. The modem's audio application note lists AMR and 8 kHz/16-bit WAV
+  for remote playback and does **not** document AMR-WB; the carrier also has to
+  negotiate it. Untested, and worth a bench check before designing around it.
+- **What is cheap and helps:** prosody (`TTS_LENGTH_SCALE`,
+  `TTS_SENTENCE_SILENCE`), loudness normalization before encoding (AMR punishes
+  quiet input), and trying another Piper voice of the same language.
+
+**Do not** use the modem's own TTS (`AT+CTTS`) as a higher-quality path: on the
+A76XX it supports **Chinese and English only**, per its audio application note.
+It cannot speak Spanish.
 
 VPS `.env` must include:
 
@@ -134,7 +185,8 @@ is specific (`TTS HTTP 404`, `TTS too large`, `TTS no RAM`, etc.).
 Admin test-call **bypasses** `calling.enabled`. Alarm-driven calls must not.
 
 The canned `cof_test.wav` on the modem stays WAV; only spoken test-call audio
-is AMR.
+is AMR. The alarm call fallback (`C:/cof_fallback.wav`) is WAV too, and is
+announced by `manifest.json` instead of being compiled in.
 
 ## Web / MQTT ops
 

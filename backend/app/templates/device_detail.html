@@ -264,6 +264,9 @@
             Avisa: {{ rule.actions|join(', ') or 'nada' }}
             {% if rule.who %} · {{ rule.who|join(', ') }}{% endif %}
           </div>
+          {% if rule.call_text %}
+          <div class="small mt-1">Dice por telefono: <em>{{ rule.call_text }}</em></div>
+          {% endif %}
           <div class="small text-muted">
             {% if rule.escalate %}Escala al siguiente telefono{% if rule.escalate_delay %} cada {{ rule.escalate_delay }}s{% endif %} si no hay OK.{% else %}Llama solo al primero.{% endif %}
             {% if rule.hysteresis %} Rearme {{ rule.hysteresis }}s.{% else %} No se repite hasta que se normalice.{% endif %}
@@ -524,6 +527,12 @@
           <i class="bi bi-activity"></i> Estado
         </button>
       </form>
+      <form method="post" action="{{ url_for('device_command_modem_probe', device_uid=device.device_uid) }}" onsubmit="return confirm('Sondear el modem? Ocupa el puerto AT unos segundos y no se corre durante una llamada activa. Los resultados aparecen abajo como eventos modem_probe.');">
+        {{ csrf_field() }}
+        <button class="btn btn-outline-secondary" type="submit">
+          <i class="bi bi-terminal"></i> Sondear modem
+        </button>
+      </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
@@ -702,6 +711,12 @@
                   <span class="badge text-bg-success">ok</span>
                 {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
                   <span class="badge text-bg-success">ok</span>
+                {% elif event.type == 'modem_probe' and (event.message or '').startswith('modem_probe: end') %}
+                  <span class="badge text-bg-success">fin</span>
+                {% elif event.type == 'modem_probe' and 'SUPPORTED' in (event.message or '') %}
+                  <span class="badge text-bg-success">soportado</span>
+                {% elif event.type == 'modem_probe' %}
+                  <span class="badge text-bg-light border">sonda</span>
                 {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
                   <span class="badge text-bg-light border">progreso</span>
                 {% else %}

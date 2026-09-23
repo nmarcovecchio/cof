@@ -94,6 +94,12 @@ struct RuntimeState {
   bool callingEnabled = false;
   String statusLine = "Booting";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
+  // The canned asset the manifest keeps on the modem (C:/cof_test.wav). It is
+  // only a fallback: a call tries to download the spoken TTS audio first, and
+  // only when that download is impossible does it play this instead of not
+  // dialing at all. See placeCallAndPlayAudio().
+  String modemFallbackAudioPath = COF_MODEM_AUDIO_PATH;
+  bool modemFallbackAudioReady = false;
   String manifestFirmwareVersion = "";
   String manifestFirmwareUrl = "";
   String manifestFirmwareSha256 = "";
@@ -162,6 +168,8 @@ extern String pendingConfigHash;
 extern String pendingConfigError;
 extern bool pendingOtaCommand;
 extern bool pendingStatusReportCommand;
+extern bool pendingModemProbeCommand;
+extern String pendingModemProbeCommandId;
 extern bool pendingTestCallCommand;
 extern String pendingTestCallPhone;
 extern String pendingTestCallAudioUrl;

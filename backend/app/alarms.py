@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -51,6 +52,12 @@ _rearm_until: dict[str, float] = {}
 _redis = None
 _redis_failed = False
 ACK_HINT = "Toca el enlace para confirmar y silenciar las alarmas de este equipo."
+
+# Upper bound for a per-rule spoken call text. The firmware reads the whole AMR
+# into RAM before dialing (kMaxAudioBytes = 180000) and 12.2 kbps AMR fits about
+# two minutes there, so this is deliberately below MAX_TEXT_CHARS (800) - which
+# stays the ceiling for the manual test-call field on the device page.
+MAX_CALL_TEXT_CHARS = 400
 
 
 def latest_config_payload(device: Device) -> dict:
@@ -202,6 +209,83 @@ def format_rule_detail(rule: dict, telemetry: dict) -> str:
     return core
 
 
+def rule_sensor_name(device: Device, sensor_id: str) -> str:
+    """Human alias of a rule's sensor, falling back to the id.
+
+    The spoken text must not say "temp_1": that is the id the config uses, not
+    something a person on the phone can act on.
+    """
+    wanted = str(sensor_id or "")
+    if not wanted:
+        return ""
+    payload = latest_config_payload(device)
+    for sensor in _iter_dicts(payload.get("sensors")):
+        if str(sensor.get("id") or "") == wanted:
+            return _as_text(sensor.get("name")) or wanted
+    return wanted
+
+
+def default_spoken_text(device: Device, rule: dict, telemetry: dict | None = None) -> str:
+    """Spoken fallback for the alarm call when the rule has no ``call_text``.
+
+    Same information as the written detail, but read out loud: the sensor alias
+    instead of ``temp_1`` and "mayor que" instead of ``gt``. Keeping the raw
+    operator here was the whole complaint about the alarm call.
+    """
+    sensor_id = str(rule.get("sensor_id") or "")
+    sensor = rule_sensor_name(device, sensor_id) or sensor_id or "sensor"
+    operator = RULE_OPERATORS_SPOKEN.get(str(rule.get("operator") or ""), str(rule.get("operator") or ""))
+    threshold = rule.get("threshold")
+    value = None if telemetry is None else sensor_value(telemetry, sensor_id)
+    who = _as_text(device.tenant.name if device.tenant else "")
+    site = _as_text(device.site.name if device.site else "")
+    description = _as_text(rule.get("description"))
+    parts = ["Alarma CallOnFail."]
+    if who:
+        parts.append(f"{who}.")
+    if site:
+        parts.append(f"Sitio {site}.")
+    parts.append(f"{_as_text(device.name)}.")
+    if description:
+        parts.append(f"{description}:")
+    parts.append(f"{sensor} {operator} {threshold}.")
+    parts.append("Sin lectura actual." if value is None else f"Valor actual {value}.")
+    return " ".join(" ".join(parts).split())[:MAX_CALL_TEXT_CHARS]
+
+
+def build_call_text(device: Device, rule: dict, telemetry: dict | None = None) -> str:
+    """Spoken text for the alarm call of one rule.
+
+    A rule without ``call_text`` returns "", and the caller keeps the generic
+    alarm text - which is what every call used to say. This text is used ONLY
+    for the call: email, Telegram and SMS keep the full text with the site, the
+    rule and the ack link.
+    """
+    template = _as_text(rule.get("call_text"))[:MAX_CALL_TEXT_CHARS]
+    if not template:
+        return ""
+    sensor_id = str(rule.get("sensor_id") or "")
+    description = _as_text(rule.get("description"))
+    value = None if telemetry is None else sensor_value(telemetry, sensor_id)
+    values = {
+        "equipo": _as_text(device.name),
+        "sitio": _as_text(device.site.name if device.site else ""),
+        "cliente": _as_text(device.tenant.name if device.tenant else ""),
+        "sensor": rule_sensor_name(device, sensor_id) or sensor_id,
+        "regla": description or sensor_id,
+        # Never leave the template's braces empty: a manual test fires without a
+        # telemetry frame and "Valor actual ." reads like a bug over the phone.
+        "valor": "sin lectura" if value is None or str(value).strip() == "" else str(value),
+    }
+    spoken = " ".join(template.split())
+    for key, value in values.items():
+        spoken = re.sub(r"\{\s*" + key + r"\s*\}", value, spoken, flags=re.IGNORECASE)
+    # An unknown {placeholder} is dropped: reading "abre llave valor cierra
+    # llave" into a customer's phone is worse than omitting the word.
+    spoken = re.sub(r"\{[^{}]{0,40}\}", " ", spoken)
+    return " ".join(spoken.split())[:MAX_CALL_TEXT_CHARS]
+
+
 RULE_OPERATORS = {
     "gt": ">",
     "lt": "<",
@@ -209,6 +293,17 @@ RULE_OPERATORS = {
     "lte": "≤",
     "eq": "=",
     "ne": "≠",
+}
+
+# Spoken form for the call. The default spoken text used to say the raw id and
+# the raw operator ("temp_1 gt -18"), which is unreadable over the phone.
+RULE_OPERATORS_SPOKEN = {
+    "gt": "mayor que",
+    "lt": "menor que",
+    "gte": "mayor o igual que",
+    "lte": "menor o igual que",
+    "eq": "igual a",
+    "ne": "distinto de",
 }
 
 ACTION_LABELS = {
@@ -269,6 +364,7 @@ def configured_rules_view(device: Device) -> list[dict]:
                 "duration_label": "inmediato" if duration <= 0 else f"durante {duration}s",
                 "actions": actions,
                 "who": who,
+                "call_text": _as_text(rule.get("call_text")),
                 "escalate": bool(rule.get("escalate_calls", True)),
                 "escalate_delay": _safe_seconds(rule.get("escalate_delay_seconds")),
                 "hysteresis": hysteresis,
@@ -416,6 +512,9 @@ def fire_rule_alarm(
         "escalate_calls": bool(rule.get("escalate_calls", True)),
         "escalate_delay_seconds": _safe_seconds(rule.get("escalate_delay_seconds"), 0),
         "hysteresis_seconds": hysteresis,
+        # Resolved here, once, for the whole cycle: the escalation to the next
+        # phone reuses payload["text"], and it must not re-read the rule.
+        "call_text": build_call_text(device, rule, telemetry) or default_spoken_text(device, rule, telemetry),
         "email_contact_ids": _id_list(rule.get("email_contact_ids")),
         "sms_contact_ids": _id_list(rule.get("sms_contact_ids")),
         "call_contact_ids": _id_list(rule.get("call_contact_ids")),
@@ -590,12 +689,17 @@ def dispatch_alarm(
         append_alarm_step(event, channel="sms", to=[], status="skipped", detail="sin telefono del cliente")
 
     if channels["call"]:
+        # A rule that defines call_text speaks its own words; everything else
+        # (email, Telegram, SMS) keeps the full alarm text. Resolved once in
+        # fire_rule_alarm, and inherited by the escalation to the next phone,
+        # which reuses payload["text"].
+        call_spoken = str(extra.get("call_text") or "").strip() or spoken
         job = enqueue_modem_job(
             device,
             "test_call",
             {
                 "phone": call_phones[0],
-                "text": spoken,
+                "text": call_spoken,
                 "alarm_event_id": event.id,
                 "phone_index": 0,
                 "escalate_calls": escalate_calls,

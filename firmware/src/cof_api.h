@@ -190,6 +190,7 @@ void processPendingSmsUrcs();
 void publishCallModemSignal(const String& raw);
 void publishInboundSms(const String& from, const String& text);
 void publishSmsRecords(const String& response, const char* tag);
+void runModemProbe(const String& commandId = "");
 int queryClccStat();
 String resolveTestPhone(const String& phoneOverride);
 String sendTestSms(const String& phoneOverride, const String& text);
@@ -199,6 +200,7 @@ String stopPlaybackAndCollect();
 String takePendingCallUrcs();
 String transmitSms(const String& phone, const String& body);
 String ttsModemPathFor(const String& url, const String& format);
+bool fallbackAudioAvailable();
 String uploadAudioToModem(const String& url, const String& modemPath, const String& audioVersion);
 String voiceContextSuffix(const String& bearer, const String& ceer = "");
 
