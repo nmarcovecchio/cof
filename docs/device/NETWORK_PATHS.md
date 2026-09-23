@@ -197,7 +197,7 @@ Audited 2026-09-23 by reading the code (`BACKLOG` §6d-§6g carry the open items
 | LTE | Ethernet healthy again | yes | recovery probe (60 s) + 3 s settle |
 | LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()` (§6e) |
 | LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
-| any | LAN up but degraded, on LTE | **pathological** | `canUseLan()` probes block the loop (§6f) |
+| any | LAN up but degraded, on LTE | yes, throttled | `canUseLan()` probes at most every 10 s (§6f) |
 
 Three things are worth knowing before touching any of this:
 
@@ -213,10 +213,12 @@ Three things are worth knowing before touching any of this:
   modem's own DNS. Since 0.2.71 a failed LTE connect sets `lteForceDnsResolve`, so
   the next attempt asks the modem and repoints the cache from that answer. If you
   touch `resolveLteMqttPeer()` or `saveMqttConfig()`, keep that invalidation.
-- **`canUseLan()` is called from `maintainLteFallback()` on every loop pass** and
-  performs blocking probes (up to ~3 s) with no throttle, unlike the path polls.
-  It only bites in the degraded-LAN state, which is reachable while on LTE. See
-  §6f.
+- **`canUseLan()` is called from `maintainLteFallback()` on every loop pass**, so
+  the probe it can trigger is throttled and its verdict latched
+  (`kLanReachableProbeIntervalMs`, 10 s). Before 0.2.72 the unthrottled call paid
+  up to ~3 s per pass in the degraded-LAN state. `serviceNetworkPaths()` does not
+  read this verdict - it uses `ethInternetUp` / `wifiInternetUp` - so the latch
+  cannot release LTE on its own. See §6f.
 
 ## Publishing liveness
 

@@ -226,30 +226,43 @@ este perfecto.
 en `wifiInternetUp` "would achieve nothing", asi que la asimetria puede ser
 deliberada. Confirmar con el motivo original antes de agregar el flag optimista.
 
-### 6f. `canUseLan()` hace probes bloqueantes sin throttle en el hot path
+### 6f. RESUELTO en 0.2.72: `canUseLan()` hacia probes bloqueantes en el hot path
 
-**Hallazgo 2026-09-23 (lectura de codigo, sin verificar en hardware).**
-`canUseLan()` (`net_paths.cpp:316`) delega en `lanPathReachable()`, que llama
+**Resuelto y compilado (sin verificar en hardware).**
+
+**El problema.** `canUseLan()` delega en `lanPathReachable()`, que llama
 `probeMqttOnInterface()` hasta dos veces, cada una con `probe.connect(..., 1500)`
-mas dos `applyPreferredRoute()`: **hasta ~3 s bloqueando el loop**. No tiene ningun
-timestamp de throttle, a diferencia de `pollEthernetPath()` / `pollWifiPath()`.
+mas dos `applyPreferredRoute()`: hasta ~3 s bloqueando el loop. No tenia timestamp
+de throttle, a diferencia de `pollEthernetPath()` / `pollWifiPath()`.
 
-Se llama desde `maintainLteFallback()` (`main.cpp:201`), que es la primera linea de
+Se llama desde `maintainLteFallback()`, que es la primera linea de
 `connectMqttIfNeeded()` y corre **en cada pasada del loop** (~20 ms). El estado que
 lo dispara es "LAN conectada pero marcada sin internet", y estando en LTE se alcanza
-asi (`net_paths.cpp:422`):
+asi (`net_paths.cpp`):
 
 ```cpp
 } else if (ethInternetUp) {
   ethInternetUp = false;      // baja la salud sin tocar ethernetConnected
 ```
 
-Resultado: **cada pasada paga el probe completo**, estancando sensores, display y el
+O sea: **cada pasada pagaba el probe completo**, estancando sensores, display y el
 propio MQTT sobre LTE. Se dispara al enchufar el cable en un router sin uplink
 mientras el equipo va por LTE.
 
-**Como cerrarlo:** throttle por timestamp en `lanPathReachable()` (mismo patron que
-los polls), o no llamar `canUseLan()` desde el hot path.
+**El fix (0.2.72).** Throttle por timestamp en `lanPathReachable()`, con el veredicto
+latcheado entre probes (`kLanReachableProbeIntervalMs`, 10 s - la misma cadencia que
+los polls). El costo pasa de ~3 s por pasada a ~3 s cada 10 s.
+
+Vale anotar lo que hizo que el fix sea tan chico: **el trabajo ya estaba duplicado**.
+`pollEthernetPath()` ya prueba Ethernet cada `kPathRecoverProbeIntervalMs` (60 s)
+mientras MQTT va por LTE y mantiene `ethInternetUp` - el mismo veredicto que
+`lanPathReachable()` recalculaba en cada pasada. Ademas `pollEthernetPath()` corre
+justo **antes** de `connectMqttIfNeeded()` en el loop, asi que los flags que mira
+`canUseLan()` ya estan frescos cuando llega.
+
+**Efecto limitado a `canUseLan()`.** `serviceNetworkPaths()` (el que libera LTE) no
+usa `lanPathReachable()`: usa `ethInternetUp` / `wifiInternetUp`, que mantienen los
+polls. Asi que latchear este veredicto no puede liberar LTE por error.
 
 ### 6g. Deuda: `pauseWiFiRadio()` y el respaldo de WiFi temporizado no se usan
 
