@@ -104,10 +104,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingTestCallCommand = true;
         pendingTestCallPhone = doc["phone"] | "";
         pendingTestCallPhone.trim();
-        pendingTestCallAudioUrl = doc["audio_url"] | "";
-        pendingTestCallAudioUrl.trim();
-        pendingTestCallAudioFormat = doc["audio_format"] | "";
-        pendingTestCallAudioFormat.trim();
+        // audio_url / audio_format are still sent by the server but no longer
+        // read: the call only ever plays the pre-recorded file on the modem.
         pendingTestCallAudioSha = doc["call_audio"]["text_sha256"] | "";
         pendingTestCallAudioSha.trim();
         pendingTestCallCommandId = pendingCommandId;

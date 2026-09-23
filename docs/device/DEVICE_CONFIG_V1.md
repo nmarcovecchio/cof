@@ -259,10 +259,9 @@ forced a synthesis and a download during the alarm and made the offline fallback
 say "un valor fuera de rango" - a phrase that is often false, since a rule can
 fire on `menor que` or on a manual test with no reading at all. A number that
 matters is written into the text and baked in like any other word; the exact
-reading of each event travels by SMS and email. A rule saved before the change
-that still carries `{valor}` is played without it and flagged in the config form.
-`{umbral}` is known at save time and **is** baked into the audio. See
-`docs/ops/NOTIFICATIONS.md` § "Texto de la llamada, por regla".
+reading of each event travels by SMS and email. `{umbral}` is known at save time
+and **is** baked into the audio. See `docs/ops/NOTIFICATIONS.md` § "Texto de la
+llamada, por regla".
 
 The `audio` array in this document still describes the modem **fallback** asset
 (`C:/cof_fallback.wav`), the last resort when neither the pre-recorded nor the

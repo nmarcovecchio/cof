@@ -50,18 +50,6 @@
   <div class="card shadow-sm mb-3">
     <div class="card-header fw-semibold">Sensores</div>
     <div class="card-body p-0">
-      {% if retired_placeholder_rules %}
-      <div class="alert alert-warning m-3 mb-0 py-2">
-        <strong>Atención:</strong> estas reglas usan <code>{valor}</code>, que ya no existe porque no se
-        puede pregrabar. La llamada las reproduce igual, pero <strong>sin el numero</strong> (queda el hueco
-        en la frase). Escribí el numero directamente en el texto o usá <code>{umbral}</code>:
-        <ul class="mb-0 mt-1">
-          {% for index, label in retired_placeholder_rules %}
-          <li>Regla {{ index }} ({{ label }})</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
       {% if inert_sensors %}
       <div class="alert alert-warning m-3 mb-0 py-2">
         <strong>Atención:</strong> hay reglas sobre sensores que nunca van a disparar:
@@ -310,11 +298,6 @@
                 queda grabado igual que el resto.
                 El valor exacto de cada disparo no se dice por telefono: llega por <strong>SMS y email</strong>.
               </div>
-              <div class="invalid-feedback d-block small mt-1" data-call-text-warning hidden>
-                El texto usa <code>{valor}</code>, que ya no existe: no se puede pregrabar y obligaria a
-                sintetizar audio justo durante la alarma. Escribí el numero directamente
-                (ej: "supero los 40 grados") o usá <code>{umbral}</code>. El valor exacto llega por SMS y email.
-              </div>
             </div>
           </div>
           <div class="form-check">
@@ -372,30 +355,6 @@ const EXISTING_RULES = {{ cfg.rules | default([]) | tojson }};
 const CONTACTS = {{ contacts | default([]) | tojson }};
 const CSRF_TOKEN = {{ csrf_token() | tojson }};
 const PREVIEW_URL = {{ url_for('device_call_audio_preview', device_uid=device.device_uid) | tojson }};
-
-const RETIRED_PLACEHOLDER_RE = /\{\s*valor\s*\}/i;
-
-// {valor} is retired: it cannot be pre-recorded, so the call would need the
-// server and the site's uplink at the worst moment. The server rejects a save
-// that still carries it, so warn as the operator types instead of letting the
-// form fail at the end. The Listen button is disabled too - a preview would
-// render the sentence with a visible hole and look like it is fine.
-function syncRetiredPlaceholderWarning(row) {
-  const textArea = row.querySelector('.rule-call-text');
-  if (!textArea) return;
-  const warningEl = row.querySelector('[data-call-text-warning]');
-  const buttonEl = row.querySelector('.rule-call-preview');
-  const usesRetired = RETIRED_PLACEHOLDER_RE.test(textArea.value);
-  if (warningEl) warningEl.hidden = !usesRetired;
-  textArea.classList.toggle('is-invalid', usesRetired);
-  if (buttonEl) {
-    buttonEl.disabled = usesRetired;
-    buttonEl.title = usesRetired
-      ? '{valor} ya no existe: escribí el número en el texto o usá {umbral}.'
-      : '';
-  }
-  return usesRetired;
-}
 
 async function previewCallAudio(row, statusEl, audioEl, buttonEl) {  const text = row.querySelector('.rule-call-text').value.trim();
   if (!text) {
@@ -534,14 +493,11 @@ function addRule(rule) {
     const audioEl = row.querySelector('.rule-call-preview-audio');
     previewBtn.addEventListener('click', () => previewCallAudio(row, statusEl, audioEl, previewBtn));
     // The audio is addressed by the text, so editing the text invalidates it.
-    const textArea = row.querySelector('.rule-call-text');
-    textArea.addEventListener('input', () => {
+    row.querySelector('.rule-call-text').addEventListener('input', () => {
       audioEl.classList.add('d-none');
       audioEl.removeAttribute('src');
       statusEl.textContent = '';
-      syncRetiredPlaceholderWarning(row);
     });
-    syncRetiredPlaceholderWarning(row);
   }
   syncActionContacts(row);
 
@@ -627,15 +583,6 @@ document.getElementById('config-form').addEventListener('submit', function(e) {
   };
   payload.sensors = sensors;
   payload.rules = rules;
-
-  // Fail here, with the field highlighted, rather than letting the POST come
-  // back with a server error: the operator is looking at the row, not at the
-  // top of the form.
-  const offender = [...document.querySelectorAll('.rule-row')].find(syncRetiredPlaceholderWarning);
-  if (offender) {
-    offender.querySelector('.rule-call-text').focus();
-    return;
-  }
 
   document.getElementById('payload-hidden').value = JSON.stringify(payload);
   this.submit();

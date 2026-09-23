@@ -50,23 +50,6 @@ from .tts import AUDIO_STORE_DIR, AUDIO_EXT, synthesize_to_path
 # Any {token}: used to detect whether a text still has unresolved placeholders.
 _ANY_PLACEHOLDER = re.compile(r"\{[^{}]{0,40}\}")
 
-# Placeholder that used to be resolved at call time. Only referenced to detect
-# and reject it in already-saved rules and in the form: it is no longer part of
-# the supported set, because it cannot be pre-recorded. See the module docstring.
-RETIRED_PLACEHOLDER = "valor"
-
-
-def has_retired_placeholder(text: str) -> bool:
-    """True when a text still uses ``{valor}``.
-
-    Used to warn about rules saved before the placeholder was retired, and to
-    reject a save that would silently drop it.
-    """
-    return bool(
-        re.search(r"\{\s*" + RETIRED_PLACEHOLDER + r"\s*\}", text or "", flags=re.IGNORECASE)
-    )
-
-
 def normalize_spoken(text: str) -> str:
     """Collapse whitespace so cosmetic edits do not create a new audio asset."""
     return " ".join((text or "").split())
@@ -135,9 +118,6 @@ def ensure_asset(text: str) -> AudioAsset | None:
         text=stored_text,
         amr_sha256=digest,
         size_bytes=path.stat().st_size,
-        # Always False now. The column stays because older rows carry the value
-        # and the device contract still has the field; see `dynamic` below.
-        has_dynamic=False,
     )
     db.session.add(asset)
     db.session.flush()
@@ -157,12 +137,6 @@ def prepare_call_audio(text: str) -> dict | None:
         "text_sha256": asset.text_sha256,
         "url": asset_url(asset.text_sha256),
         "bytes": asset.size_bytes,
-        # Kept in the payload as a fixed False. It is part of the config contract
-        # the device parses, and a device on older firmware uses it to decide
-        # whether to prefer the local file. It no longer varies: every asset is
-        # self-contained. Removable only alongside a firmware change that stops
-        # reading it.
-        "dynamic": False,
         # The name the device must use on the modem filesystem. The ``a_``
         # prefix is the device's garbage-collection namespace: it only ever
         # deletes files starting with it, so nothing else can be swept by
@@ -172,17 +146,13 @@ def prepare_call_audio(text: str) -> dict | None:
 
 
 def resolve_static_placeholders(text: str, values: dict) -> str:
-    """Fill every placeholder that is known at save time.
+    """Fill every placeholder the template supports.
 
-    All of them are, now: what the template does not resolve is dropped, so a
-    leftover ``{valor}`` never reaches the synthesizer and is never read aloud
-    as punctuation. ``has_retired_placeholder`` is what surfaces it to the
-    operator instead of letting it vanish quietly.
+    Anything that does not match a known key is dropped, so a typo is never read
+    aloud as punctuation.
     """
     resolved = normalize_spoken(text)
     for key, value in values.items():
-        if key.lower() == RETIRED_PLACEHOLDER:
-            continue
         resolved = re.sub(
             r"\{\s*" + re.escape(key) + r"\s*\}",
             str(value if value is not None else ""),

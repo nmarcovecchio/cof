@@ -199,11 +199,9 @@ El SMS y el email no necesitan sintesis ni descarga, viajan por el modem igual
 que la llamada, y pueden decir el numero exacto sin ningun costo. La llamada es
 el canal que **despierta a alguien**; el dato numerico va por el canal escrito.
 
-Una regla guardada antes de este cambio puede tener `{valor}` en su texto. El
-servidor **no la reescribe solo** (inventar un numero seria peor que el hueco):
-la llamada la reproduce sin esa palabra, y el formulario de configuracion avisa
-cuales son para que el operador decida que poner. Un **guardado nuevo** que todavia
-use `{valor}` se rechaza con ese mismo aviso.
+Los placeholders soportados son los de la lista de arriba. Cualquier otro se
+descarta antes de sintetizar, asi que nunca se lee en voz alta ("abre llave
+valor cierra llave").
 
 ### Boton "Escuchar"
 

@@ -308,39 +308,46 @@ no puede ocurrir, ver 8c). Falta:
 
 1. Guardar una regla con texto con el numero escrito a mano y confirmar que la
    llamada suena **sin** bajar nada (probar con el cable de red desconectado).
-2. Guardar una regla con `{valor}` en el texto y confirmar que **no se guarda**:
-   el formulario tiene que avisar en el campo y no dejar guardar.
+2. Confirmar que **no existe** `{valor}` en la lista de placeholders del
+   formulario ni en el ejemplo, y que escribir `{valor}` a mano lo descarta el
+   sintetizador en vez de leerlo.
 3. Cambiar el texto de una regla y confirmar que el audio viejo **se borra** del
    modem (`[audio] pruned ...` en el log serie) y no queda suelto.
 4. Borrar el texto de la regla y confirmar que se poda.
-5. Guardar una regla vieja que todavia tenga `{valor}` y confirmar que el
-   formulario la lista en el aviso de arriba, y que la llamada suena sin esa
-   palabra.
+5. Probar una llamada de prueba **antes** de que el asset haya bajado (p.ej. con el
+   cable de red desconectado): tiene que decir `Audio not on device` y sonar el
+   respaldo, **no** quedarse sin llamada.
 
-### 8f. `{valor}` retirado: assets y campo `dynamic` que quedan
+### 8f. Limpieza de la migracion de audio (columnas viejas en produccion)
 
-`{valor}` se retiro (ver `NOTIFICATIONS.md`). Todo asset nuevo es autocontenido y
-`prepare_call_audio()` devuelve `dynamic: false` fijo. Eso deja tres restos
-deliberados, y ninguno es urgente:
+`{valor}` se retiro (ver `NOTIFICATIONS.md`) y no habia ninguna regla guardada
+usandolo, asi que **no queda codigo de compatibilidad**: se borraron
+`has_retired_placeholder()`, el aviso del formulario, el campo `dynamic` del
+payload, `has_dynamic` del modelo, `ruleAudioDynamic`/`ruleAudioIsDynamic()` y la
+rama de descarga de TTS en `placeCallAndPlayAudio()`. La llamada ahora solo usa el
+archivo local, y si no esta pide un sync de config en vez de intentar una descarga
+que en solo-LTE no puede funcionar.
 
-1. **`AudioAsset.has_dynamic`** sigue en el modelo y se escribe siempre `False`.
-   Las filas viejas conservan su valor. Se puede borrar la columna cuando no
-   quede ninguna fila con `True` (o directamente cuando moleste).
-2. **`dynamic` en el payload de `call_audio`** lo parsea el firmware y lo usa un
-   equipo con firmware viejo para decidir si el archivo local esta completo.
-   Sacarlo requiere bumpear firmware primero; si no, un equipo desactualizado
-   trataria todo asset como dinamico.
-3. **`ruleAudioDynamic` / `ruleAudioIsDynamic()`** en el firmware quedaron como
-   compatibilidad: un asset sincronizado por un backend viejo puede venir marcado
-   `dynamic` y ser solo la variante generica, asi que se sigue usando como
-   respaldo. Cuando no queden equipos con assets viejos, se puede simplificar la
-   rama entera de descarga de TTS en `placeCallAndPlayAudio()`.
+Lo unico que sobrevive a proposito es `loadRuleAudioIndex()` en el firmware, que
+sabe leer el formato viejo `{"path":...,"dynamic":...}` ademas del nuevo (string
+plano). Es una decena de lineas y evita que un equipo que actualiza por OTA pierda
+el audio que ya tenia y lo vuelva a bajar entero por LTE.
 
-Tambien hay assets **genericos huerfanos** en el store del servidor y en el modem
-de equipos: los que se sintetizaron para la variante sin numero de textos con
-`{valor}`. En el servidor son filas de `AudioAsset` que ya nadie referencia (el
-store es content-addressed y no tiene GC); en el modem los poda `syncRuleAudio()`
-solo cuando la config deja de pedirlos. No hay prisa: son de pocos KB.
+**Pendiente, del lado del servidor:** la columna `audio_assets.has_dynamic` sigue
+existiendo en la base de produccion (la migracion de borrado no se corrio). El
+codigo ya no la escribe ni la lee, pero **todo `SELECT` de SQLAlchemy la sigue
+incluyendo**, asi que borrarla no es opcional si alguien corre un
+`ALTER TABLE ... DROP COLUMN` a mano. Verificacion pendiente contra el VPS:
+
+```sql
+-- Debe dar 0. Si da >0, hay assets de la variante generica todavia.
+SELECT count(*) FROM audio_assets WHERE has_dynamic;
+```
+
+Si da 0, la columna y las filas genericas huerfanas (assets que se sintetizaron
+para textos con `{valor}` y ya nadie referencia: el store es content-addressed y
+no tiene GC) se pueden limpiar. En el modem las poda `syncRuleAudio()` solo cuando
+la config deja de pedirlos. Son de pocos KB.
 
 ### 9. Alarma de OTA rechazada / version estancada
 

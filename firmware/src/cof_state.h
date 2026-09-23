@@ -106,10 +106,6 @@ struct RuntimeState {
   // call looks up the rule's call_audio.text_sha256 here and plays the matching
   // modem file without any network access. See syncRuleAudio().
   std::map<String, String> ruleAudioPaths;
-  // Whether the file for a key is only the *generic* variant of a text that
-  // carries {valor}. For those the exact reading is downloaded at call time, so
-  // the local file must NOT be preferred blindly or the number never gets said.
-  std::map<String, bool> ruleAudioDynamic;
   String manifestFirmwareVersion = "";
   String manifestFirmwareUrl = "";
   String manifestFirmwareSha256 = "";
@@ -182,8 +178,6 @@ extern bool pendingModemProbeCommand;
 extern String pendingModemProbeCommandId;
 extern bool pendingTestCallCommand;
 extern String pendingTestCallPhone;
-extern String pendingTestCallAudioUrl;
-extern String pendingTestCallAudioFormat;
 extern String pendingTestCallAudioSha;
 extern String pendingTestCallCommandId;
 extern bool reportTestCallProgress;

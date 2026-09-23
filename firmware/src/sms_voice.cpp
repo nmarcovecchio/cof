@@ -150,16 +150,7 @@ void pollIncomingSms() {
     publishSmsRecords(response, "+CMGL:");
   }
 }
-String ttsModemPathFor(const String& url, const String& format) {
-  String fmt = format;
-  fmt.toLowerCase();
-  String path = url;
-  path.toLowerCase();
-  if (fmt.indexOf("amr") >= 0 || path.endsWith(".amr")) {
-    return "C:/tts.amr";
-  }
-  return "C:/tts.wav";
-}
+
 bool fallbackAudioAvailable() {
   // Playback capability, not file-transfer: the asset is already on the modem at
   // this point, so what matters is that this module can play a file into a call.
@@ -821,7 +812,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   }
   return "Call not connected";
 }
-String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioUrl, const String& audioFormat, const String& audioSha) {
+String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha) {
   releaseLteMqttForModem();
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
@@ -858,50 +849,29 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    // A pre-recorded file already on the modem is the best case, and now the
-    // only one that matters: every asset is self-contained, because the backend
-    // no longer bakes a "generic variant" for a runtime reading. Playing it
-    // needs no internet at all, which is the whole point of the feature.
+    // A pre-recorded file already on the modem is the best case, and the only
+    // one that matters: every asset is self-contained, because all placeholders
+    // are resolved at save time. Playing it needs no internet at all, which is
+    // the whole point of the feature.
     //
-    // Assets synced by an *older* backend can still be flagged dynamic; those
-    // are a generic variant missing the reading, so they are used only as a
-    // fallback. The check is kept for that transition and for devices that
-    // update firmware before the server.
+    // If the device does not have it yet, the audio cannot be played from the
+    // URL: downloading needs lwIP, and a site whose only path is LTE has no
+    // route (MQTT rides the modem's AT socket). So ask for a config sync and
+    // fall back to whatever is on the modem, rather than attempting a download
+    // that can only fail and used to leave the alarm with no call at all.
     const String localRuleAudio = ruleAudioPathForSha(audioSha);
-    const bool localIsGeneric = ruleAudioIsDynamic(audioSha);
-    if (localRuleAudio.length() > 0 && !localIsGeneric) {
+    if (localRuleAudio.length() > 0) {
       publishTestCallProgress("Using call audio on device");
       state.modemAudioPath = localRuleAudio;
-    } else if (audioUrl.length() > 0) {
-      publishTestCallProgress("Downloading TTS audio");
-      const String ttsPath = ttsModemPathFor(audioUrl, audioFormat);
-      const String audioErr = uploadAudioToModem(audioUrl, ttsPath, "tts");
-      if (audioErr.length() > 0) {
-        // Downloading needs lwIP: Ethernet or WiFi. On a site whose only path is
-        // LTE, MQTT rides the modem's AT socket and there is no route for
-        // HTTPClient, so this always fails. Returning here is what made an
-        // alarm call silently produce no call at all. Fall back, in order, to
-        // the rule's own pre-recorded audio and then to the canned asset: a
-        // spoken alarm beats no call.
-        if (localRuleAudio.length() > 0) {
-          publishTestCallProgress("Rule audio unavailable, using generic variant");
-          Serial.printf("[call] %s; playing generic %s\n", audioErr.c_str(),
-                        localRuleAudio.c_str());
-          state.modemAudioPath = localRuleAudio;
-        } else if (fallbackAudioAvailable()) {
-          publishTestCallProgress("TTS unavailable, using fallback");
-          Serial.printf("[call] %s; playing %s\n", audioErr.c_str(),
-                        state.modemFallbackAudioPath.c_str());
-          state.modemAudioPath = state.modemFallbackAudioPath;
-        } else {
-          return audioErr;
-        }
-      } else {
-        state.modemAudioPath = ttsPath;
-      }
+    } else if (fallbackAudioAvailable()) {
+      publishTestCallProgress("Rule audio not on device, using fallback");
+      Serial.printf("[call] no local audio for %s; playing %s\n", audioSha.c_str(),
+                    state.modemFallbackAudioPath.c_str());
+      state.modemAudioPath = state.modemFallbackAudioPath;
     } else {
       setStatus("Sync test audio");
       checkManifest(false);
+      return "Audio not on device";
     }
   }
 

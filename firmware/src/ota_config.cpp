@@ -402,10 +402,7 @@ static void persistRuleAudioIndex() {
   JsonDocument doc;
   JsonObject obj = doc.to<JsonObject>();
   for (const auto& entry : state.ruleAudioPaths) {
-    auto dyn = state.ruleAudioDynamic.find(entry.first);
-    JsonObject node = obj[entry.first].to<JsonObject>();
-    node["path"] = entry.second;
-    node["dynamic"] = (dyn != state.ruleAudioDynamic.end()) && dyn->second;
+    obj[entry.first] = entry.second;
   }
   String out;
   serializeJson(doc, out);
@@ -466,7 +463,6 @@ static void syncRuleAudio(JsonDocument& doc) {
 
   // 1. Desired set: one entry per distinct audio, keyed by sha16.
   std::map<String, String> desiredUrls;
-  std::map<String, bool> desiredDynamic;
   for (JsonObject rule : doc["rules"].as<JsonArray>()) {
     JsonObject audio = rule["call_audio"];
     if (audio.isNull()) {
@@ -482,7 +478,6 @@ static void syncRuleAudio(JsonDocument& doc) {
       continue;
     }
     desiredUrls[ruleAudioKey(sha)] = url;
-    desiredDynamic[ruleAudioKey(sha)] = audio["dynamic"] | false;
   }
 
   // 2. Prune anything we downloaded before that the config no longer wants.
@@ -498,22 +493,17 @@ static void syncRuleAudio(JsonDocument& doc) {
     const String name = modemFileBasename(path);
     const String key = name.substring(2, name.lastIndexOf('.'));
     state.ruleAudioPaths.erase(key);
-    state.ruleAudioDynamic.erase(key);
     pruned++;
   }
 
   // 3. Download what is missing. Skipping the ones already on the modem keeps
-  //    a config save from re-uploading every file over LTE.
+  //    a config save from re-uploading every file over LTE. An asset is
+  //    complete on its own, so an existing file is never re-fetched.
   for (const auto& entry : desiredUrls) {
     const String key = entry.first;
     auto found = state.ruleAudioPaths.find(key);
     const bool haveFile = found != state.ruleAudioPaths.end() && found->second.length() > 0;
-    const bool dynamic = desiredDynamic.count(key) > 0 && desiredDynamic.at(key);
-    // A static audio is complete on its own: if it is there, do not re-upload.
-    // A dynamic one is only the generic variant, so it is uploaded once and
-    // then left alone; re-uploading it on every save would waste LTE.
     if (haveFile) {
-      state.ruleAudioDynamic[key] = dynamic;
       preexisting++;
       continue;
     }
@@ -525,7 +515,6 @@ static void syncRuleAudio(JsonDocument& doc) {
       continue;
     }
     state.ruleAudioPaths[key] = modemPath;
-    state.ruleAudioDynamic[key] = dynamic;
     installed++;
   }
 
@@ -553,7 +542,6 @@ static void syncRuleAudio(JsonDocument& doc) {
 
 static void loadRuleAudioIndex() {
   state.ruleAudioPaths.clear();
-  state.ruleAudioDynamic.clear();
   const String stored = preferences.getString(kRuleAudioPrefKey, "");
   if (stored.length() == 0) {
     return;
@@ -564,9 +552,15 @@ static void loadRuleAudioIndex() {
   }
   for (JsonPair kv : doc.as<JsonObject>()) {
     const String key(kv.key().c_str());
-    JsonObject node = kv.value().as<JsonObject>();
-    state.ruleAudioPaths[key] = node["path"] | "";
-    state.ruleAudioDynamic[key] = node["dynamic"] | false;
+    // Older firmware stored {"path":...,"dynamic":...}. Reading the object form
+    // is kept so a device upgrading over the air does not lose the audio it
+    // already downloaded and re-fetch every file.
+    JsonVariant value = kv.value();
+    const String path = value.is<JsonObject>() ? (value["path"] | "") : (value | "");
+    if (path.length() == 0) {
+      continue;
+    }
+    state.ruleAudioPaths[key] = path;
   }
 }
 
@@ -579,14 +573,6 @@ String ruleAudioPathForSha(const String& sha) {
     return "";
   }
   return found->second;
-}
-
-bool ruleAudioIsDynamic(const String& sha) {
-  if (sha.length() < 16) {
-    return false;
-  }
-  auto found = state.ruleAudioDynamic.find(ruleAudioKey(sha));
-  return found != state.ruleAudioDynamic.end() && found->second;
 }
 
 // Returns the modem path of the pre-recorded audio for a given text sha, or ""

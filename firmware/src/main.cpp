@@ -84,8 +84,6 @@ bool pendingModemProbeCommand = false;
 String pendingModemProbeCommandId = "";
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
-String pendingTestCallAudioUrl = "";
-String pendingTestCallAudioFormat = "";
 String pendingTestCallAudioSha = "";
 String pendingTestCallCommandId = "";
 bool reportTestCallProgress = false;
@@ -692,18 +690,14 @@ void loop() {
 
   if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
     const String callPhone = pendingTestCallPhone;
-    const String callAudioUrl = pendingTestCallAudioUrl;
-    const String callAudioFormat = pendingTestCallAudioFormat;
     const String callAudioSha = pendingTestCallAudioSha;
     const String callCommandId = pendingTestCallCommandId;
     pendingTestCallCommand = false;
     pendingTestCallPhone = "";
-    pendingTestCallAudioUrl = "";
-    pendingTestCallAudioFormat = "";
     pendingTestCallAudioSha = "";
     pendingTestCallCommandId = "";
     reportTestCallProgress = true;
-    const String result = placeCallAndPlayAudio(callPhone, true, callAudioUrl, callAudioFormat, callAudioSha);
+    const String result = placeCallAndPlayAudio(callPhone, true, callAudioSha);
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     const bool ok = result.startsWith("Call done");

@@ -209,19 +209,17 @@ MQTT command:
   "call_audio": {
     "text_sha256": "<64-hex>",
     "url": "https://app.callonfail.com.ar/audio/asset/<64-hex>.amr",
-    "modem_path": "C:/a_<16-hex>.amr",
-    "dynamic": true
+    "modem_path": "C:/a_<16-hex>.amr"
   }
 }
 ```
 
-`call_audio` is the pre-recorded asset for that rule, and it is **always
-self-contained**: every placeholder is resolved at save time, so the device plays
-the local file and downloads nothing at call time.
-
-`dynamic` is part of the payload but is a fixed `false` now. It stays because the
-device parses it and a unit on older firmware uses it to decide whether the local
-file is complete; it no longer varies, because `{valor}` was retired. See
+`call_audio` is the pre-recorded asset for that rule, and it is fully
+self-contained: every placeholder is resolved at save time, so the device plays
+the local file and nothing is downloaded at call time. `audio_url` and
+`audio_format` are still in the payload for compatibility but the firmware no
+longer reads them - if the asset is not on the device the call asks for a config
+sync and plays the fallback instead of attempting a download. See
 `NOTIFICATIONS.md` § "`{valor}` esta retirado".
 
 Device downloads over **lwIP (Ethernet or WiFi)** - HTTPS, cert not verified - into

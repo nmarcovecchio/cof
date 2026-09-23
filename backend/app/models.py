@@ -174,10 +174,8 @@ class AudioAsset(db.Model):
     share a single AMR file on disk and a single download to the modem. Without
     this the device would re-download a byte-identical file per rule.
 
-    ``has_dynamic`` marks a text that carried ``{valor}``: the AMR stored here is
-    the *generic* variant (placeholders resolved to neutral words) and the exact
-    number is downloaded at call time. Static texts are fully self-contained, so
-    the call needs no network at all.
+    Every stored text is self-contained: all placeholders are resolved by the
+    caller before synthesis, so the call never needs the network.
     """
 
     __tablename__ = "audio_assets"
@@ -187,7 +185,6 @@ class AudioAsset(db.Model):
     text = db.Column(db.Text, nullable=False)
     amr_sha256 = db.Column(db.String(64), nullable=False)
     size_bytes = db.Column(db.Integer, nullable=False, default=0)
-    has_dynamic = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
 
