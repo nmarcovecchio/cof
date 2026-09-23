@@ -181,6 +181,13 @@ En la web hay un boton **Escuchar** al lado del texto: sintetiza y reproduce lo
 que va a decir la llamada. Si el texto ya estaba guardado, suena exactamente el
 archivo pregrabado.
 
+**El audio del equipo es AMR; el del navegador es MP3.** Los navegadores no
+saben decodificar AMR (`canPlayType('audio/amr')` da vacio en Chrome, Firefox y
+Safari), asi que el preview se transcodifica a MP3 del AMR real - el mismo
+archivo que va a sonar en la llamada - y no se re-sintetiza. El `.amr` que baja
+el equipo nunca se reemplaza por el MP3: son rutas distintas (`/audio/asset/` vs
+`/audio/asset-preview/`).
+
 ### Boton "Escuchar" y que es cada cosa
 
 - Texto sin `{valor}`: lo que se escucha es **exactamente** lo que va a sonar,

@@ -390,8 +390,16 @@ async function previewCallAudio(row, statusEl, audioEl, buttonEl) {
     statusEl.textContent = data.cached
       ? 'Audio ya guardado. Suena exactamente así en la llamada.'
       : 'Audio generado (todavía no guardado).';
-    audioEl.src = data.url + (data.url.includes('?') ? '&' : '?') + 't=' + Date.now();
+    // The saved asset is immutable, so it is cacheable; only the ephemeral
+    // preview needs busting (the browser would otherwise reuse a stale file
+    // after the text changes).
+    audioEl.src = data.cached ? data.url : data.url + (data.url.includes('?') ? '&' : '?') + 't=' + Date.now();
     audioEl.classList.remove('d-none');
+    audioEl.load();
+    // Try to start it: the operator pressed "Escuchar" expecting sound. If the
+    // browser blocks it (the fetch broke the user-gesture chain), the visible
+    // controls are still there to press play.
+    audioEl.play().catch(() => {});
   } catch (err) {
     statusEl.textContent = 'Error de red al generar el audio.';
   } finally {

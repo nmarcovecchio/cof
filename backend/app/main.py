@@ -1223,6 +1223,30 @@ def create_app() -> Flask:
     def tts_audio_wav(audio_id):
         return _serve_tts_audio(audio_id, ".wav", "audio/wav")
 
+    @app.get("/audio/tmp/<audio_id>.mp3")
+    def tts_audio_mp3(audio_id):
+        """Browser-playable preview of a temporary TTS file.
+
+        Browsers cannot decode AMR, so the Listen button asks for this instead.
+        Transcodes on demand from the AMR next to it.
+        """
+        from .tts import transcode_to_mp3
+
+        if not re.fullmatch(r"[a-f0-9]{32}", audio_id or ""):
+            abort(404)
+        from pathlib import Path
+
+        amr_path = Path(os.environ.get("TTS_DIR", "/tmp/cof-tts")) / f"{audio_id}.amr"
+        mp3_path = amr_path.with_suffix(".mp3")
+        if not mp3_path.is_file():
+            if not amr_path.is_file():
+                abort(404)
+            try:
+                transcode_to_mp3(amr_path)
+            except Exception:
+                abort(404)
+        return _serve_tts_audio(audio_id, ".mp3", "audio/mpeg")
+
     @app.get("/audio/asset/<path:filename>")
     def call_audio_asset(filename):
         """Serve a stored call-audio asset.
@@ -1243,6 +1267,36 @@ def create_app() -> Flask:
         resp = app.response_class(data, mimetype="audio/amr")
         resp.headers["Content-Length"] = str(len(data))
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["Content-Encoding"] = "identity"
+        return resp
+
+    @app.get("/audio/asset-preview/<text_sha>.mp3")
+    def call_audio_asset_preview(text_sha):
+        """Browser-playable MP3 of a stored asset, for the Listen button.
+
+        Transcodes from the stored AMR on first request and caches it next to
+        it. Kept off the `.amr` URL the device downloads so the device's file is
+        never replaced by an MP3.
+        """
+        from .call_audio import AUDIO_STORE_DIR, asset_filename
+        from .tts import PREVIEW_EXT, transcode_to_mp3
+
+        if not re.fullmatch(r"[a-f0-9]{64}", text_sha or ""):
+            abort(404)
+        amr_path = AUDIO_STORE_DIR / asset_filename(text_sha)
+        if not amr_path.is_file():
+            abort(404)
+        mp3_path = amr_path.with_suffix(f".{PREVIEW_EXT}")
+        if not mp3_path.is_file():
+            try:
+                transcode_to_mp3(amr_path)
+            except Exception:
+                abort(404)
+        data = mp3_path.read_bytes()
+        resp = app.response_class(data, mimetype="audio/mpeg")
+        resp.headers["Content-Length"] = str(len(data))
+        # Private: this is behind a login, unlike the device-facing asset.
+        resp.headers["Cache-Control"] = "private, max-age=31536000"
         resp.headers["Content-Encoding"] = "identity"
         return resp
 
@@ -1270,17 +1324,26 @@ def create_app() -> Flask:
         what the call will really sound like). Otherwise synthesizes an
         ephemeral copy that the 15-minute sweeper deletes - previewing must not
         litter the permanent store with audio nobody saved.
+
+        Returns a browser-playable URL. Browsers cannot decode AMR (the device's
+        format), so the audio is transcoded to MP3 for playback; the bytes are
+        decoded from the real AMR, so the preview cannot drift from the call.
         """
         from .call_audio import (
             AUDIO_STORE_DIR,
-            asset_url,
+            asset_filename,
             drop_unknown_placeholders,
             neutralize_dynamic,
             normalize_spoken,
             text_sha256,
         )
         from .models import AudioAsset
-        from .tts import AUDIO_EXT, public_audio_url, synthesize_call_audio
+        from .tts import (
+            PREVIEW_EXT,
+            public_preview_url,
+            synthesize_call_audio,
+            transcode_to_mp3,
+        )
 
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         body = request.get_json(silent=True) or request.form
@@ -1314,14 +1377,21 @@ def create_app() -> Flask:
 
         sha = text_sha256(stored_text)
         existing = AudioAsset.query.filter_by(text_sha256=sha).first()
-        if existing is not None and (AUDIO_STORE_DIR / f"{sha}.{AUDIO_EXT}").is_file():
-            return jsonify({"url": asset_url(sha), "cached": True})
+        stored_amr = AUDIO_STORE_DIR / asset_filename(sha)
+        if existing is not None and stored_amr.is_file():
+            # Already saved: play the exact file the call will use. A stable
+            # asset URL is fine, the browser transcodes it on demand.
+            return jsonify({
+                "url": f"/audio/asset-preview/{sha}.{PREVIEW_EXT}",
+                "cached": True,
+            })
 
         try:
-            _path, audio_id = synthesize_call_audio(stored_text)
+            amr_path, audio_id = synthesize_call_audio(stored_text)
+            transcode_to_mp3(amr_path)
         except Exception as exc:
             return jsonify({"error": f"No se pudo sintetizar: {exc}"}), 500
-        return jsonify({"url": public_audio_url(audio_id), "cached": False})
+        return jsonify({"url": public_preview_url(audio_id), "cached": False})
 
     @app.post("/devices/<device_uid>/alarms/trigger")
     @login_required

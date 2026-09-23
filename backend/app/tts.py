@@ -22,13 +22,18 @@ PIPER_MODEL = os.environ.get(
 )
 AUDIO_FORMAT = "amr_nb_8000"
 AUDIO_EXT = "amr"
+# Preview format for the browser. Browsers cannot decode AMR at all
+# (canPlayType('audio/amr') is empty in Chrome, Firefox and Safari), so the
+# operator "Escuchar" button would silently never play anything. The device
+# still needs AMR, so this is a transcode made only for the preview.
+PREVIEW_EXT = "mp3"
 
 
 def cleanup_old_audio() -> None:
     TTS_DIR.mkdir(parents=True, exist_ok=True)
     now = time.time()
     for path in TTS_DIR.glob("*"):
-        if path.suffix.lower() not in {".wav", ".amr"}:
+        if path.suffix.lower() not in {".wav", ".amr", ".mp3"}:
             continue
         try:
             if now - path.stat().st_mtime > MAX_AGE_SECONDS:
@@ -44,6 +49,49 @@ def public_audio_url(audio_id: str) -> str:
 
         base = request.host_url.rstrip("/")
     return f"{base}/audio/tmp/{audio_id}.{AUDIO_EXT}"
+
+
+def public_preview_url(audio_id: str) -> str:
+    """Browser-playable URL for the same audio as ``public_audio_url``."""
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base:
+        from flask import request
+
+        base = request.host_url.rstrip("/")
+    return f"{base}/audio/tmp/{audio_id}.{PREVIEW_EXT}"
+
+
+def transcode_to_mp3(amr_path: Path) -> Path:
+    """Make a browser-playable MP3 next to an AMR asset.
+
+    Browsers do not decode AMR, so this is what the Listen button plays. It
+    decodes the real AMR - the same bytes the modem plays - instead of
+    re-synthesizing, so the preview cannot drift from what the call says.
+    """
+    mp3_path = amr_path.with_suffix(f".{PREVIEW_EXT}")
+    convert = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(amr_path),
+            "-ar",
+            "16000",
+            "-b:a",
+            "32k",
+            "-ac",
+            "1",
+            str(mp3_path),
+        ],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if convert.returncode != 0 or not mp3_path.exists() or mp3_path.stat().st_size == 0:
+        detail = (convert.stderr or convert.stdout).decode("utf-8", errors="replace").strip()
+        mp3_path.unlink(missing_ok=True)
+        raise RuntimeError(detail or "ffmpeg mp3 failed")
+    return mp3_path
 
 
 def _encode_amr_nb(raw_path: Path, amr_path: Path) -> None:
