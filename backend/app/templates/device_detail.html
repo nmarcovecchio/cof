@@ -770,6 +770,12 @@
         {% endif %}
       </div>
       {% if modem_trace_event and modem_trace_event.payload.get('modem_log') %}
+      {% if modem_trace_event.payload.get('handshake') %}
+      <div class="px-3 pt-2 small text-muted">
+        Handshake MQTT sobre LTE (primer intento: el ring de abajo solo guarda el final):
+      </div>
+      <pre class="modem-log border-bottom mb-0">{{ modem_trace_event.payload.get('handshake') }}</pre>
+      {% endif %}
       <pre class="modem-log">{% for line in modem_trace_event.payload.get('modem_log').splitlines() %}{% if line.startswith('>>') %}<span class="tx">{{ line }}</span>
 {% elif line.startswith('<<') %}<span class="rx">{{ line }}</span>
 {% else %}{{ line }}

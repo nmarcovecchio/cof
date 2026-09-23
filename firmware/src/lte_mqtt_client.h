@@ -31,6 +31,34 @@ class LteMqttClient : public Client {
 
   uint32_t lastRxPollMs = 0;
 
+  // First window of the MQTT-over-LTE session, captured verbatim.
+  //
+  // The shared modem log (`modemCallLog`) is a ring that keeps only the TAIL, so
+  // in a retry loop the first attempt - the only one whose send ACK, CONNACK and
+  // PubSubClient state say *why* the connect failed - is always discarded. This
+  // keeps the HEAD of the session instead, and is published next to the ring in
+  // the `lte_data` event (see `publishLteDataTrace`, which clears it).
+  //
+  // Deliberately NOT reset per connect: the retry path tears the PDP down and
+  // rebuilds it, so a per-open reset would keep erasing the attempt we want to
+  // keep. It clears only once it has been published, so the failure that never
+  // reaches a successful publish is exactly the one that survives.
+  //
+  // `LteMqttClient::write()` talks to ModemSerial directly instead of going
+  // through `sendAT()`, which is why the MQTT handshake never reached the trace.
+  String handshake;
+  static constexpr size_t kHandshakeMax = 700;
+
+  void noteHandshake(const String& entry) {
+    if (handshake.length() >= kHandshakeMax) {
+      return;
+    }
+    if (handshake.length() > 0) {
+      handshake += '\n';
+    }
+    handshake += entry;
+  }
+
   bool useNetopen() const {
     return lteIpStack != kLteStackCnact;
   }
@@ -166,6 +194,8 @@ class LteMqttClient : public Client {
     if (!state.lteDataUp) {
       return 0;
     }
+    noteHandshake(String("open ") + host + ":" + String(port) +
+                  (useNetopen() ? " netopen" : " cnact"));
     String resp;
     if (useNetopen()) {
       sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 5000);
@@ -174,17 +204,20 @@ class LteMqttClient : public Client {
       String cmd = String("AT+CIPOPEN=") + String(sock) + ",\"TCP\",\"" + peer + "\"," + String(port);
       if (!sendAT(cmd, "+CIPOPEN:", 25000, &resp)) {
         Serial.println("[lte] CIPOPEN fail");
+        noteHandshake("CIPOPEN no response: " + resp);
         sockOpen = false;
         return 0;
       }
       const int err = atUrcCode(resp, "+CIPOPEN:");
       if (err != 0) {
         Serial.printf("[lte] CIPOPEN err %d %s\n", err, resp.c_str());
+        noteHandshake(String("CIPOPEN err ") + String(err) + ": " + resp);
         sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 5000);
         sockOpen = false;
         return 0;
       }
       Serial.printf("[lte] TCP %s:%u via %s NETOPEN\n", host, port, peer.c_str());
+      noteHandshake("CIPOPEN ok " + peer);
     } else {
       const char* proto = mqttUsesTls() ? "SSL" : "TCP";
       if (mqttUsesTls()) {
@@ -229,12 +262,27 @@ class LteMqttClient : public Client {
       ModemSerial.print(static_cast<unsigned>(chunk));
       ModemSerial.print("\r\n");
       if (!modemWaitForPrompt(5000)) {
+        noteHandshake("no '>' prompt for CIPSEND");
         sockOpen = false;
         return sent;
       }
       ModemSerial.write(buf + sent, chunk);
       const String token = useNetopen() ? "+CIPSEND:" : "OK";
       const String resp = readModemUntil(15000, token);
+      // Capture the send verdict: this is the step the old trace could never
+      // show, because write() is the one AT path that does not go through
+      // sendAT(). If the ACK shape differs from what we expect, this is where
+      // the MQTT CONNECT dies and the socket is dropped.
+      {
+        String verdict = resp;
+        verdict.replace("\r", " ");
+        verdict.replace("\n", " | ");
+        verdict.trim();
+        if (verdict.length() > 160) {
+          verdict = verdict.substring(0, 160);
+        }
+        noteHandshake(String("CIPSEND ") + String(chunk) + " -> " + verdict);
+      }
       if (resp.indexOf("ERROR") >= 0 || (useNetopen() && resp.indexOf("+CIPSEND:") < 0) ||
           (!useNetopen() && resp.indexOf("OK") < 0)) {
         sockOpen = false;

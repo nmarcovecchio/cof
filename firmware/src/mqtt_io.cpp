@@ -364,9 +364,20 @@ void publishLteDataTrace() {
   if (lteTraceLog.length() > 0) {
     doc["modem_log"] = lteTraceLog;
   }
+  // Head of the MQTT-over-LTE session. Published separately from `modem_log`
+  // because that one is a tail-only ring and drops the first attempt - the only
+  // one that carries the send ACK, the CONNACK and PubSubClient's verdict. See
+  // LteMqttClient::noteHandshake and BACKLOG 6b.
+  if (lteMqttClient.handshake.length() > 0) {
+    doc["handshake"] = lteMqttClient.handshake;
+  }
   if (publishMqttJson("event", doc, false, 1)) {
     pendingLteTracePublish = false;
     lastLteDataEventMs = now == 0 ? 1 : now;
+    // Published: the capture has served its purpose, so the next LTE session
+    // starts clean. This is the ONLY place it is cleared (not per connect) so a
+    // failure that never manages to publish is not erased by its own retries.
+    lteMqttClient.handshake = "";
     return;
   }
   if (lteTraceLog.length() <= 900) {
@@ -376,6 +387,7 @@ void publishLteDataTrace() {
   if (publishMqttJson("event", doc, false, 1)) {
     pendingLteTracePublish = false;
     lastLteDataEventMs = now == 0 ? 1 : now;
+    lteMqttClient.handshake = "";
   }
 }
 void publishTelemetryNow() {
@@ -485,6 +497,14 @@ void connectMqttIfNeeded() {
                   state.lteMqttTransport ? "yes" : "no");
     setStatus("MQTT fail");
     if (state.lteMqttTransport) {
+      // PubSubClient's own verdict is the whole point of the capture: the state
+      // tells apart "TCP never carried the CONNECT" from "broker answered and
+      // refused" (bad credentials, ACL, client id). Without it the trace only
+      // shows our TCP-level success and we cannot tell the two apart.
+      // Cast is deliberate: state() is int8_t, and String(int8_t) would pick the
+      // char constructor and log a garbage byte.
+      lteMqttClient.noteHandshake(
+          String("mqtt connect failed, state=") + String(static_cast<int>(mqttClient.state())));
       // A failed connect over the cellular path must not wedge the PDP: back the
       // retry off and tear the PDP down once it looks hopeless so the next
       // attempt rebuilds it from scratch.
@@ -526,6 +546,7 @@ void connectMqttIfNeeded() {
     }
   } else {
     lteTraceLog = modemCallLog;
+    lteMqttClient.noteHandshake("mqtt connected ok");
     pendingLteTraceMessage = "LTE MQTT OK";
     pendingLteTraceOk = true;
     pendingLteTracePublish = true;

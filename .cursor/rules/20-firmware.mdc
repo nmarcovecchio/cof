@@ -20,8 +20,7 @@ alwaysApply: false
   | `src/modem_at.cpp` | AT transport, watchdog, radio recovery. |
   | `src/sms_voice.cpp` | SMS, calls, TTS/audio upload. |
   | `src/mqtt_io.cpp` | Connect/publish, deferred queue, telemetry JSON. |
-  | `src/lte_pdp.cpp` | PDP activation (NETOPEN/CNACT), LTE peer. |
-  | `src/ota_config.cpp` | Manifest, `performOta`, rollback guard, config apply. |
+  | `src/lte_pdp.cpp` | PDP activation (NETOPEN/CNACT), LTE peer. |  | `src/ota_config.cpp` | Manifest, `performOta`, rollback guard, config apply. |
   | `src/at_parse.cpp` | Pure AT string/CEER parsers. |
   | `src/sensors_display.cpp` | I2C scan, SHT31, DS18B20, OLED. |
 
@@ -195,3 +194,12 @@ the broker is actually reachable through it (link + DHCP is not enough). Read
 documents the health flags, the probe rules, why `WiFi.hostByName()` must not be
 called from `loop()`, and the publishing-liveness thresholds (in particular why
 `kMqttSilenceReconnectMs` must stay above the telemetry interval).
+
+**LTE MQTT nunca conecto (ver `docs/ops/BACKLOG.md` §6b).** El ruteo LTE anda
+(`+CIPOPEN: 0,0` = TCP abierto al broker) pero no llega el CONNACK, asi que `MQTT`
+queda en `--`. No lo trates como "funciona" hasta cerrarlo. Para diagnosticar hay
+un campo `handshake` en el evento `lte_data`: captura el encabezado de la sesion
+(ACKs de `CIPSEND`, `state=` de PubSubClient) porque `modemCallLog` es un ring que
+solo guarda la cola y descarta siempre el primer intento, que es el unico que
+importa. `LteMqttClient::write()` habla con `ModemSerial` directo: **no** pasa por
+`sendAT()`, asi que su trafico no aparece en el dump general.

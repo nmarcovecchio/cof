@@ -38,6 +38,11 @@ branches whenever `state.lteDataUp` was set, which under NETOPEN (where the CID 
 1) also sent `AT+CNACT=1,0` - but the CNACT context is always 0, so the module
 answered `ERROR`. That was real noise in the trace, not the root cause.
 
+Since 0.2.66 the client also captures the HEAD of the session (the `CIPSEND` ACKs
+and PubSubClient's `state=N`) into a `handshake` field published alongside the
+tail-only `modem_log` in the `lte_data` event, which is what makes the CONNACK
+failure diagnosable at all.
+
 Until the CONNACK is understood, treat "MQTT over LTE" as unproven rather than
 working: a site whose only path is LTE may well lose the backend.
 

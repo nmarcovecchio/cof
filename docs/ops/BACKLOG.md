@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.65**.
+Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.66**.
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -116,25 +116,35 @@ contexto CNACT es siempre 0. El modem contestaba `ERROR` (visible en el trace). 
 teardown ahora es mutuamente exclusivo por stack. Era ruido real, pero no explica
 la falta de CONNACK.
 
-**Causa raiz abierta.** El trace no puede mostrarla por dos huecos de
-instrumentacion:
+**Instrumentado en 0.2.66.** El trace no podia mostrar la causa por dos huecos:
+`appendModemLog()` solo se llama desde `sendAT()`, y `LteMqttClient::write()`
+escribe el `AT+CIPSEND` **directo al serial**, asi que todo el envio MQTT quedaba
+fuera del log (por eso el trace no tiene un solo `CIPSEND`, no porque no se
+enviara). Y el log se recorta a los ultimos 900 bytes, asi que en un loop de
+reintentos identicos **el primer intento -el unico que importa- se pierde
+siempre**.
 
-- `appendModemLog()` solo se llama desde `sendAT()`, y `LteMqttClient::write()`
-  escribe el `AT+CIPSEND` **directo al serial**. Todo el trafico de envio MQTT
-  queda fuera del log: por eso no hay un solo `CIPSEND` en el trace, no porque no
-  se haya enviado.
-- El log se recorta a los ultimos 900 bytes al publicar, y `appendModemLog()` a
-  `kModemCallLogMax` (1800). En un loop de reintentos identicos **el primer
-  intento -el unico que importa- se pierde siempre**.
+Ahora el cliente captura el **encabezado** de la sesion MQTT (`handshake`) y lo
+publica al lado del ring en el evento `lte_data`, en un campo aparte que el panel
+muestra arriba del dump. Registra: el `open host:port stack`, el resultado de
+`CIPOPEN`, y sobre todo el **ACK de cada `CIPSEND`** y el **estado de
+PubSubClient** cuando el connect falla (`state=N`), que es lo que separa "el TCP
+nunca llevo el CONNECT" de "el broker contesto y rechazo" (credenciales, ACL,
+client id).
 
-Sospecha principal, a confirmar contra el manual (no adivinar): el ACK de
+Esa captura **no se resetea por connect** (el retry tira el PDP y lo reconstruye,
+asi que resetear por apertura borraria justo el intento buscado): se limpia recien
+cuando se publica. Asi el fallo que nunca llega a publicar es el que sobrevive.
+
+**Como cerrarlo:** desplegar 0.2.66, desconectar Ethernet, y leer el campo
+`handshake` del evento `lte_data` en el panel. El ACK real de `CIPSEND` y el
+`state=` de PubSubClient dicen cual es el fix.
+
+**Sospecha principal, a confirmar contra el manual (no adivinar):** el ACK de
 `AT+CIPSEND` en modo NETOPEN. `write()` espera el token `+CIPSEND:` y trata
 cualquier otra cosa como socket muerto (`sockOpen = false`), lo que aborta el
 CONNECT de MQTT. El PDF del A76XX no esta en el arbol (`docs/modem/` solo tiene el
 README), asi que hay que abrirlo antes de tocar esto.
-
-**Como cerrarlo:** (a) loguear `CIPSEND`/su ACK desde `write()`; (b) no truncar el
-primer intento, o publicarlo como evento aparte; (c) recien despues, el fix.
 
 ---
 
