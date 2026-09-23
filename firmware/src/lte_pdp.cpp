@@ -224,12 +224,23 @@ bool ensureLtePdp() {
 }
 void stopLtePdp() {
   lteMqttClient.stop();
-  if (state.lteDataUp || lteIpStack == kLteStackNetopen) {
+  // Tear down exactly one stack, and only the one that is actually up.
+  //
+  // These used to be two independent `if`s both keyed on `state.lteDataUp`, so
+  // under NETOPEN (the common case: lteDataUp is true) BOTH ran. The second one
+  // sent `AT+CNACT=<ltePdpCid>,0`, and `ltePdpCid` is 1 under NETOPEN - but the
+  // CNACT context is always 0 (see activateCnactPdp), so the module answered
+  // ERROR. Observed on hardware in the 2026-09-22 `lte_data` trace:
+  // `AT+CNACT=1,0 -> ERROR`, right after `AT+NETCLOSE -> +NETCLOSE: 2`.
+  //
+  // The two stacks are alternatives (detectLteIpStack picks one), never both, so
+  // the teardown is mutually exclusive. The CNACT context is written literally:
+  // the CID field is only meaningful for NETOPEN and using it here was the bug.
+  if (lteIpStack == kLteStackCnact) {
+    sendAT("AT+CNACT=0,0", "OK", 8000);
+  } else if (state.lteDataUp || lteIpStack == kLteStackNetopen) {
     sendAT("AT+CIPCLOSE=0", "OK", 5000);
     sendAT("AT+NETCLOSE", "+NETCLOSE:", 12000);
-  }
-  if (state.lteDataUp || lteIpStack == kLteStackCnact) {
-    sendAT(String("AT+CNACT=") + String(state.ltePdpCid) + ",0", "OK", 8000);
   }
   state.lteDataUp = false;
   state.lteMqttTransport = false;

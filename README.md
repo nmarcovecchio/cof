@@ -616,17 +616,26 @@ como fallback y para pruebas.
 
 ## Audio de llamada
 
-Hay **dos** audios en el modem y cumplen funciones distintas:
+Hay **dos familias** de audio en el modem y no se pisan:
 
 | Archivo | Origen | Cuando suena |
 | --- | --- | --- |
-| `C:/tts.amr` | Lo sintetiza el servidor (Piper) y el equipo lo baja por HTTPS. | Llamada normal: dice el texto de la regla. |
-| `C:/cof_fallback.wav` | `ota/audio/cof_fallback.wav`, anunciado por el manifest. | Solo si el equipo **no pudo bajar** el TTS (sitio sin Ethernet ni WiFi). |
+| `C:/a_<sha16>.amr` | El servidor sintetiza el `call_text` de cada regla **al guardar la config**, y el equipo lo baja con `syncRuleAudio()`. | Llamada de esa regla. Si el texto **no** lleva `{valor}`, es autocontenido y **no necesita red**. |
+| `C:/cof_fallback.wav` | `ota/audio/cof_fallback.wav`, anunciado por el manifest. | Ultimo recurso, si la regla no tiene audio local utilizable **y** la descarga del TTS falla. |
 
-El TTS necesita lwIP (Ethernet o WiFi) para bajar el archivo, asi que en un sitio
-solo-LTE la descarga falla siempre. Desde 0.2.61 ese caso **igual marca** y
-reproduce el respaldo generico, en vez de no llamar. El respaldo no puede decir el
-sitio ni el valor: el ESP32 no tiene sintesis.
+La llamada usa, en orden: (1) el audio pregrabado **estatico** de la regla; (2) el
+TTS exacto bajado del servidor, si hay ruta; (3) la **variante generica** del audio
+de la regla (textos con `{valor}`); (4) recien ahi `C:/cof_fallback.wav`.
+
+El texto con `{valor}` no se puede pregrabar completo: el backend guarda la
+variante generica (que dice "un valor fuera de rango") y el numero exacto se baja
+al llamar. Ese es el unico caso que necesita red, y **solo si** hay lwIP: la
+descarga usa `HTTPClient` + `WiFiClientSecure`, que en un sitio solo-LTE no tienen
+ruta (el MQTT viaja por el socket `AT+CIPOPEN`, que no es lwIP). El respaldo no
+puede decir el sitio ni el valor: el ESP32 no tiene sintesis.
+
+El equipo **solo borra archivos que empiezan con `a_`**, asi que ni el respaldo ni
+nada desconocido puede ser barrido por accidente.
 
 El respaldo se rehace a mano (no hay pipeline):
 

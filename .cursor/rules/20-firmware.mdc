@@ -109,15 +109,31 @@ Medido en la unidad de laboratorio (`AT+FSMEM`, firmware 0.2.62, boton **Sondear
 modem**): `C:(4194304,1146880)` -> **4.00 MiB** totales, 1.09 MiB usados, **2.91
 MiB libres**. Ojo: es **63% mas chico** que los ~10.8 MiB del ejemplo del manual
 A76XX, asi que **no dimensionar desde ese ejemplo**. Los 2.91 MiB libres son ~33
-minutos de AMR-NB 12.2 kbps: ~199 audios de 10 s, o ~24-33 de los 60-80 s que
-suele dar un `call_text`. Guardar varios audios no es el problema.
+minutos de AMR-NB 12.2 kbps: ~199 audios de 10 s, o ~24-33 de los ~53 s que suele
+dar un `call_text` de 400 caracteres. Guardar varios audios no es el problema.
 
 El techo es la **RAM del ESP32 durante la llamada**: `uploadAudioToModem()`
-bufferea el archivo entero en un solo `malloc`. Dos limites: `PCNT` avanza de a
-512 bytes, asi que la descarga corta en 240 KB; y `PCNT` viaja como `uint16`
-(tope 65.535), asi que al modem se le manda de a 15 KB (~10 s de habla por tanda).
-240 KB de AMR-NB 12.2 kbps son ~161 s, y el `call_text` de 400 caracteres suele
-dar 60-80 s: hay ~2x de margen.
+bufferea el archivo entero en un solo `malloc`, y corta en **180 KB**
+(`kMaxAudioBytes = 180000` en `src/sms_voice.cpp`): un `Content-Length` mayor se
+rechaza con `TTS too large` antes de leer nada.
+
+180 KB de AMR-NB 12.2 kbps son **~118 s** de habla, y el `call_text` de 400
+caracteres mide ~0.13 s/car (~53 s con muchos placeholders): hay ~2x de margen.
+
+**No es un limite `PCNT` del modem.** `PCNT` no aparece en el firmware y no hay
+ningun contador `uint16` en este camino; la version anterior de esta nota lo
+afirmaba y era una suposicion sin base en el codigo. El tope es el buffer del
+ESP32. Lo unico real del transporte: `AT+CFTRANRX` declara el tamano completo y el
+buffer se escribe en tandas de 512 bytes con 1 ms de espera.
+
+La calidad **no** se sube dentro de AMR-NB: ya se codifica en su modo mas alto
+(12.2 kbps, `backend/app/tts.py`) desde Piper `daniela-high`. Lo unico que
+ensancharia la banda es AMR-WB (50-7000 Hz), que la nota de audio del modem
+**no** documenta como soportado. Lo barato que si ayuda **y ya esta aplicado** en
+`_encode_amr_nb()`: normalizacion de volumen (`dynaudnorm=p=0.9:m=10`, lo mas
+perceptible) y **400 ms de silencio inicial** (`adelay=400:all=1`) porque
+`AT+CCMXPLAY` arranca apenas contestan y se come la primera palabra. Ademas:
+prosodia (`TTS_LENGTH_SCALE`, `TTS_SENTENCE_SILENCE`) y otra voz Piper.
 
 La calidad **no** se sube dentro de AMR-NB: ya se codifica en su modo mas alto
 (12.2 kbps, `backend/app/tts.py`) desde Piper `daniela-high`. Lo unico que

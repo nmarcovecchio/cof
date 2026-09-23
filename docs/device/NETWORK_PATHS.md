@@ -21,6 +21,26 @@ same order:
 LTE is a special case: it is a raw `AT+CIPOPEN`/`CAOPEN` socket (`LteMqttClient`),
 not an lwIP interface, so the default route is irrelevant while MQTT rides it.
 
+### LTE MQTT has never been validated end to end
+
+This is the only one of the three paths with no "verified on hardware" note, and
+on 2026-09-22 it failed in the field: Ethernet unplugged, the OLED showed the LTE
+IP on the `L` line, but `MQTT --` and the backend lost the device.
+
+The `lte_data` trace of that run shows the routing **works** - `+CIPOPEN: 0,0`
+(TCP established to the broker) six times, repeatedly - and the failure is in the
+MQTT handshake over the AT socket: the TCP opens and no CONNACK ever arrives. It
+is not APN, DNS or the cached broker IP. See `docs/ops/BACKLOG.md` §6b for the
+full trace and the instrumentation gaps that hide the CONNACK.
+
+`stopLtePdp()` teardown is stack-exclusive since 0.2.65. It used to run both
+branches whenever `state.lteDataUp` was set, which under NETOPEN (where the CID is
+1) also sent `AT+CNACT=1,0` - but the CNACT context is always 0, so the module
+answered `ERROR`. That was real noise in the trace, not the root cause.
+
+Until the CONNACK is understood, treat "MQTT over LTE" as unproven rather than
+working: a site whose only path is LTE may well lose the backend.
+
 ## The rule: an interface is only "the internet" if it reaches the broker
 
 Link up + DHCP lease is **not** evidence of internet. A router with no uplink
@@ -250,7 +270,6 @@ Telemetry also carries a diagnosis of the bad state in `network`:
 - `network.ethernet.internet` / `network.wifi.internet` - per-interface health
 
 ## SMS and calls over LTE
-
 `transmitSms()` does **not** tear the LTE MQTT socket down on the happy path
 anymore. It only calls `releaseLteMqttForModem()` before the *retry*, because
 destroying MQTT was what lost the command result: `publishDeviceEvent()` was

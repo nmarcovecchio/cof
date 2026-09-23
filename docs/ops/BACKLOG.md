@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.62**.
+Estado: **2026-09-23**. Ultimo firmware publicado y desplegado: **0.2.65**.
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -83,6 +83,58 @@ El 2026-09-21 el device quedo sin publicar con `radio: "NO SERVICE"`, `csq: 99`,
 y se recupero solo tras un reinicio por watchdog. Nunca se supo si fue watchdog,
 panic o `CFUN`. Instrumentar: loguear `esp_reset_reason()`, `CEREG`, `CPSI` y
 `CSQ` en el primer status post-boot.
+
+### 6b. MQTT sobre LTE nunca conecto: falta el CONNACK (2026-09-22)
+
+**Sintoma:** con el cable Ethernet desconectado, el OLED mostro la IP de LTE en la
+linea `L`, pero `MQTT --` y la web perdio el equipo.
+
+**Evidencia** (evento `lte_data` del 2026-09-22 21:33:54, en el panel del device):
+
+```text
+>> AT+CIPCLOSE=0
+<< +CIPCLOSE: 0,4  |  | ERROR
+>> AT+CIPRXGET=1
+<< OK
+>> AT+CIPOPEN=0,"TCP","54.207.204.86",1883
+<< OK  |  | +CIPOPEN: 0,0          <- TCP establecido, 6 veces
+...
+<< *ATREADY: 1 / +CPIN: READY / PB DONE   <- el modem se reinicio solo
+<< +CIPOPEN: 0,2                            <- despues ya no conecta
+>> AT+NETCLOSE  -> +NETCLOSE: 2
+>> AT+CNACT=1,0 -> ERROR
+```
+
+**Lo que queda claro:** el ruteo LTE funciona (`+CIPOPEN: 0,0` = TCP abierto al
+broker, y `54.207.204.86:1883` responde desde afuera). El fallo esta en el
+handshake MQTT sobre el socket AT: se abre el TCP y **nunca llega el CONNACK**.
+No es APN, DNS ni el IP cacheado.
+
+**Arreglado en 0.2.65 (no es la causa raiz):** `stopLtePdp()` mandaba
+`AT+CNACT=<ltePdpCid>,0` con el PDP en NETOPEN, donde `ltePdpCid` vale 1 pero el
+contexto CNACT es siempre 0. El modem contestaba `ERROR` (visible en el trace). El
+teardown ahora es mutuamente exclusivo por stack. Era ruido real, pero no explica
+la falta de CONNACK.
+
+**Causa raiz abierta.** El trace no puede mostrarla por dos huecos de
+instrumentacion:
+
+- `appendModemLog()` solo se llama desde `sendAT()`, y `LteMqttClient::write()`
+  escribe el `AT+CIPSEND` **directo al serial**. Todo el trafico de envio MQTT
+  queda fuera del log: por eso no hay un solo `CIPSEND` en el trace, no porque no
+  se haya enviado.
+- El log se recorta a los ultimos 900 bytes al publicar, y `appendModemLog()` a
+  `kModemCallLogMax` (1800). En un loop de reintentos identicos **el primer
+  intento -el unico que importa- se pierde siempre**.
+
+Sospecha principal, a confirmar contra el manual (no adivinar): el ACK de
+`AT+CIPSEND` en modo NETOPEN. `write()` espera el token `+CIPSEND:` y trata
+cualquier otra cosa como socket muerto (`sockOpen = false`), lo que aborta el
+CONNECT de MQTT. El PDF del A76XX no esta en el arbol (`docs/modem/` solo tiene el
+README), asi que hay que abrirlo antes de tocar esto.
+
+**Como cerrarlo:** (a) loguear `CIPSEND`/su ACK desde `write()`; (b) no truncar el
+primer intento, o publicarlo como evento aparte; (c) recien despues, el fix.
 
 ---
 
