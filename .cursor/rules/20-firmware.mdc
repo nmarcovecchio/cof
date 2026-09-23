@@ -195,11 +195,17 @@ documents the health flags, the probe rules, why `WiFi.hostByName()` must not be
 called from `loop()`, and the publishing-liveness thresholds (in particular why
 `kMqttSilenceReconnectMs` must stay above the telemetry interval).
 
-**LTE MQTT nunca conecto (ver `docs/ops/BACKLOG.md` §6b).** El ruteo LTE anda
-(`+CIPOPEN: 0,0` = TCP abierto al broker) pero no llega el CONNACK, asi que `MQTT`
-queda en `--`. No lo trates como "funciona" hasta cerrarlo. Para diagnosticar hay
-un campo `handshake` en el evento `lte_data`: captura el encabezado de la sesion
-(ACKs de `CIPSEND`, `state=` de PubSubClient) porque `modemCallLog` es un ring que
-solo guarda la cola y descarta siempre el primer intento, que es el unico que
-importa. `LteMqttClient::write()` habla con `ModemSerial` directo: **no** pasa por
-`sendAT()`, asi que su trafico no aparece en el dump general.
+**LTE MQTT verificado en hardware desde 0.2.70.** El ruteo LTE y el handshake MQTT
+completo sobre el socket AT funcionan (ver `docs/device/NETWORK_PATHS.md`). El
+punto a preservar es la invariante del guard `atCommandBusy`: `LteMqttClient::write()`
+es dueno de la linea AT entre el prompt `>` y el ACK de `CIPSEND`, y ni
+`available()` (que emite `AT+CIPRXGET`) ni `readModemUntil()` (que bombea `loop()`
+y puede emitir un PINGREQ) deben escribirle al modem mientras tanto. Romper eso
+hace que la sesion muera justo despues del CONNACK.
+
+Para diagnosticar hay un campo `handshake` en el evento `lte_data`: captura el
+encabezado de la sesion (ACKs de `CIPSEND`, `state=` de PubSubClient) porque
+`modemCallLog` es un ring que solo guarda la cola y descarta siempre el primer
+intento, que es el unico que importa. `LteMqttClient::write()` habla con
+`ModemSerial` directo: **no** pasa por `sendAT()`, asi que su trafico no aparece en
+el dump general (por eso el trace util vive en `handshake`).

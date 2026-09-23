@@ -21,30 +21,74 @@ same order:
 LTE is a special case: it is a raw `AT+CIPOPEN`/`CAOPEN` socket (`LteMqttClient`),
 not an lwIP interface, so the default route is irrelevant while MQTT rides it.
 
-### LTE MQTT has never been validated end to end
+### LTE MQTT: verified on hardware since 0.2.70
 
-This is the only one of the three paths with no "verified on hardware" note, and
-on 2026-09-22 it failed in the field: Ethernet unplugged, the OLED showed the LTE
-IP on the `L` line, but `MQTT --` and the backend lost the device.
+Verified 2026-09-23 with the Ethernet cable unplugged: the `handshake` field of
+the `lte_data` event carries a full, ACKed session end to end.
 
-The `lte_data` trace of that run shows the routing **works** - `+CIPOPEN: 0,0`
-(TCP established to the broker) six times, repeatedly - and the failure is in the
-MQTT handshake over the AT socket: the TCP opens and no CONNACK ever arrives. It
-is not APN, DNS or the cached broker IP. See `docs/ops/BACKLOG.md` §6b for the
-full trace and the instrumentation gaps that hide the CONNACK.
+```text
+open mqtt.callonfail.com.ar:1883 netopen
+CIPOPEN ok 54.207.204.86
+CIPSEND 135 -> | OK  |   | +CIPSEND: 0,135,135     <- CONNECT
+mqtt connected ok                                   <- CONNACK
+CIPSEND 38  -> | OK  |   | +CIPSEND: 0,38,38        <- subscribe config/desired
+CIPSEND 31  -> | OK  |   | +CIPSEND: 0,31,31        <- subscribe command
+CIPSEND 1024 -> | OK  |   | +CIPSEND: 0,1024,1024   <- publish
+CIPSEND 382  -> | OK  |   | +CIPSEND: 0,382,382
+CIPSEND 1024 -> | OK  |   | +CIPSEND: 0,1024,1024
+CIPSEND 78   -> | OK  |   | +CIPSEND: 0,78,78
+```
+
+#### Why it had never worked: AT reentrancy during the send
+
+Before 0.2.70 the session died right after the CONNACK. The 0.2.67 capture (the
+one that made this diagnosable) ended like this:
+
+```text
+CIPSEND 135 -> | OK  |   | +CIPSEND: 0,135,135
+mqtt connected ok
+no '>' prompt for CIPSEND            <- the subscribe, not the CONNECT
+```
+
+The CONNECT was sent, ACKed and answered - so the failure was never DNS, APN, the
+cached broker IP or the shape of the `AT+CIPSEND` ACK. It was **reentrancy on the
+modem UART**: `LteMqttClient::write()` waits for the `>` prompt and then for the
+`+CIPSEND:` ACK inside `readModemUntil()`, and that same loop pumps
+`mqttClient.loop()`. `loop()` calls `available()`, which on an empty RX buffer
+issues its own `AT+CIPRXGET` (see `recvChunk()`). That command landed inside the
+`AT+CIPSEND` exchange, stole the prompt or the ACK, the wait timed out and the
+socket was dropped.
+
+The asymmetry with `state.mqttConnected` is what made the CONNECT succeed and the
+next send fail: the flag is raised only *after* `connect()` returns, so nothing
+pumped during the CONNECT's send and the first `subscribe` was the first send to
+race the pump.
+
+The fix is the `atCommandBusy` guard: `write()` owns the line from the prompt to
+the ACK, `available()` emits no AT while it is set, and `readModemUntil()` does
+not pump (`loop()` can also emit a PINGREQ, which is a write too). Any future
+change to `write()` or `available()` has to preserve that invariant - the pump
+must never talk to the module mid-send.
 
 `stopLtePdp()` teardown is stack-exclusive since 0.2.65. It used to run both
 branches whenever `state.lteDataUp` was set, which under NETOPEN (where the CID is
 1) also sent `AT+CNACT=1,0` - but the CNACT context is always 0, so the module
 answered `ERROR`. That was real noise in the trace, not the root cause.
 
-Since 0.2.66 the client also captures the HEAD of the session (the `CIPSEND` ACKs
-and PubSubClient's `state=N`) into a `handshake` field published alongside the
-tail-only `modem_log` in the `lte_data` event, which is what makes the CONNACK
-failure diagnosable at all.
+#### Instrumentation worth keeping
 
-Until the CONNACK is understood, treat "MQTT over LTE" as unproven rather than
-working: a site whose only path is LTE may well lose the backend.
+Since 0.2.66 the client captures the HEAD of the session (the `CIPSEND` ACKs and
+PubSubClient's `state=N`) into a `handshake` field published alongside the
+tail-only `modem_log` in the `lte_data` event. `modemCallLog` keeps only the tail,
+so in a retry loop the first attempt - the only one that carries the send ACK, the
+CONNACK and PubSubClient's verdict - is always discarded; the `handshake` capture
+is what preserved it and what made this bug findable at all. It clears only once
+published, so a failure that never reaches a successful publish is the one that
+survives.
+
+Still true: `LteMqttClient::write()` talks to `ModemSerial` directly and does
+**not** go through `sendAT()`, so its traffic never appears in the general modem
+dump. That is why the trace above lives in `handshake` and not in `modem_log`.
 
 ## The rule: an interface is only "the internet" if it reaches the broker
 
