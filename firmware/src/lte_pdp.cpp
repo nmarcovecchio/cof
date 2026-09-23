@@ -17,7 +17,19 @@ void finishLteAttempt(bool ok, const String& message) {
   publishLteDataTrace();
 }
 String resolveLteMqttPeer(const char* host) {
-  if (cachedMqttIp != IPAddress((uint32_t)0)) {
+  // The cache is a shortcut, not an authority. It is learned from a LAN connect
+  // and, while MQTT rides LTE, nothing refreshes it: the connect path only caches
+  // when `!lteMqttTransport` and the resolver only adopts a changed answer while
+  // MQTT is down. So a broker that moves leaves a stale address here forever, and
+  // because this branch used to win over the module's own DNS, the LTE connect
+  // kept dialing the dead IP - which took MQTT down entirely, not just the LAN
+  // probes. That healed only through the 6-minute silence reboot.
+  //
+  // A failed connect is the signal that the address may be wrong, so the next
+  // attempt asks the module's DNS instead. Kept as a flag rather than always
+  // re-resolving because AT+CDNSGIP costs an AT round-trip (~10 s timeout) and
+  // the cached value is correct in the common case.
+  if (!lteForceDnsResolve && cachedMqttIp != IPAddress((uint32_t)0)) {
     return cachedMqttIp.toString();
   }
   String resp;
@@ -25,8 +37,21 @@ String resolveLteMqttPeer(const char* host) {
     const String ip = lastQuoted(resp);
     if (ip.length() >= 7 && ip.indexOf('.') > 0 && ip != "0.0.0.0") {
       Serial.println("[lte] DNS " + ip);
+      // Fresh answer from the module: make it the cache, so the LAN probes stop
+      // testing whatever stale address they were on. This is the only path that
+      // can repoint the cache while MQTT is up on LTE.
+      IPAddress parsed;
+      if (parsed.fromString(ip)) {
+        cachedMqttIp = parsed;
+      }
       return ip;
     }
+  }
+  // The module's DNS did not answer. Prefer the stale cached address over the bare
+  // hostname: CIPOPEN wants an IP literal, so a hostname here would fail the open
+  // outright, while a stale IP at least has a chance of still being right.
+  if (cachedMqttIp != IPAddress((uint32_t)0)) {
+    return cachedMqttIp.toString();
   }
   return String(host);
 }

@@ -154,6 +154,10 @@ extern uint32_t ethernetUpAtMs;
 extern uint32_t ethernetHoldoffUntilMs;
 extern IPAddress cachedMqttIp;
 extern IPAddress resolvedBrokerIp;
+// Set when an MQTT connect over LTE has failed, so the next attempt re-resolves
+// the broker through the module's own DNS instead of trusting `cachedMqttIp`.
+// See resolveLteMqttPeer().
+extern bool lteForceDnsResolve;
 extern volatile bool brokerResolveDone;
 extern bool brokerResolveInFlight;
 extern bool brokerResolveFailed;

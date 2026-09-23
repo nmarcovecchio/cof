@@ -180,6 +180,13 @@ void saveMqttConfig(const String& host, int port, const String& deviceId, const 
   state.mqttPassword = password;
   state.mqttConfigured = true;
 
+  // The cached address belongs to the OLD host. Leaving it would make the probes
+  // and the LTE connect dial the previous broker until something failed hard
+  // enough to clear it (see resolveLteMqttPeer). Clearing it makes
+  // serviceBrokerResolve() refill it from the new hostname on the next pass.
+  cachedMqttIp = IPAddress((uint32_t)0);
+  lteForceDnsResolve = false;
+
   preferences.putString("mqttHost", host);
   preferences.putInt("mqttPort", port);
   preferences.putString("mqttDeviceId", deviceId);

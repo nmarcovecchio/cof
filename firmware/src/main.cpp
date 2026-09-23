@@ -58,6 +58,7 @@ uint32_t ethernetUpAtMs = 0;
 uint32_t ethernetHoldoffUntilMs = 0;
 IPAddress cachedMqttIp;
 IPAddress resolvedBrokerIp;
+bool lteForceDnsResolve = false;
 volatile bool brokerResolveDone = false;
 bool brokerResolveInFlight = false;
 bool brokerResolveFailed = false;

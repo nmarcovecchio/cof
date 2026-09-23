@@ -507,6 +507,9 @@ void connectMqttIfNeeded() {
       // retry off and tear the PDP down once it looks hopeless so the next
       // attempt rebuilds it from scratch.
       lteMqttConnectFails++;
+      // The address may be stale (see resolveLteMqttPeer): ask the module's DNS on
+      // the next attempt instead of dialing the same cached IP again.
+      lteForceDnsResolve = true;
       if (lteMqttConnectFails >= 3) {
         lteMqttConnectFails = 0;
         Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
@@ -526,6 +529,8 @@ void connectMqttIfNeeded() {
 
   lanMqttFailCount = 0;
   lteMqttConnectFails = 0;
+  // The address worked, so stop forcing a re-resolve (see resolveLteMqttPeer).
+  lteForceDnsResolve = false;
 
   if (!state.lteMqttTransport) {
     cachedMqttIp = mqttUsesTls() ? mqttTlsClient.remoteIP() : mqttPlainClient.remoteIP();
