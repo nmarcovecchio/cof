@@ -198,7 +198,7 @@ el reconciliador nuevo (`syncRuleAudio`) solo puede podar su propio namespace
 (b) medir `FSMEM` antes/despues de borrar un archivo conocido para saber como
 cuenta; (c) recien entonces decidir si se limpia a mano.
 
-### 8e. Probar el audio pregrabado en hardware (0.2.63)
+### 8e. Probar el audio pregrabado en hardware (0.2.64)
 
 La cadena completa (guardar regla → sintetizar → publicar `call_audio` →
 descargar al modem → reproducir local) esta verificada solo en banco, no en un

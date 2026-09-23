@@ -200,6 +200,25 @@ se "limpia" a ciegas.
 El indice `sha -> archivo` sobrevive un corte de luz porque se guarda en las
 Preferences del ESP32; al arrancar se reconstruye sin volver a bajar los audios.
 
+### Como saber si el audio llego al equipo
+
+La sincronizacion publica un evento `call_audio` despues de aplicar la config, con
+el conteo de lo que paso. Se ve en la pagina del equipo:
+
+```text
+call_audio: 2 on device, 1 downloaded, 1 pruned
+```
+
+- `N on device` — cuantos audios de regla hay en el modem (descargados ahora o de
+  antes). Este es el numero que confirma que quedo guardado.
+- `M downloaded` — bajados en esta pasada. `0` en un re-guardado sin cambios: es
+  lo esperado, no un error.
+- `K pruned` — borrados porque la config ya no los pide.
+- `J failed` — fallaron. El evento sale con severidad `warning`, no `info`.
+
+Sin este evento la unica senal era el log serie, inutil en un equipo sin acceso
+fisico. Un `NOT supported` en la sonda del modem explica un sync que no baja nada.
+
 **Limite:** el ESP32 bufferiza el archivo en RAM antes de pasarlo al modem, con
 un tope de 180 KB. A 12.2 kbps eso da ~118 s de audio por regla; un texto de 400
 caracteres esta muy por debajo. Ademas se topea en 40 archivos distintos por

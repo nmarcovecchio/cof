@@ -717,6 +717,12 @@
                   <span class="badge text-bg-success">soportado</span>
                 {% elif event.type == 'modem_probe' %}
                   <span class="badge text-bg-light border">sonda</span>
+                {% elif event.type == 'call_audio' and 'failed' in (event.message or '') %}
+                  <span class="badge text-bg-warning">audio con fallas</span>
+                {% elif event.type == 'call_audio' and 'pruned' in (event.message or '') %}
+                  <span class="badge text-bg-info">audio podado</span>
+                {% elif event.type == 'call_audio' %}
+                  <span class="badge text-bg-success">audio ok</span>
                 {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
                   <span class="badge text-bg-light border">progreso</span>
                 {% else %}

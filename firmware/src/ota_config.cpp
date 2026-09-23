@@ -459,6 +459,11 @@ static void syncRuleAudio(JsonDocument& doc) {
     return;
   }
 
+  int installed = 0;     // downloaded in this run
+  int preexisting = 0;   // already on the modem, left alone
+  int pruned = 0;        // removed because the config no longer wants them
+  int failed = 0;        // download errors
+
   // 1. Desired set: one entry per distinct audio, keyed by sha16.
   std::map<String, String> desiredUrls;
   std::map<String, bool> desiredDynamic;
@@ -494,6 +499,7 @@ static void syncRuleAudio(JsonDocument& doc) {
     const String key = name.substring(2, name.lastIndexOf('.'));
     state.ruleAudioPaths.erase(key);
     state.ruleAudioDynamic.erase(key);
+    pruned++;
   }
 
   // 3. Download what is missing. Skipping the ones already on the modem keeps
@@ -508,20 +514,41 @@ static void syncRuleAudio(JsonDocument& doc) {
     // then left alone; re-uploading it on every save would waste LTE.
     if (haveFile) {
       state.ruleAudioDynamic[key] = dynamic;
+      preexisting++;
       continue;
     }
     const String modemPath = String("C:/") + kRuleAudioPrefix + key + ".amr";
     const String err = uploadAudioToModem(entry.second, modemPath, key);
     if (err.length() > 0) {
       Serial.printf("[audio] rule audio %s failed: %s\n", key.c_str(), err.c_str());
+      failed++;
       continue;
     }
     state.ruleAudioPaths[key] = modemPath;
     state.ruleAudioDynamic[key] = dynamic;
+    installed++;
   }
 
   persistRuleAudioIndex();
   setStatus("Call audio ready");
+
+  // Report the outcome over MQTT. The sync otherwise only prints to the serial
+  // port, which is unreachable on a device with no physical access - exactly the
+  // deployment this feature is for. One event per sync, not per file, so a
+  // config save with many rules does not flood the event log.
+  if (installed > 0 || pruned > 0 || failed > 0) {
+    String message = String("call_audio: ") + (installed + preexisting) + " on device";
+    if (installed > 0) {
+      message += ", " + String(installed) + " downloaded";
+    }
+    if (pruned > 0) {
+      message += ", " + String(pruned) + " pruned";
+    }
+    if (failed > 0) {
+      message += ", " + String(failed) + " failed";
+    }
+    publishDeviceEvent("call_audio", failed > 0 ? "warning" : "info", message, "");
+  }
 }
 
 static void loadRuleAudioIndex() {

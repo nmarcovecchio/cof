@@ -224,7 +224,7 @@ is a leftover override only.
 Audio assets should be dynamic. A customer may have no audio assets, one shared
 test audio, or different audios per alarm flow.
 
-**Current implementation (0.2.63):** rules with a `call_text` get a
+**Current implementation (0.2.64):** rules with a `call_text` get a
 **pre-recorded** audio asset, synthesized once at config save and stored
 content-addressed (`<sha256>.amr`) in `CALL_AUDIO_DIR`. The config carries a
 `call_audio` block per rule with the stable URL and the modem path
