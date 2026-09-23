@@ -168,7 +168,13 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
     // Pump MQTT on every path. `if (!loop())` below means "PINGRESP missing or
     // socket dead", not "no data available" (loop() returns true when idle), so
     // the return value is the liveness signal we actually want.
-    if (state.mqttConnected) {
+    //
+    // Except while `LteMqttClient::write()` owns the line: this same loop runs
+    // inside its `AT+CIPSEND` prompt/ACK waits, and both things the pump can do
+    // - `available()` issuing `AT+CIPRXGET` and `loop()` emitting a PINGREQ -
+    // are writes to the module that corrupt the exchange. The send is waiting
+    // on the prompt it just paid for; nothing may talk over it.
+    if (state.mqttConnected && !lteMqttClient.atCommandBusy) {
       if (mqttClient.loop()) {
         lastMqttOkMs = millis();
       } else {

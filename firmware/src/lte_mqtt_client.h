@@ -18,6 +18,23 @@ class LteMqttClient : public Client {
  public:
   uint8_t sock = 0;
   bool sockOpen = false;
+
+  // Reentrancy guard for the UART's command mode.
+  //
+  // `write()` sends `AT+CIPSEND`, waits for the `>` prompt and then waits for
+  // the `+CIPSEND:` ACK - three exchanges in which the module owns the line.
+  // Both waits go through `readModemUntil()`, which pumps `mqttClient.loop()`,
+  // and `loop()` calls `available()`, which on an empty RX buffer issues its own
+  // `AT+CIPRXGET` (see `recvChunk()`). Injecting that command in the middle of
+  // the send either swallows the `>` or steals the ACK, `modemWaitForPrompt()`
+  // times out and the socket is torn down.
+  //
+  // Observed in the 2026-09-23 handshake: the MQTT CONNECT (sent while
+  // `state.mqttConnected` was still false, so nothing pumped) completed with a
+  // clean `+CIPSEND: 0,135,135` and a CONNACK, and the very next send - the
+  // `subscribe`, issued after the flag was raised - died at "no '>' prompt".
+  // The pump is what breaks the send, so it is the pump that has to stand down.
+  bool atCommandBusy = false;
   uint8_t rxBuf[512];
   int rxLen = 0;
   int rxPos = 0;
@@ -252,6 +269,9 @@ class LteMqttClient : public Client {
       if (chunk > 1024) {
         chunk = 1024;
       }
+      // Own the line for the whole send: prompt, payload and ACK. `available()`
+      // must not emit AT until this drops or it corrupts the exchange.
+      atCommandBusy = true;
       if (useNetopen()) {
         ModemSerial.print("AT+CIPSEND=");
       } else {
@@ -262,6 +282,7 @@ class LteMqttClient : public Client {
       ModemSerial.print(static_cast<unsigned>(chunk));
       ModemSerial.print("\r\n");
       if (!modemWaitForPrompt(5000)) {
+        atCommandBusy = false;
         noteHandshake("no '>' prompt for CIPSEND");
         sockOpen = false;
         return sent;
@@ -269,6 +290,7 @@ class LteMqttClient : public Client {
       ModemSerial.write(buf + sent, chunk);
       const String token = useNetopen() ? "+CIPSEND:" : "OK";
       const String resp = readModemUntil(15000, token);
+      atCommandBusy = false;
       // Capture the send verdict: this is the step the old trace could never
       // show, because write() is the one AT path that does not go through
       // sendAT(). If the ACK shape differs from what we expect, this is where
@@ -299,6 +321,13 @@ class LteMqttClient : public Client {
     }
     if (rxPos < rxLen) {
       return rxLen - rxPos;
+    }
+    // A `write()` in flight owns the UART until its ACK lands. Issuing
+    // `AT+CIPRXGET` here would land inside the `AT+CIPSEND` exchange and break
+    // it (see `atCommandBusy`). Report "nothing buffered" instead so
+    // PubSubClient's pump keeps running without touching the module.
+    if (atCommandBusy) {
+      return 0;
     }
     pumpUrcs();
     if (!dataInd && useNetopen() && millis() - lastRxPollMs >= 250) {
@@ -347,6 +376,9 @@ class LteMqttClient : public Client {
       }
     }
     sockOpen = false;
+    // A write() interrupted mid-exchange leaves this set; a stuck guard would
+    // silently disable all inbound reads for the next session.
+    atCommandBusy = false;
     drainRx();
   }
 
