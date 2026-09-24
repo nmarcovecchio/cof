@@ -423,6 +423,39 @@ es real y el audio por LTE se puede implementar con ella. Si `HTTPACTION` devuel
 `status` 0 o no llega la URC, el problema es el PDP/CID del stack HTTP y hay que
 resolverlo antes de tocar el camino del audio.
 
+#### Decision 2026-09-23: NO implementar. El hotspot cierra el caso.
+
+Evaluado a fondo al confirmarse que un equipo solo-LTE no se puede OTA-ear (§0).
+**Conclusion: no se implementa esta via**, por el hotspot.
+
+**El hotspot resuelve el OTA sin codigo.** `lanConnected()` es
+`ethernetConnected || wifiConnected`, asi que el firmware trata WiFi como LAN para
+el OTA. Un tecnico prende un hotspot en el sitio, el operador carga SSID/password
+desde el panel (comando MQTT que **si** viaja por LTE), el equipo asocia, y el OTA
+sale por el camino normal. Cero codigo nuevo, cero riesgo nuevo. El aviso del
+panel ya lo dice: *"Enchufa Ethernet, o dale una WiFi con internet"*.
+
+**Por que no vale la pena la via del modem**, aunque exista en hardware:
+
+- **El modem no puede flashear al ESP32.** Los bytes tienen que volver por el UART
+  a `115200` (`modem_at.cpp:401`). Bajar 1.15 MB al `C:` del modem y despues
+  leerlos de vuelta por `AT+FSREAD` troceado son **minutos**, contra un par de
+  segundos por Ethernet. Es un camino de descarga ~30x mas lento, y con el UART
+  ocupado todo ese rato - el mismo UART que MQTT necesita para no caerse.
+- **Es un code path nuevo entero** para usar en una sola cosa.
+- **El riesgo no es el argumento** (esto se descarto explicitamente): `performOta()`
+  hashea al vuelo y hace `Update.abort()` si no coincide, y el rollback de
+  `serviceOtaRollbackGuard()` exige MQTT OK + 20 s de uptime o vuelve a la imagen
+  vieja. No se brickearia. El argumento es costo/beneficio, no seguridad.
+- **Nadie actualiza firmware en una emergencia.** Siendo el OTA un evento
+  planificado, en ese momento planificado tambien se puede prender un hotspot.
+
+**Cuando habria que revisarlo:** sitios **desatendidos, sin internet fijo y sin
+nadie que pueda ir** (un contenedor, una camara en el campo). Hoy no hay ninguno.
+Si aparecen, el orden sugerido es **PPP del modem** (le da una interfaz lwIP real
+al ESP32 y `HTTPClient` funciona sin tocar nada mas: sirve para OTA, audio y
+manifest a la vez) antes que esta via, que solo arregla un caso de uso.
+
 ### 8d. Tope de audios por equipo (resuelto 0.2.68, silencioso hasta 0.2.67)
 
 El equipo guarda **40 audios distintos** (`kRuleAudioMax` en `ota_config.cpp`).
