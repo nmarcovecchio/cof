@@ -131,16 +131,32 @@ y se recupero solo tras un reinicio por watchdog. Nunca se supo si fue watchdog,
 panic o `CFUN`. Instrumentar: loguear `esp_reset_reason()`, `CEREG`, `CPSI` y
 `CSQ` en el primer status post-boot.
 
-**Segunda confirmacion en hardware: 2026-09-24 ~15:52 -03.** Estando por Ethernet
-y con MQTT sano (telemetria fluyendo cada 60 s), el modulo volvio a reportar
-`NO SERVICE` intermitente (`CSQ 99,99` en `18:39:54` y `18:44:28` UTC, con senal
-normal entre medio) y el equipo **rebooteo entero**: `uptime_s` paso de `68218` a
-`15` (`18:50:34 -> 18:52:17` UTC). La telemetria descarta el watchdog de silencio
-MQTT (no hubo hueco de publicacion), asi que la hipotesis es la escalera de radio
-llegando al **stage 5 = `ESP.restart()`** (~14 min desde el primer NO SERVICE,
-consistente con 5 stages a 150 s + ~45 s de `waitForRadioService` por stage). El
-usuario vio "reset" en la OLED, que es el footer de `resetModemRadio()`. Sin
-`esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
+**Segunda confirmacion en hardware: 2026-09-24.** Ese dia el modulo reporto
+`NO SERVICE` (`CSQ 99,99`) en **tres clusters** separados, todos con MQTT sano por
+Ethernet (telemetria fluyendo cada 60 s, sin huecos):
+
+- `11:40:57 / 11:44:01 / 11:51:57 / 11:53:04` -03 (`14:40-14:53` UTC)
+- `14:06:13 / 14:09:03 / 14:10:03` -03 (`17:06-17:10` UTC)
+- `15:39:54 / 15:44:28` -03 (`18:39-18:44` UTC)
+
+Solo el ultimo cluster termino en **reboot entero del ESP32**: `uptime_s` paso de
+`68218` a `15` (`18:50:34 -> 18:52:17` UTC, o sea ~15:52 -03), consistente con la
+escalera de radio llegando al **stage 5 = `ESP.restart()`**. La telemetria
+descarta el watchdog de silencio MQTT (no hubo hueco de publicacion), asi que la
+hipotesis es la escalera y no una caida de red.
+
+**Hallazgo sobre la OLED (corrige el primer analisis):** el usuario vio "reset" en
+la OLED **al llegar a las 15:00 -03, antes de tocar nada**, no a las 15:52. Eso es
+el footer `setStatus("Modem reset")` que `resetModemRadio()` escribe al **arranque
+de cada stage**, y es **pegajoso**: no se limpia cuando la radio se recupera
+(`pollModem()` solo resetea `modemRecoveryStage = 0` y hace `return`, sin reescribir
+el status), y el path de publicacion de telemetria no toca `setStatus`. Con lo cual
+"reset" puede quedar en pantalla **horas** despues de que el modem ya esta sano
+(lo dejo pegado el cluster de las 11:40 o 14:06, no el reboot de las 15:52). Es un
+bug cosmetico (status sticky) que conviene separar: al recuperar servicio deberia
+volver a `"Network OK"`/`"MQTT OK"`.
+
+Sin `esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
 instrumentacion de arriba sigue siendo el cierre real de este item.
 
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
