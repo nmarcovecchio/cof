@@ -131,6 +131,18 @@ y se recupero solo tras un reinicio por watchdog. Nunca se supo si fue watchdog,
 panic o `CFUN`. Instrumentar: loguear `esp_reset_reason()`, `CEREG`, `CPSI` y
 `CSQ` en el primer status post-boot.
 
+**Segunda confirmacion en hardware: 2026-09-24 ~15:52 -03.** Estando por Ethernet
+y con MQTT sano (telemetria fluyendo cada 60 s), el modulo volvio a reportar
+`NO SERVICE` intermitente (`CSQ 99,99` en `18:39:54` y `18:44:28` UTC, con senal
+normal entre medio) y el equipo **rebooteo entero**: `uptime_s` paso de `68218` a
+`15` (`18:50:34 -> 18:52:17` UTC). La telemetria descarta el watchdog de silencio
+MQTT (no hubo hueco de publicacion), asi que la hipotesis es la escalera de radio
+llegando al **stage 5 = `ESP.restart()`** (~14 min desde el primer NO SERVICE,
+consistente con 5 stages a 150 s + ~45 s de `waitForRadioService` por stage). El
+usuario vio "reset" en la OLED, que es el footer de `resetModemRadio()`. Sin
+`esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
+instrumentacion de arriba sigue siendo el cierre real de este item.
+
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 
 `pollModem()` (`firmware/src/main.cpp`) tiene gate `!state.lteMqttTransport`:
@@ -182,6 +194,15 @@ durante una salida por LTE, y el gate no es el que este texto sugiere:
 Falta confirmarlo con la instrumentacion de §6 (`esp_reset_reason()` y un log por
 stage), porque hoy no se puede distinguir "el modulo se colgo solo" de "la escalera
 lo reinicio".
+
+**Segundo dato en hardware (mismo dia, 2026-09-24 ~15:52 -03, ver §6).** Esta vez
+la escalera corrio **por Ethernet** (no en la ventana del attach LTE) y escalo
+hasta el final: el equipo rebooteo entero (`uptime_s` 68218 -> 15). Refuerza que el
+gate `!lteMqttTransport` no protege contra una escalera que sube peldaños por
+Ethernet y termina en `ESP.restart()`; el unico "escudo" es que `radioReportsService()`
+vuelva a dar true y resetee `modemRecoveryStage`. El riesgo real de §6c se mantiene
+para el caso **solo-LTE**: ahi el gate si deja al modem sin recuperacion de radio
+mientras MQTT viaja por el socket AT.
 
 ### 6d. RESUELTO en 0.2.71: la IP cacheada del broker
 
