@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.72** (en `ota/manifest.json`
+Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.73** (en `ota/manifest.json`
 y corriendo en `cof-test`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
@@ -152,9 +152,11 @@ de cada stage**, y es **pegajoso**: no se limpia cuando la radio se recupera
 (`pollModem()` solo resetea `modemRecoveryStage = 0` y hace `return`, sin reescribir
 el status), y el path de publicacion de telemetria no toca `setStatus`. Con lo cual
 "reset" puede quedar en pantalla **horas** despues de que el modem ya esta sano
-(lo dejo pegado el cluster de las 11:40 o 14:06, no el reboot de las 15:52). Es un
-bug cosmetico (status sticky) que conviene separar: al recuperar servicio deberia
-volver a `"Network OK"`/`"MQTT OK"`.
+(lo dejo pegado el cluster de las 11:40 o 14:06, no el reboot de las 15:52).
+
+**El status sticky quedo arreglado en 0.2.73:** `pollModem()` ahora restaura
+`"Network OK"` cuando el status actual es `"Modem reset"`/`"Restart (modem)"` y la
+radio volvio a reportar servicio.
 
 Sin `esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
 instrumentacion de arriba sigue siendo el cierre real de este item.
@@ -268,9 +270,9 @@ sea que la cache quedaba apuntando al broker **anterior**. Ahora la limpia, y
 
 ---
 
-### 6e. WiFi sano tarda en promoverse desde LTE, y no se reporta (cosmetico)
+### 6e. WiFi sano tarda en promoverse desde LTE, y no se reporta
 
-**Estado 2026-09-23: NO se toca el firmware. Solo se corrigio la documentacion.**
+**Estado 2026-09-24: RESUELTO en 0.2.73 (el fix de bajo riesgo, sin flag optimista).**
 
 **El sintoma.** `markEthernetUp()` marca la salud optimista al obtener IP:
 
@@ -301,12 +303,15 @@ es solo que prueba tarde.
 **Costo real:** ~13 s de LTE de mas en una transicion poco frecuente. No rompe nada,
 no pierde datos, no deja el equipo incomunicado. Cosmetico.
 
-**Si algun dia molesta**, el fix de bajo riesgo no es el flag optimista sino resetear
-el throttle de `pollWifiPath()` al recibir `GOT_IP` estando en LTE, para que pruebe
-en la pasada siguiente en vez de esperar hasta 10 s. Eso baja la espera a ~3 s **sin
-asumir salud**: el probe sigue decidiendo. Es viable porque `pollWifiPath()` corre
-antes de `serviceNetworkPaths()` en el loop, y desde 0.2.71 `cachedMqttIp` queda
-seteada tras un connect por LTE, asi que su gate de IP no lo bloquea.
+**Fix aplicado (0.2.73).** El fix de bajo riesgo, no el flag optimista: en
+`ARDUINO_EVENT_WIFI_STA_GOT_IP` se limpia `wifiProbeFails` y, si MQTT va por LTE
+(`state.lteMqttTransport`), se resetea `lastWifiProbeMs = 0` para que `pollWifiPath()`
+pruebe en la pasada siguiente en vez de esperar hasta 10 s. Eso baja la espera a
+~3 s (settle) **sin asumir salud**: el probe sigue decidiendo, asi que un AP sin
+uplink no se promueve. Es viable porque `pollWifiPath()` corre antes de
+`serviceNetworkPaths()` en el loop, y desde 0.2.71 `cachedMqttIp` queda seteada tras
+un connect por LTE, asi que su gate de IP no lo bloquea. Compilado, sin verificar en
+hardware (igual que 0.2.71/0.2.72).
 
 ### 6f. RESUELTO en 0.2.72: `canUseLan()` hacia probes bloqueantes en el hot path
 

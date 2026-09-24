@@ -689,6 +689,15 @@ void onNetworkEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
       state.wifiConnected = true;
       state.wifiSsid = WiFi.SSID();
       state.wifiIpAddress = WiFi.localIP().toString();
+      // A fresh association starts clean: clear the stale probe fail count, and
+      // if MQTT is riding LTE, probe WiFi on the next loop pass instead of
+      // waiting for the next 10 s throttle tick. A healthy WiFi then wins back
+      // the primary path in ~3 s (settle) instead of ~13 s. The probe still
+      // decides, so an AP with no uplink is not falsely promoted (see §6e).
+      wifiProbeFails = 0;
+      if (state.lteMqttTransport) {
+        lastWifiProbeMs = 0;
+      }
       if (!state.ethernetConnected) {
         applyPreferredRoute();
         requestMqttBounce("wifi got ip");

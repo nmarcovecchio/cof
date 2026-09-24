@@ -270,6 +270,13 @@ void pollModem() {
   if (state.networkRegistered && radioReportsService()) {
     modemRecoveryStage = 0;
     lastModemRecoveryMs = 0;
+    // resetModemRadio() wrote "Modem reset" to the OLED and nothing cleared it
+    // once the radio recovered, so a healthy modem kept showing a stale footer
+    // for hours (observed 2026-09-24). Restore it here instead of leaving the
+    // recovery ladder's text stuck on screen.
+    if (state.statusLine == "Modem reset" || state.statusLine == "Restart (modem)") {
+      setStatus("Network OK");
+    }
     return;
   }
   if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {

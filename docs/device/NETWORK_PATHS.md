@@ -187,10 +187,10 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
 
 ## Switching matrix: which transitions work
 
-Audited 2026-09-23 by reading the code. §6d and §6f are fixed (fw 0.2.71/0.2.72),
-§6e is documented-only by choice, §6g is dead code, §6h is a hardware finding
-(2026-09-24) still open. "Healthy" means the interface reaches the broker; a link
-with DHCP but no uplink is **not** healthy.
+Audited 2026-09-23 by reading the code, re-audited 2026-09-24. §6d and §6f are
+fixed (fw 0.2.71/0.2.72), §6e is fixed in 0.2.73, §6g is dead code, §6h is a
+hardware finding (2026-09-24) still open. "Healthy" means the interface reaches
+the broker; a link with DHCP but no uplink is **not** healthy.
 
 | From | Event | Switches? | Notes |
 |---|---|---|---|
@@ -198,9 +198,9 @@ with DHCP but no uplink is **not** healthy.
 | Ethernet | link up, no internet | yes | demoted by probe (2 fails) or a failed MQTT connect |
 | WiFi | associated, no internet | yes | `pollWifiPath()` demotes; LTE takes over |
 | WiFi | AP drops | yes | `WIFI_STA_DISCONNECTED` -> LTE |
-| WiFi | healthy AP appears | yes, but slow | data point: not promoted optimistically; probe decides (§6e) |
+| WiFi | healthy AP appears | yes, ~3 s | not optimistic; probe decides. 0.2.73 probes on the next pass after GOT_IP (§6e) |
 | LTE | Ethernet healthy again | yes | recovery probe (60 s) + 3 s settle |
-| LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()`, up to ~13 s (§6e) |
+| LTE | WiFi associates healthy | **yes, ~3 s** | `pollWifiPath()` probes on the next pass since 0.2.73 (§6e) |
 | LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
 | any | LAN up but degraded, on LTE | yes, throttled | `canUseLan()` probes at most every 10 s (§6f) |
 | Ethernet | cable out, LTE attach | **flaky (2026-09-24)** | modem can reset mid-attach and come back with echo on; the first `AT+CIPOPEN` then loses its tag and MQTT fails ~6 min (§6h) |
@@ -222,7 +222,8 @@ Four things are worth knowing before touching any of this:
   asymmetry with `applyPreferredRoute()` is therefore an oversight, not a design.
   Do **not** "fix" it by adding the optimistic flag: a WiFi associated to a router
   with no uplink would then look healthy and hold LTE off, which is the exact bug
-  0.2.55 fixed. Waiting for a probe is correct; it is only slow (~13 s, see §6e).
+  0.2.55 fixed. Waiting for a probe is correct; since 0.2.73 the probe runs on the
+  next loop pass after `GOT_IP` while on LTE, so the promotion is ~3 s (§6e).
 - **`cachedMqttIp` is a shortcut, not an authority.** While MQTT rides LTE nothing
   used to refresh it - the connect path only caches when `!lteMqttTransport`, and
   the resolver only adopts a change while MQTT is down. A stale entry poisoned both
