@@ -188,9 +188,9 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
 ## Switching matrix: which transitions work
 
 Audited 2026-09-23 by reading the code. §6d and §6f are fixed (fw 0.2.71/0.2.72),
-§6e is documented-only by choice, §6g is dead code. None of it was validated on
-hardware. "Healthy" means the interface reaches the broker; a link with DHCP but no
-uplink is **not** healthy.
+§6e is documented-only by choice, §6g is dead code, §6h is a hardware finding
+(2026-09-24) still open. "Healthy" means the interface reaches the broker; a link
+with DHCP but no uplink is **not** healthy.
 
 | From | Event | Switches? | Notes |
 |---|---|---|---|
@@ -203,9 +203,19 @@ uplink is **not** healthy.
 | LTE | WiFi associates healthy | **delayed** | waits for `pollWifiPath()`, up to ~13 s (§6e) |
 | LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
 | any | LAN up but degraded, on LTE | yes, throttled | `canUseLan()` probes at most every 10 s (§6f) |
+| Ethernet | cable out, LTE attach | **flaky (2026-09-24)** | modem can reset mid-attach and come back with echo on; the first `AT+CIPOPEN` then loses its tag and MQTT fails ~6 min (§6h) |
 
-Three things are worth knowing before touching any of this:
+Four things are worth knowing before touching any of this:
 
+- **A modem that reboots mid-attach leaves the AT channel in echo mode**, and the
+  firmware only ever sends `ATE0` from `initModem()`. Since `state.modemReady`
+  stays true, nothing re-applies it, so the next `AT+CIPOPEN` answers with the
+  echoed command plus a bare `OK` and **no `+CIPOPEN:` tag** - `sendAT()` times out
+  and the connection fails before any MQTT byte is written. The modem's boot URCs
+  (`*ATREADY`, `*ISIMAID`, `+CPIN: READY`) are not recognised anywhere in the
+  firmware either, so a spontaneous module reboot is silent. See §6h. The OLED
+  footer **"Modem reset"** is the tell that `resetModemRadio()` ran - there is no
+  "MQTT reset" string in the firmware.
 - **`wifiInternetUp` is never set on association, and that is *not* deliberate.** The
   commit that introduced the flags (fw 0.2.55) set them "optimistically on IP";
   `markEthernetUp()` does, `ARDUINO_EVENT_WIFI_STA_GOT_IP` was left out. The
@@ -425,6 +435,19 @@ comes back.
 if `[modem] recovery 5/5` ever appears the hardware needs attention: module
 power, antenna, or SIM seating. If the module returns from stage 4 with
 `+CPIN: NOT READY`, that points at SIM contact or supply, not firmware.
+
+**The ladder also runs while coming up on LTE, and that is when it hurts
+(observed 2026-09-24, §6h).** The `pollModem()` gate is
+`!state.lteMqttTransport` - i.e. "MQTT is already riding the AT socket", **not**
+"a PDP is up". Between `lteDataUp` and the MQTT reroute, `pollModem()` runs
+normally, so if the service check looks bad in that window the ladder can fire and
+**stage 4 is `AT+CFUN=1,1`, a module reset in the middle of the attach**. The
+module then reboots under an open `AT+CIPOPEN`, its boot URCs (`*ATREADY`,
+`*ISIMAID`, `+CPIN: READY`) land inside the response and the open loses the
+`+CIPOPEN:` tag. Add the echo problem (the firmware never re-sends `ATE0` because
+`state.modemReady` is still true) and the first connect fails until the module's
+next clean attempt. The OLED footer **"Modem reset"** is the evidence that the
+ladder ran. See §6h(b) in `docs/ops/BACKLOG.md`.
 
 ## Why 20 s telemetry, in one line
 

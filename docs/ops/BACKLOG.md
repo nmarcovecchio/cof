@@ -1,7 +1,7 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-23**. Ultimo firmware publicado: **0.2.70** (desplegado en el
-VPS y verificado en `cof-test`).
+Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.72** (en `ota/manifest.json`
+y corriendo en `cof-test`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -164,6 +164,25 @@ falta una via que no use el UART compartido: leer si el socket AT sigue vivo (un
 sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la escalera.
 Decidir junto con §4.
 
+**Confirmado en hardware el 2026-09-24 (ver §6h).** La escalera **si corre**
+durante una salida por LTE, y el gate no es el que este texto sugiere:
+
+- El gate real es `!state.lteMqttTransport` (MQTT ya montado sobre el socket AT),
+  **no** `state.lteDataUp` ni "hay un attach en curso". Entre que el PDP sube
+  (`lteDataUp`) y que MQTT se reencamina, `pollModem()` corre normalmente.
+- En ese hueco la escalera puede disparar y su **stage 4 es `AT+CFUN=1,1`**, o sea
+  un reinicio del modulo en medio del attach. Los URC de arranque del A7672
+  (`*ATREADY`, `*ISIMAID`, `+CPIN: READY`) caen entonces dentro de la respuesta de
+  un `AT+CIPOPEN` y lo rompen. Es la hipotesis principal del evento del 2026-09-24.
+- Corolario: la pantalla OLED con el footer **"Modem reset"** es la evidencia de
+  que la escalera se esta ejecutando (`setStatus()` en `resetModemRadio()`). Ese
+  footer, y no un string "MQTT reset" que no existe en el firmware, es lo que hay
+  que buscar la proxima vez.
+
+Falta confirmarlo con la instrumentacion de §6 (`esp_reset_reason()` y un log por
+stage), porque hoy no se puede distinguir "el modulo se colgo solo" de "la escalera
+lo reinicio".
+
 ### 6d. RESUELTO en 0.2.71: la IP cacheada del broker
 
 **Resuelto y compilado (sin verificar en hardware).** La correccion importante de
@@ -300,6 +319,69 @@ setea `wifiBackupDueMs`, `maintainWifiBackup()` retorna en su primera linea.
 No es un bug de switching, pero engana al que lee: parece que existe un respaldo de
 WiFi temporizado y no existe. Sacarlo o conectarlo.
 
+### 6h. El eco del modem tras un reinicio rompe el `AT+CIPOPEN`, y filtra el CONNECT
+
+**Hallazgo 2026-09-24, en hardware (`cof-test`, 0.2.72).** Al pasar de Ethernet a
+LTE, MQTT por LTE fallo ~6 min. El evento `lte_data` del panel (15:20:23 -03) trae
+el `handshake` completo y permite reconstruir la secuencia:
+
+```text
+open mqtt.callonfail.com.ar:1883 netopen
+CIPOPEN no response: AT+CIPOPEN=0,"TCP","54.207.204.86",1883\r\r\nOK\r\n
+\u0000\r\n*ATREADY: 1\r\n\r\n*ISIMAID: "A0000000871004FF54F00189000001FF"\r\n\r\n
++CPIN: READY\r\n\r\nSMS DONE\r\n ... +CGEV: EPS PDN ACT 1
+mqtt connect failed, state=-2
+open mqtt.callonfail.com.ar:1883 netopen
+CIPOPEN err 2: AT+CIPOPEN=0,"TCP","54.207.204.86",1883
++CIPOPEN: 0,2
+mqtt connect failed, state=-2
+...
+CIPOPEN ok 54.207.204.86
+```
+
+Lectura:
+
+1. **El modulo se reinicio en medio del primer `CIPOPEN`.** `*ATREADY` / `*ISIMAID`
+   / `+CPIN: READY` son los URC de arranque del A7672 y no aparecen en operacion
+   normal. `state=-2` (`MQTT_CONNECT_FAILED`) confirma que el TCP nunca llevo el
+   CONNECT: no fue DNS, APN ni credenciales.
+2. **El reinicio dejo el modulo en eco.** La respuesta llega con el comando
+   devuelto y un `OK` suelto, **sin el tag `+CIPOPEN:`** que `sendAT()` espera, mas
+   bytes de control (`\u0000`, `\u0001`). Eso es exactamente "eco ON".
+3. **Por que el firmware no lo apaga de nuevo.** `ATE0` se manda una sola vez,
+   dentro de `initModem()` (`modem_at.cpp:421`), y `state.modemReady` sigue en
+   `true`, asi que `initModem()` no se re-ejecuta nunca. **El firmware no reconoce
+   `*ATREADY` en ningun lado** (grep: 0 matches), asi que tampoco se entera de que
+   el modulo se reinicio.
+
+**Hipotesis principal de la causa del reinicio: la propia escalera.** Ver §6c,
+confirmado en hardware: durante la ventana entre `lteDataUp` y el reencaminado de
+MQTT, `pollModem()` corre, y el **stage 4 de `resetModemRadio()` es `AT+CFUN=1,1`**,
+que es un reinicio del modulo. El usuario vio en la OLED el footer **"Modem reset"**
+(`setStatus()` en `resetModemRadio()`), que es la evidencia directa de que la
+escalera corrio. No se puede distinguir de un cuelgue espontaneo sin la
+instrumentacion de §6.
+
+**Dos efectos a arreglar:**
+
+- **(a) Robustez:** re-aplicar `ATE0` cuando el modulo responde con eco, y/o
+  reconocer `*ATREADY` como "el modulo se reinicio" -> `initModem()` de nuevo.
+  Hoy un reinicio del modulo deja el firmware hablandole mal el resto del arranque.
+- **(b) SEGURIDAD - fuga de credencial:** el `verdict` que se guarda en el
+  `handshake` incluye los **bytes binarios del CONNECT MQTT** (client id, will,
+  usuario y **password en texto plano**), porque el eco los devuelve. Con el
+  default `change-me-device-mqtt` no se filtro nada real, pero con la credencial
+  puesta **el panel la muestra**. Ademas esos bytes de control son los que **rompen
+  el JSON**: el worker lo envuelve en `{"raw": ...}` (`mqtt_worker.py:91`), el
+  evento se guarda como `event` / "Sin mensaje" y **pierde su `severity: warning`**
+  (por eso el fallo aparece en el panel como `info`, ver §7).
+
+**Como cerrarlo:** (a) `sendAT` que detecte el eco y re-mande `ATE0`; tratar
+`*ATREADY` como reseteo de modulo. (b) En `LteMqttClient::write()`, no volcar la
+respuesta cruda al `handshake` cuando el chunk es el CONNECT: guardar solo la forma
+(el `+CIPSEND: 0,n,n` y el veredicto), no el payload. Y nunca loguear el eco de un
+`AT+CIPSEND` con datos.
+
 ---
 
 ## P1 — Backend / panel
@@ -308,8 +390,21 @@ WiFi temporizado y no existe. Sacarlo o conectarlo.
 
 Pendiente de la lista original de 0.2.55 y **nunca se hizo**: entrar a
 `app.callonfail.com.ar` y encontrar el error del modem que reporto el usuario.
-Requiere acceso al panel; el agente **no** tiene ni debe tener la credencial
-(ver §Secretos). Lo mas util es pegar el error en el chat.
+
+**Resuelto el 2026-09-24 en la parte de "encontrar el rastro".** El usuario paso
+la credencial en el chat y el panel si guarda la traza: el evento `lte_data`
+contiene el `handshake` (head del intento MQTT) y el `modem_log` (ring del attach),
+y la vista de dispositivo los muestra en la tarjeta "Modem". Ver §6h para el
+hallazgo que salio de ahi.
+
+Queda pendiente lo de fondo: el evento llego **mal clasificado** (`event`, mensaje
+"Sin mensaje", severity perdida) porque el payload no era JSON valido - el eco del
+modem metio bytes de control (`mqtt_worker.py:91` lo envuelve en `{"raw": ...}`).
+Eso es parte de §6h(b): mientras el `handshake` capture el eco crudo del CONNECT,
+el trace que mas importa es justo el que no se puede leer en el panel.
+
+Nota de proceso: la credencial del panel se pasa **en el chat**, nunca al repo (ver
+§Secretos).
 
 ### 8. Verificar que las alarmas de corte disparen
 
