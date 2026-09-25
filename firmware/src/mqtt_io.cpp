@@ -290,6 +290,16 @@ void publishDeviceStatus(const char* status, bool retained) {
   publishMqttJson("status", doc, retained, 1);
 }
 void deferDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId) {
+  // Coalesce duplicates: the radio recovery ladder and the LTE trace can emit the
+  // same message repeatedly while MQTT is down, and without this the deferred
+  // queue fills with near-identical events that then flush in a burst on
+  // reconnect (13x "step 1/5" observed 2026-09-25). Only the newest copy matters.
+  for (size_t i = 0; i < deferredEventCount; i++) {
+    if (deferredEvents[i].type == type && deferredEvents[i].message == message &&
+        deferredEvents[i].severity == severity) {
+      return;
+    }
+  }
   if (deferredEventCount >= kDeferredEventMax) {
     // Keep the newest: a fresh command result matters more than a stale trace.
     Serial.printf("[event] deferred queue full, dropping oldest (%s)\n", deferredEvents[0].type.c_str());

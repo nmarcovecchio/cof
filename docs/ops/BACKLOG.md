@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.74** (en `ota/manifest.json`
+Estado: **2026-09-25**. Ultimo firmware publicado: **0.2.75** (en `ota/manifest.json`
 y corriendo en `cof-test`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
@@ -164,6 +164,31 @@ el status), y el path de publicacion de telemetria no toca `setStatus`. Con lo c
 **El status sticky quedo arreglado en 0.2.73:** `pollModem()` ahora restaura
 `"Network OK"` cuando el status actual es `"Modem reset"`/`"Restart (modem)"` y la
 radio volvio a reportar servicio.
+
+**Tercera confirmacion en hardware: 2026-09-25 (LTE).** Con Ethernet desenchufado
+(~14:00 -03) y MQTT intentando salir por LTE, el modem **flapeo** entre `NO SERVICE`
+y servicio **13 veces en ~83 min** (13 eventos `modem_recovery step 1/5` en el
+panel, todos al mismo timestamp porque se diferieron y flushearon en rafaga al
+reconectar MQTT). El modem en el fondo estaba **sano**: el trace final muestra
+`+CPSI: LTE,Online`, `CSQ 30` (senal mediocre, BAND4 2100MHz), IP asignada y
+`CIPOPEN ok`. Dos efectos detectados, ambos arreglados en **0.2.75**:
+
+- **Falta de histeresis en la escalera.** Un solo `radioReportsService() == true`
+  reseteaba `modemRecoveryStage = 0`, asi que cada flap re-corria el **step 1**
+  (`AT+CGATT=0/1`, detach/attach disruptivo) en vez de escalar o estabilizarse.
+  Con senal marginal esto amplifica cada micro-corte en una caida de ~45 s.
+  **Fix:** la etapa solo se limpia tras `kModemRecoveryHoldMs` (60 s) de servicio
+  sostenido (`modemHealthySinceMs`).
+- **Spam de eventos.** `publishDeviceEvent("modem_recovery")` corria en cada step
+  con MQTT caido, se encolaba y flusheaba en rafaga. **Fix:** solo se publican los
+  bordes del episodio ("recovery started" en step 1, "recovery exhausted" en step
+  5), con rate-limit de `kModemRecoveryEventMinIntervalMs` (10 min), y
+  `deferDeviceEvent()` ahora descarta duplicados (type+severity+message).
+
+Sigue abierto lo de fondo: **por que el modem pierde servicio 13 veces** con senal
+marginal. El `reset_reason` y el evento por etapa ya permiten distinguir la
+proxima vez si la escalera llega a `ESP.restart()` o si es RF del sitio. La senal
+`CSQ 30` / BAND4 en interior es la hipotesis principal (ambiental, no firmware).
 
 Sin `esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
 instrumentacion de arriba sigue siendo el cierre real de este item.

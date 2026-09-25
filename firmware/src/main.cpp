@@ -126,6 +126,12 @@ uint32_t lastEthRecoverProbeMs = 0;
 bool ethRecoverPending = false;
 uint8_t modemRecoveryStage = 0;
 uint32_t lastModemRecoveryMs = 0;
+// Anti-flap hysteresis (see kModemRecoveryHoldMs): when the radio reports
+// healthy, this records for how long it has done so. The ladder stage is only
+// cleared after the hold elapses, so a marginal signal that flaps NO SERVICE
+// <-> service does not re-run the disruptive step 1 on every flap.
+uint32_t modemHealthySinceMs = 0;
+uint32_t lastModemRecoveryEventMs = 0;
 uint32_t ltePreemptSinceMs = 0;
 uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
@@ -287,17 +293,30 @@ void pollModem() {
   // while Ethernet, WiFi and LTE all looked "available". Escalate a modem reset
   // from the cheapest step, spaced out so one attempt has time to take effect.
   if (state.networkRegistered && radioReportsService()) {
-    modemRecoveryStage = 0;
-    lastModemRecoveryMs = 0;
-    // resetModemRadio() wrote "Modem reset" to the OLED and nothing cleared it
-    // once the radio recovered, so a healthy modem kept showing a stale footer
-    // for hours (observed 2026-09-24). Restore it here instead of leaving the
-    // recovery ladder's text stuck on screen.
+    // The footer "Modem reset" is cosmetic and can clear immediately.
     if (state.statusLine == "Modem reset" || state.statusLine == "Restart (modem)") {
       setStatus("Network OK");
     }
+    // The ladder stage, however, only clears after the radio has stayed healthy
+    // for kModemRecoveryHoldMs. A single good read on a flapping radio must not
+    // reset the escalation: that re-ran step 1 (CGATT detach/attach) every flap
+    // and amplified a marginal-signal hiccup into a ~45 s outage (13x "step 1/5"
+    // observed 2026-09-25). See kModemRecoveryHoldMs.
+    if (modemRecoveryStage > 0) {
+      const uint32_t healthyNow = millis();
+      if (modemHealthySinceMs == 0) {
+        modemHealthySinceMs = healthyNow == 0 ? 1 : healthyNow;
+      } else if (healthyNow - modemHealthySinceMs >= kModemRecoveryHoldMs) {
+        modemRecoveryStage = 0;
+        lastModemRecoveryMs = 0;
+        modemHealthySinceMs = 0;
+      }
+    } else {
+      modemHealthySinceMs = 0;
+    }
     return;
   }
+  modemHealthySinceMs = 0;
   if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
     return;
   }
@@ -314,11 +333,18 @@ void pollModem() {
   Serial.printf("[modem] no service, recovery step %u/%u\n",
                 modemRecoveryStage,
                 static_cast<unsigned>(kModemRecoveryMaxStage));
-  // Surface the escalation to the panel too, so a remote site shows how far the
-  // ladder got. publishDeviceEvent() defers it if MQTT is down (see §6).
-  publishDeviceEvent("modem_recovery", "warning",
-                     String("Radio NO SERVICE, recovery step ") + String(modemRecoveryStage) +
-                         "/" + String(kModemRecoveryMaxStage));
+  // Surface only the episode boundaries to the panel, and rate-limit them: the
+  // ladder runs while MQTT is down, so per-step events pile up in the deferred
+  // queue and flush in a burst on reconnect (13x "step 1/5" observed 2026-09-25).
+  // Intermediate steps stay on the OLED footer and the serial log.
+  if ((modemRecoveryStage == 1 || modemRecoveryStage >= kModemRecoveryMaxStage) &&
+      (lastModemRecoveryEventMs == 0 || now - lastModemRecoveryEventMs >= kModemRecoveryEventMinIntervalMs)) {
+    lastModemRecoveryEventMs = now == 0 ? 1 : now;
+    publishDeviceEvent("modem_recovery", "warning",
+                       modemRecoveryStage == 1
+                           ? "Radio NO SERVICE, recovery started"
+                           : "Radio NO SERVICE, recovery exhausted (restarting)");
+  }
   resetModemRadio(modemRecoveryStage);
 }
 int parseClccStat(const String& response) {

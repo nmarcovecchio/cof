@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.74"
+#define COF_FIRMWARE_VERSION "0.2.75"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -123,6 +123,16 @@ constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 // about 12 min, instead of staying dead until someone drives to the site.
 constexpr uint32_t kModemRecoveryIntervalMs = 150UL * 1000UL;
 constexpr uint8_t kModemRecoveryMaxStage = 5;
+// Anti-flap hysteresis for the radio recovery ladder. On a marginal LTE signal
+// the modem flaps NO SERVICE <-> service; a single good read used to reset the
+// ladder, so step 1 (CGATT detach/attach) re-ran on every flap and turned a
+// minor hiccup into a ~45 s outage (13x "step 1/5" observed 2026-09-25). Only
+// clear the stage once the radio has stayed healthy for this long.
+constexpr uint32_t kModemRecoveryHoldMs = 60UL * 1000UL;
+// The recovery ladder runs while MQTT is down, so its events pile up in the
+// deferred queue and flush in a burst on reconnect. Rate-limit the event to
+// once per this window (in addition to publishing only stage transitions).
+constexpr uint32_t kModemRecoveryEventMinIntervalMs = 10UL * 60UL * 1000UL;
 // lte_data traces carry a whole modem dump and were republished on every failed
 // PDP attempt (every 10 s, forever). Back the retries off and throttle the event.
 constexpr uint32_t kLteRetryMaxIntervalMs = 120UL * 1000UL;
