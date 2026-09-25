@@ -115,10 +115,11 @@ class LteMqttClient : public Client {
     }
     // The A7672 emits *ATREADY only on module (re)boot. A spontaneous reset or
     // the recovery ladder's CFUN=1,1 both produce it, and it leaves the AT
-    // channel in echo mode with the APN config lost. Flag a re-init (see
-    // noteModemRebootDetected) instead of ignoring it.
+    // channel in echo mode with the APN config lost. Just record it here; the
+    // reset itself happens in pollModem() (outside any in-flight command), see
+    // noteModemRebootDetected().
     if (line.indexOf("*ATREADY") >= 0) {
-      noteModemRebootDetected();
+      modemRebootUrcSeen = true;
     }
   }
 

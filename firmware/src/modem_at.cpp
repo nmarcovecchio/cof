@@ -151,8 +151,13 @@ void waitWithWatchdog(uint32_t ms) {
 // A spontaneous reset or the recovery ladder's CFUN=1,1 both produce it, and it
 // is the only unambiguous sign the AT channel has been torn down: everything
 // cached about the module - PDP, socket, SIM, radio config, ATE0 - is now stale.
-// This is called from inside readModemUntil()/flushModemInput(), i.e. possibly
-// mid-command, so it must only set flags and never issue AT.
+//
+// Called ONLY from pollModem(), never from the AT read path. readModemUntil() and
+// noteUrc() just set `modemRebootUrcSeen = true` when they see *ATREADY; that
+// flag is acted on here, outside of any in-flight command. The previous design
+// called this from readModemUntil()/flushModemInput() (i.e. mid-command, often
+// inside initModem() itself) and reset modemReady during the very init that was
+// re-establishing it, wedging the device in "L no AT" + "Wait SIM" (2026-09-25).
 void noteModemRebootDetected() {
   if (!state.modemReady && !state.simReady && !state.lteDataUp && !state.lteMqttTransport) {
     return;  // already flagged; avoid log spam
@@ -196,9 +201,6 @@ void flushModemInput() {
       }
     }
   }
-  if (pendingModemUrcs.indexOf("*ATREADY") >= 0) {
-    noteModemRebootDetected();
-  }
 }
 String readModemUntil(uint32_t timeoutMs, const String& token) {
   String response;
@@ -239,14 +241,14 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
       }
       if (!token.endsWith(":")) {
         if (rebootSeen) {
-          noteModemRebootDetected();
+          modemRebootUrcSeen = true;
         }
         return response;
       }
       for (int i = tagAt + token.length(); i < response.length(); i++) {
         if (response[i] == '\n' || response[i] == '\r') {
           if (rebootSeen) {
-            noteModemRebootDetected();
+            modemRebootUrcSeen = true;
           }
           return response;
         }
@@ -255,7 +257,7 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
     delay(10);
   }
   if (rebootSeen) {
-    noteModemRebootDetected();
+    modemRebootUrcSeen = true;
   }
   return response;
 }
@@ -503,6 +505,10 @@ bool initModem() {
   } else {
     setStatus("Wait SIM");
   }
+  // initModem() IS the re-init that *ATREADY demands: it re-applies ATE0, APN,
+  // SMS/voice settings and re-reads CPIN. Consume any *ATREADY seen during this
+  // boot so pollModem() does not re-run the reset on a stale flag (§6h, 0.2.76).
+  modemRebootUrcSeen = false;
   return true;
 }
 void refreshRadioMode() {

@@ -132,6 +132,10 @@ uint32_t lastModemRecoveryMs = 0;
 // <-> service does not re-run the disruptive step 1 on every flap.
 uint32_t modemHealthySinceMs = 0;
 uint32_t lastModemRecoveryEventMs = 0;
+// Set (never reset here) by the AT read path / URC parser when it sees *ATREADY,
+// which the A7672 emits only when the module boots. Acted on by pollModem() and
+// cleared by initModem() on success. See modem_at.cpp:noteModemRebootDetected().
+bool modemRebootUrcSeen = false;
 uint32_t ltePreemptSinceMs = 0;
 uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
@@ -268,6 +272,15 @@ bool networkStatRegistered(int stat) {
   return stat == 1 || stat == 5 || stat == 9 || stat == 10;
 }
 void pollModem() {
+  // *ATREADY means the module rebooted on its own (or the ladder reset it) and
+  // its cached state is stale. Act here - not from readModemUntil()/flushModemInput(),
+  // which run mid-command and used to reset modemReady inside initModem() itself,
+  // wedging the device in "L no AT" + "Wait SIM" (2026-09-25, §6h). initModem()
+  // clears the flag on success, since it is exactly the re-init *ATREADY asks for.
+  if (modemRebootUrcSeen && state.modemReady) {
+    modemRebootUrcSeen = false;
+    noteModemRebootDetected();
+  }
   if (!state.modemReady) {
     initModem();
     return;

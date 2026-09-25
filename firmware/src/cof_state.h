@@ -223,6 +223,7 @@ extern uint32_t lastEthRecoverProbeMs;
 extern bool ethRecoverPending;
 extern uint8_t modemRecoveryStage;
 extern uint32_t lastModemRecoveryMs;
+extern bool modemRebootUrcSeen;
 extern uint32_t ltePreemptSinceMs;
 extern uint32_t lastLteRetryDelayMs;
 extern uint32_t lastLteDataEventMs;
