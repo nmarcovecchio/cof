@@ -124,7 +124,10 @@ class LteMqttClient : public Client {
   }
 
   void pumpUrcs() {
-    while (ModemSerial.available()) {
+    // Bound the number of lines drained per call: with a module spewing URCs the
+    // outer loop used to run forever inside available() and starve the MQTT pump.
+    int lines = 0;
+    while (ModemSerial.available() && lines < 16) {
       String line;
       const uint32_t start = millis();
       while (millis() - start < 50) {
@@ -140,6 +143,7 @@ class LteMqttClient : public Client {
           line += c;
         }
       }
+      lines++;
       line.trim();
       if (line.length() == 0) {
         continue;
@@ -181,7 +185,10 @@ class LteMqttClient : public Client {
     const char* tag = netopen ? "+CIPRXGET: 2," : "+CARECV:";
     while (millis() - startedAt < 3000) {
       feedWatchdog();
-      while (ModemSerial.available()) {
+      // Bound the drain and the header buffer: an echo'd command plus a boot-URC
+      // flood used to grow `header` without limit and keep this loop spinning
+      // until it exhausted the heap (see readModemUntil's matching guard).
+      while (ModemSerial.available() && header.length() < 1024) {
         const char c = static_cast<char>(ModemSerial.read());
         header += c;
         const int tagAt = header.indexOf(tag);

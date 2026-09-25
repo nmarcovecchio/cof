@@ -862,6 +862,13 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   return "Call not connected";
 }
 String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha) {
+  // Remember whether we were riding LTE before the call. A CSFB bounce
+  // (CFUN=4/1 in bounceRadioForCsfb) and the voice path both tear down the
+  // NETOPEN PDP, but releaseLteMqttForModem() only closes the socket and leaves
+  // `lteDataUp` set. Rebuilding the PDP right here - instead of after three
+  // failed MQTT connects (~15 s) - keeps an alarm call's result reachable the
+  // moment the call ends, even if Ethernet/WiFi did not come back.
+  const bool wasOnLte = state.lteDataUp;
   releaseLteMqttForModem();
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
@@ -960,6 +967,13 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   restoreAutoRadio();
   restorePacketServices();
+  if (wasOnLte) {
+    // Tear the now-dead PDP down so ensureLtePdp() rebuilds it cleanly on the
+    // next connectMqttIfNeeded(). If Ethernet/WiFi came back during the call,
+    // this is still correct: maintainLteFallback() will see the LAN path and
+    // never re-engage LTE.
+    stopLtePdp();
+  }
   state.callInProgress = false;
   state.modemAudioPath = previousAudioPath;
   return result;

@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.76"
+#define COF_FIRMWARE_VERSION "0.2.77"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -71,6 +71,11 @@ constexpr uint32_t kDisplayIntervalMs = 1000;
 constexpr uint32_t kSensorIntervalMs = 3000;
 constexpr uint32_t kModemIntervalMs = 30000;
 constexpr uint32_t kModemRetryNoLanMs = 5000;
+// A dead modem (off, unseated SIM, UART fault) made pollModem() re-run the full
+// initModem() on every poll - 5 s on LTE, 30 s on LAN - and each init blocks up
+// to ~7 s on 5 AT attempts, starving sensors, display and MQTT. Back the retries
+// off so the rest of the loop stays responsive while the modem is unreachable.
+constexpr uint32_t kModemInitRetryMs = 15000;
 constexpr uint32_t kLteRetryIntervalMs = 10000;
 constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;

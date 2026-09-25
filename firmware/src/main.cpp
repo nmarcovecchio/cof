@@ -136,6 +136,7 @@ uint32_t lastModemRecoveryEventMs = 0;
 // which the A7672 emits only when the module boots. Acted on by pollModem() and
 // cleared by initModem() on success. See modem_at.cpp:noteModemRebootDetected().
 bool modemRebootUrcSeen = false;
+uint32_t lastModemInitAttemptMs = 0;
 uint32_t ltePreemptSinceMs = 0;
 uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
@@ -282,6 +283,15 @@ void pollModem() {
     noteModemRebootDetected();
   }
   if (!state.modemReady) {
+    // A dead modem (off, unseated SIM, UART fault) used to re-run the full
+    // initModem() every poll, each blocking ~7 s on 5 AT attempts and starving
+    // sensors, display and MQTT. Back the retries off so the loop stays
+    // responsive while the modem is unreachable (kModemInitRetryMs).
+    const uint32_t initNow = millis();
+    if (lastModemInitAttemptMs != 0 && initNow - lastModemInitAttemptMs < kModemInitRetryMs) {
+      return;
+    }
+    lastModemInitAttemptMs = initNow == 0 ? 1 : initNow;
     initModem();
     return;
   }

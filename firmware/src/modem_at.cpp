@@ -190,8 +190,13 @@ void ensureEchoOffIfNeeded(const String& command, const String& response) {
   readModemUntil(1000, "OK");
 }
 void flushModemInput() {
-  while (ModemSerial.available()) {
+  // Bound the drain: a module spewing (echo ON / boot-URC flood / line noise)
+  // used to make this loop run forever and block every AT command that follows
+  // (sendAT() calls it first). Cap the bytes per call; the next call drains more.
+  int drained = 0;
+  while (ModemSerial.available() && drained < 1024) {
     const char c = static_cast<char>(ModemSerial.read());
+    drained++;
     if (state.callInProgress) {
       pendingCallUrcs += c;
     } else {
@@ -224,7 +229,15 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
         state.mqttConnected = false;
       }
     }
-    while (ModemSerial.available()) {
+    // Drain a bounded chunk per pass and re-check the deadline inside the drain.
+    // A module that keeps spewing (echo ON, boot-URC flood, noise) used to make
+    // this inner loop run forever - never re-checking the timeout, never feeding
+    // the watchdog - and grow `response` without limit until the heap ran out.
+    // That is the "UART hangs everything" failure (see BACKLOG §6h / 0.2.77).
+    for (int drained = 0; drained < 256 && millis() - startedAt < timeoutMs; drained++) {
+      if (!ModemSerial.available()) {
+        break;
+      }
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
       // A module reboot emits *ATREADY as a URC, possibly in the middle of the
@@ -253,6 +266,11 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
           return response;
         }
       }
+    }
+    // Keep only the tail: what we search for (the token) always arrives last, and
+    // an unbounded buffer is exactly the OOM the drain cap is meant to prevent.
+    if (response.length() > 4096) {
+      response = response.substring(response.length() - 4096);
     }
     delay(10);
   }

@@ -479,6 +479,46 @@ instrumentacion de §6.
   por `sanitizeHandshake()` (solo ASCII imprimible, truncado) para que el evento
   siempre serialice como JSON valido.
 
+### 6i. El UART colgaba el loop entero: lecturas sin cota y PDP stale post-llamada
+
+**Hallazgo 2026-09-25, arreglado en 0.2.77.** Cuatro bucles de lectura del UART
+del modem (`ModemSerial`) no tenian cota, mas un flag de LTE que quedaba stale
+despues de una llamada:
+
+1. **`readModemUntil()`** (`modem_at.cpp`): el `while (ModemSerial.available())`
+   interno no re-chequeaba el timeout ni alimentaba el watchdog, y `response`
+   crecia sin limite. Un modem que escupe (eco ON, rafaga de URC de arranque,
+   ruido de linea) dejaba la funcion girando para siempre: el loop cooperativo
+   se estancaba (watchdog de tarea a los 60 s -> `task_wdt`) o agotaba el heap
+   (OOM). Es la causa mas probable de "el UART cuelga todo".
+   **Fix:** drenar un chunk acotado (256 B) por pasada re-chequeando el deadline,
+   y truncar `response` a 4096 B conservando la cola (el token siempre llega
+   ultimo).
+2. **`flushModemInput()`**: mismo `while` sin cota; `sendAT()` lo llama primero,
+   asi que bloqueaba todo comando AT. **Fix:** tope de 1024 B por llamada.
+3. **`LteMqttClient::pumpUrcs()`**: bucle externo sin cota; una rafaga de URC
+   colgaba `available()` y la bomba de MQTT. **Fix:** tope de 16 lineas por
+   llamada.
+4. **`LteMqttClient::recvChunk()`**: `header` crecia sin limite y el drenaje no
+   tenia cota. **Fix:** tope de 1024 B.
+
+**Coherencia LTE/alarma (corte de luz):** `placeCallAndPlayAudio()` libera el
+socket LTE (`releaseLteMqttForModem()`) pero no el PDP, y `bounceRadioForCsfb()`
+(`CFUN=4/1`, el camino comun en Claro con CSFB) **mata el NETOPEN**. El flag
+`state.lteDataUp` quedaba `true` con el PDP muerto, asi que el primer
+`connectMqttIfNeeded()` tras la llamada intentaba `CIPOPEN` sobre un PDP caido y
+necesitaba 3 connects fallidos (~15 s) para reconstruir. En una alarma eso son
+~15 s en los que el resultado de la llamada no puede publicarse.
+**Fix:** capturar `wasOnLte = state.lteDataUp` antes de liberar y, al terminar,
+`stopLtePdp()` si `wasOnLte`. Si Ethernet/WiFi volvio durante la llamada,
+`maintainLteFallback()` ve la LAN y no re-engancha LTE; si no, `ensureLtePdp()`
+reconstruye el PDP limpio en el siguiente loop.
+
+**Starvation del loop con modem muerto:** `pollModem()` re-ejecutaba `initModem()`
+completo (hasta ~7 s en 5 intentos AT) en cada poll — 5 s sin LAN, 30 s con LAN —
+cuando el modem no responde, estancando sensores, display y MQTT.
+**Fix:** throttle `kModemInitRetryMs` (15 s) en el reintento de `initModem()`.
+
 ---
 
 ## P1 — Backend / panel
