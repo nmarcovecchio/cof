@@ -253,6 +253,7 @@ void publishDeviceStatus(const char* status, bool retained) {
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
   doc["reported_config_version"] = state.reportedConfigVersion;
+  doc["reset_reason"] = state.bootResetReason;
 
   doc["hardware_profile"] = "cof-wt32-a7672-v1";
   JsonObject capabilities = doc["capabilities"].to<JsonObject>();

@@ -128,8 +128,15 @@ Encrypt (ISRG Root X1). Ya anotado como "Pending" en
 
 El 2026-09-21 el device quedo sin publicar con `radio: "NO SERVICE"`, `csq: 99`,
 y se recupero solo tras un reinicio por watchdog. Nunca se supo si fue watchdog,
-panic o `CFUN`. Instrumentar: loguear `esp_reset_reason()`, `CEREG`, `CPSI` y
-`CSQ` en el primer status post-boot.
+panic o `CFUN`.
+
+**Instrumentacion implementada en 0.2.74.** `setup()` captura
+`esp_reset_reason()` (mapeado a `power_on`/`software`/`panic`/`wdt`/...) en
+`state.bootResetReason` y lo publica en el primer status (`reset_reason`), junto
+con `CEREG`/`CPSI`/`CSQ` que ya iban en `discovered.cellular`. Con esto, la
+proxima vez que el equipo rebootee se distingue "escalera stage 5 = ESP.restart()
+= `software`" de un crash (`panic`/`wdt`). Falta una muestra en hardware para
+cerrar el item.
 
 **Segunda confirmacion en hardware: 2026-09-24.** Ese dia el modulo reporto
 `NO SERVICE` (`CSQ 99,99`) en **tres clusters** separados, todos con MQTT sano por
@@ -223,9 +230,9 @@ durante una salida por LTE, y el gate no es el que este texto sugiere:
   footer, y no un string "MQTT reset" que no existe en el firmware, es lo que hay
   que buscar la proxima vez.
 
-Falta confirmarlo con la instrumentacion de §6 (`esp_reset_reason()` y un log por
-stage), porque hoy no se puede distinguir "el modulo se colgo solo" de "la escalera
-lo reinicio".
+La instrumentacion de §6 (`reset_reason` en el status post-boot + evento
+`modem_recovery` por stage) quedo implementada en 0.2.74; falta una muestra en
+hardware para distinguir "el modulo se colgo solo" de "la escalera lo reinicio".
 
 **Segundo dato en hardware (mismo dia, 2026-09-24 ~15:52 -03, ver §6).** Esta vez
 la escalera corrio **por Ethernet** (no en la ventana del attach LTE) y escalo

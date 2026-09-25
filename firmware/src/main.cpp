@@ -21,6 +21,7 @@
 #include <esp_netif.h>
 #include <esp_netif_net_stack.h>
 #include <esp_ota_ops.h>
+#include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <mbedtls/sha256.h>
 #include "lwip/dns.h"
@@ -140,6 +141,24 @@ size_t deferredEventCount = 0;
 void setStatus(const String& line) {
   state.statusLine = line;
   Serial.println("[status] " + line);
+}
+// Human-readable reset reason, captured once at boot so the panel can tell a
+// recovery-ladder ESP.restart() ("software") from a crash ("panic"/"wdt"). See
+// BACKLOG §6.
+const char* resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "external_pin";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
 }
 // --- OTA rollback guard -----------------------------------------------------
 // Runs once per boot. See kOtaConfirm* constants for the policy.
@@ -295,6 +314,11 @@ void pollModem() {
   Serial.printf("[modem] no service, recovery step %u/%u\n",
                 modemRecoveryStage,
                 static_cast<unsigned>(kModemRecoveryMaxStage));
+  // Surface the escalation to the panel too, so a remote site shows how far the
+  // ladder got. publishDeviceEvent() defers it if MQTT is down (see §6).
+  publishDeviceEvent("modem_recovery", "warning",
+                     String("Radio NO SERVICE, recovery step ") + String(modemRecoveryStage) +
+                         "/" + String(kModemRecoveryMaxStage));
   resetModemRadio(modemRecoveryStage);
 }
 int parseClccStat(const String& response) {
@@ -419,6 +443,7 @@ void printRuntimeStatus() {
   Serial.printf("Manifest firmware: %s\n", state.manifestFirmwareVersion.c_str());
   Serial.printf("Manifest audio: %s\n", state.manifestAudioVersion.c_str());
   Serial.printf("Status: %s\n", state.statusLine.c_str());
+  Serial.printf("Boot reset reason: %s\n", state.bootResetReason.c_str());
   Serial.println();
 }
 void handleSerialCommand(const String& command) {
@@ -594,6 +619,8 @@ void setup() {
   Serial.println();
   Serial.println("CallOnFail boot");
   Serial.println("Firmware " COF_FIRMWARE_VERSION);
+  state.bootResetReason = resetReasonName();
+  Serial.printf("[boot] reset reason: %s\n", state.bootResetReason.c_str());
   printSerialHelp();
 
   preferences.begin("cof", false);

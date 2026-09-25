@@ -94,6 +94,10 @@ struct RuntimeState {
   uint32_t telemetryIntervalMs = kTelemetryPublishIntervalMs;
   bool callingEnabled = false;
   String statusLine = "Booting";
+  // Reason the ESP32 last reset, captured in setup() via ESP.getResetReason().
+  // Published with the first status so a reboot can be told apart from a crash
+  // (see BACKLOG §6). "Software reset CPU" = ESP.restart() = recovery stage 5.
+  String bootResetReason = "unknown";
   String modemAudioPath = COF_MODEM_AUDIO_PATH;
   // The canned asset the manifest keeps on the modem (C:/cof_test.wav). It is
   // only a fallback: a call tries to download the spoken TTS audio first, and
