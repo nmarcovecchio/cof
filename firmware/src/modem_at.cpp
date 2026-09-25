@@ -147,6 +147,43 @@ void waitWithWatchdog(uint32_t ms) {
     delay(50);
   }
 }
+// The A7672 emits *ATREADY: 1 (and *ATREADY: 0) only when the module (re)boots.
+// A spontaneous reset or the recovery ladder's CFUN=1,1 both produce it, and it
+// is the only unambiguous sign the AT channel has been torn down: everything
+// cached about the module - PDP, socket, SIM, radio config, ATE0 - is now stale.
+// This is called from inside readModemUntil()/flushModemInput(), i.e. possibly
+// mid-command, so it must only set flags and never issue AT.
+void noteModemRebootDetected() {
+  if (!state.modemReady && !state.simReady && !state.lteDataUp && !state.lteMqttTransport) {
+    return;  // already flagged; avoid log spam
+  }
+  Serial.println("[modem] *ATREADY detected: modem rebooted, flagging for re-init");
+  state.modemReady = false;
+  state.simReady = false;
+  state.networkRegistered = false;
+  state.lteDataUp = false;
+  state.lteMqttTransport = false;
+  state.lteIpAddress = "-";
+  lteMqttClient.sockOpen = false;
+  lteMqttClient.atCommandBusy = false;
+  lteMqttClient.drainRx();
+}
+// A modem that reboots (CFUN=1,1 or spontaneous) comes back with echo ON; ATE0
+// is only sent from initModem() and a reboot does not re-run it. Detect the
+// echoed command in a response and turn echo off again so the next commands
+// parse cleanly. Never re-issues the caller's command: it already ran.
+void ensureEchoOffIfNeeded(const String& command, const String& response) {
+  if (command.length() == 0 || command == "ATE0") {
+    return;
+  }
+  if (!response.startsWith(command)) {
+    return;
+  }
+  Serial.println("[modem] echo detected, re-sending ATE0");
+  ModemSerial.print("ATE0\r\n");
+  String discard;
+  readModemUntil(1000, "OK");
+}
 void flushModemInput() {
   while (ModemSerial.available()) {
     const char c = static_cast<char>(ModemSerial.read());
@@ -159,9 +196,13 @@ void flushModemInput() {
       }
     }
   }
+  if (pendingModemUrcs.indexOf("*ATREADY") >= 0) {
+    noteModemRebootDetected();
+  }
 }
 String readModemUntil(uint32_t timeoutMs, const String& token) {
   String response;
+  bool rebootSeen = false;
   const uint32_t startedAt = millis();
   while (millis() - startedAt < timeoutMs) {
     feedWatchdog();
@@ -184,6 +225,11 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
     while (ModemSerial.available()) {
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
+      // A module reboot emits *ATREADY as a URC, possibly in the middle of the
+      // command we are waiting on. Detect it cheaply at line boundaries.
+      if (!rebootSeen && (c == '\n' || c == '\r') && response.indexOf("*ATREADY") >= 0) {
+        rebootSeen = true;
+      }
       if (token.length() == 0) {
         continue;
       }
@@ -192,15 +238,24 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
         continue;
       }
       if (!token.endsWith(":")) {
+        if (rebootSeen) {
+          noteModemRebootDetected();
+        }
         return response;
       }
       for (int i = tagAt + token.length(); i < response.length(); i++) {
         if (response[i] == '\n' || response[i] == '\r') {
+          if (rebootSeen) {
+            noteModemRebootDetected();
+          }
           return response;
         }
       }
     }
     delay(10);
+  }
+  if (rebootSeen) {
+    noteModemRebootDetected();
   }
   return response;
 }
@@ -214,6 +269,10 @@ bool sendAT(const String& command, const String& expected, uint32_t timeoutMs, S
   response.trim();
   Serial.println("[modem] << " + response);
   appendModemLog('<', response);
+
+  // A rebooted module echoes the command back; turn echo off for the commands
+  // that follow. The command itself already ran, so do not re-issue it.
+  ensureEchoOffIfNeeded(command, response);
 
   if (responseOut != nullptr) {
     *responseOut = response;

@@ -72,6 +72,7 @@ void flushModemInput();
 bool initModem();
 bool modemLineInteresting(const String& line);
 bool modemWaitForPrompt(uint32_t timeoutMs);
+void noteModemRebootDetected();
 void noteSubscriberIdentity();
 int queryCpas();
 bool radioHasService();

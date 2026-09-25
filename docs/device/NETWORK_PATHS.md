@@ -188,9 +188,9 @@ Ethernet while WiFi is associated would test WiFi and report a false result.
 ## Switching matrix: which transitions work
 
 Audited 2026-09-23 by reading the code, re-audited 2026-09-24. §6d and §6f are
-fixed (fw 0.2.71/0.2.72), §6e is fixed in 0.2.73, §6g is dead code, §6h is a
-hardware finding (2026-09-24) still open. "Healthy" means the interface reaches
-the broker; a link with DHCP but no uplink is **not** healthy.
+fixed (fw 0.2.71/0.2.72), §6e is fixed in 0.2.73, §6h is fixed in 0.2.74, §6c is
+partly fixed in 0.2.74 (socket-dead case), §6g is dead code. "Healthy" means the
+interface reaches the broker; a link with DHCP but no uplink is **not** healthy.
 
 | From | Event | Switches? | Notes |
 |---|---|---|---|
@@ -203,7 +203,7 @@ the broker; a link with DHCP but no uplink is **not** healthy.
 | LTE | WiFi associates healthy | **yes, ~3 s** | `pollWifiPath()` probes on the next pass since 0.2.73 (§6e) |
 | LTE | broker IP changed | yes, after a failed connect | `lteForceDnsResolve` re-resolves via the modem (0.2.71) |
 | any | LAN up but degraded, on LTE | yes, throttled | `canUseLan()` probes at most every 10 s (§6f) |
-| Ethernet | cable out, LTE attach | **flaky (2026-09-24)** | modem can reset mid-attach and come back with echo on; the first `AT+CIPOPEN` then loses its tag and MQTT fails ~6 min (§6h) |
+| Ethernet | cable out, LTE attach | **fixed 0.2.74** | a modem reboot mid-attach now re-inits (echo/APN), so the first `AT+CIPOPEN` no longer loses its tag (§6h) |
 
 Four things are worth knowing before touching any of this:
 
@@ -216,6 +216,12 @@ Four things are worth knowing before touching any of this:
   firmware either, so a spontaneous module reboot is silent. See §6h. The OLED
   footer **"Modem reset"** is the tell that `resetModemRadio()` ran - there is no
   "MQTT reset" string in the firmware.
+
+  Fixed in 0.2.74: `*ATREADY` is now recognised in `readModemUntil()`,
+  `flushModemInput()` and `LteMqttClient::noteUrc()`, and flags a full re-init
+  (`noteModemRebootDetected()`), so the module is re-configured (ATE0, APN, SMS)
+  instead of being spoken to wrongly for the rest of the boot. `sendAT()` also
+  detects a leftover echo and re-sends `ATE0`.
 - **`wifiInternetUp` is never set on association, and that is *not* deliberate.** The
   commit that introduced the flags (fw 0.2.55) set them "optimistically on IP";
   `markEthernetUp()` does, `ARDUINO_EVENT_WIFI_STA_GOT_IP` was left out. The

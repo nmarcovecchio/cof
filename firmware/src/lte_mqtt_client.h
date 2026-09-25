@@ -76,6 +76,30 @@ class LteMqttClient : public Client {
     handshake += entry;
   }
 
+  // Keep only printable ASCII so the handshake always serialises as valid JSON.
+  // A module that reboots with echo ON returns control bytes (\x00, \x01) plus
+  // its boot URCs; dumping those raw corrupted the event JSON (the worker wrapped
+  // it in {"raw": ...} and the severity was lost). See BACKLOG §6h(b).
+  String sanitizeHandshake(const String& raw) {
+    String out;
+    out.reserve(raw.length());
+    for (unsigned i = 0; i < raw.length(); i++) {
+      const char c = raw[i];
+      if (c == '\n') {
+        out += " | ";
+      } else if (c == '\r') {
+        // drop
+      } else if (c >= 32 && c <= 126) {
+        out += c;
+      }
+    }
+    out.trim();
+    if (out.length() > 160) {
+      out = out.substring(0, 160);
+    }
+    return out;
+  }
+
   bool useNetopen() const {
     return lteIpStack != kLteStackCnact;
   }
@@ -88,6 +112,13 @@ class LteMqttClient : public Client {
                line.startsWith("+IPCLOSE:") ||
                line.startsWith("+CIPEVENT:")) {
       sockOpen = false;
+    }
+    // The A7672 emits *ATREADY only on module (re)boot. A spontaneous reset or
+    // the recovery ladder's CFUN=1,1 both produce it, and it leaves the AT
+    // channel in echo mode with the APN config lost. Flag a re-init (see
+    // noteModemRebootDetected) instead of ignoring it.
+    if (line.indexOf("*ATREADY") >= 0) {
+      noteModemRebootDetected();
     }
   }
 
@@ -221,14 +252,14 @@ class LteMqttClient : public Client {
       String cmd = String("AT+CIPOPEN=") + String(sock) + ",\"TCP\",\"" + peer + "\"," + String(port);
       if (!sendAT(cmd, "+CIPOPEN:", 25000, &resp)) {
         Serial.println("[lte] CIPOPEN fail");
-        noteHandshake("CIPOPEN no response: " + resp);
+        noteHandshake("CIPOPEN no response: " + sanitizeHandshake(resp));
         sockOpen = false;
         return 0;
       }
       const int err = atUrcCode(resp, "+CIPOPEN:");
       if (err != 0) {
         Serial.printf("[lte] CIPOPEN err %d %s\n", err, resp.c_str());
-        noteHandshake(String("CIPOPEN err ") + String(err) + ": " + resp);
+        noteHandshake(String("CIPOPEN err ") + String(err) + ": " + sanitizeHandshake(resp));
         sendAT(String("AT+CIPCLOSE=") + String(sock), "OK", 5000);
         sockOpen = false;
         return 0;
@@ -293,15 +324,31 @@ class LteMqttClient : public Client {
       atCommandBusy = false;
       // Capture the send verdict: this is the step the old trace could never
       // show, because write() is the one AT path that does not go through
-      // sendAT(). If the ACK shape differs from what we expect, this is where
-      // the MQTT CONNECT dies and the socket is dropped.
+      // sendAT(). Keep ONLY the ACK shape - never the echoed command or the
+      // payload. When the module reboots with echo ON the raw response carries
+      // the binary MQTT bytes (client id, will, username and the plaintext
+      // password), which must not reach the handshake (see BACKLOG §6h(b)).
       {
-        String verdict = resp;
-        verdict.replace("\r", " ");
-        verdict.replace("\n", " | ");
-        verdict.trim();
-        if (verdict.length() > 160) {
-          verdict = verdict.substring(0, 160);
+        String verdict;
+        if (resp.indexOf("ERROR") >= 0) {
+          verdict = "ERROR";
+        } else {
+          const String ackTag = useNetopen() ? "+CIPSEND:" : "OK";
+          const int ackAt = resp.indexOf(ackTag);
+          if (ackAt < 0) {
+            verdict = "(no ACK)";
+          } else {
+            int ackEnd = resp.indexOf('\n', ackAt);
+            if (ackEnd < 0) {
+              ackEnd = resp.indexOf('\r', ackAt);
+            }
+            if (ackEnd < 0) {
+              ackEnd = resp.length();
+            }
+            verdict = resp.substring(ackAt, ackEnd);
+            verdict.replace("\r", " ");
+            verdict.trim();
+          }
         }
         noteHandshake(String("CIPSEND ") + String(chunk) + " -> " + verdict);
       }

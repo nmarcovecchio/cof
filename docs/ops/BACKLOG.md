@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.73** (en `ota/manifest.json`
+Estado: **2026-09-24**. Ultimo firmware publicado: **0.2.74** (en `ota/manifest.json`
 y corriendo en `cof-test`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
@@ -186,13 +186,27 @@ Importa porque la causa conocida de "modem sordo" (`NO SERVICE`, `CSQ 99,99`,
 descuido: es una limitacion asumida. Pero el efecto neto es que un equipo
 solo-LTE que se queda sin radio no se recupera solo.
 
-**Como cerrarlo:** encadenar la comprobacion de servicio, no `pollModem()` entero.
-`radioReportsService()` ya existe y es barata, pero hoy la alimenta
-`refreshCellularStatus()`, que tambien es `sendAT` y tiene el mismo problema. Hace
-falta una via que no use el UART compartido: leer si el socket AT sigue vivo (un
-`CIPEVENT`/`IPCLOSE` inesperado, o el keepalive de MQTT fallando de forma
-sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la escalera.
-Decidir junto con §4.
+**Como cerrarlo (parcialmente resuelto en 0.2.74):** encadenar la comprobacion de
+servicio, no `pollModem()` entero. `radioReportsService()` ya existe y es barata,
+pero hoy la alimenta `refreshCellularStatus()`, que tambien es `sendAT` y tiene el
+mismo problema. Hace falta una via que no use el UART compartido: leer si el socket
+AT sigue vivo (un `CIPEVENT`/`IPCLOSE` inesperado, o el keepalive de MQTT fallando
+de forma sostenida) y, si lo esta, soltar el PDP a proposito para poder correr la
+escalera. Decidir junto con §4.
+
+**Resuelto en 0.2.74 (el caso "socket muerto").** Cuando MQTT viaja por LTE y el
+socket AT muere (`lteMqttClient.sockOpen == false`, detectado por los URC
+`+IPCLOSE`/`+CIPEVENT`/`+CASTATE` o por `mqttClient.loop()` fallando),
+`connectMqttIfNeeded()` ahora derriba el PDP de inmediato (`stopLtePdp()`). Eso
+libera el UART y habilita `pollModem()` -> la escalera arranca en vez de esperar
+los tres reintentos de connect (~15 s) antes. Si el socket sigue vivo pero el
+broker no respondio el ping, no se derriba el PDP (se hace el reconnect normal).
+
+Queda como **limitacion asumida** el monitoreo *proactivo* de radio mientras el
+socket AT esta vivo: no se puede mandar `refreshCellularStatus()` con un
+`AT+CIPOPEN` abierto sin arriesgar la perdida de URC de datos MQTT (ver §4). En la
+practica la radio muerta mata el socket, asi que el camino de 0.2.74 cubre el caso
+real; lo que no cubre es detectar `NO SERVICE` *antes* de que el socket caiga.
 
 **Confirmado en hardware el 2026-09-24 (ver §6h).** La escalera **si corre**
 durante una salida por LTE, y el gate no es el que este texto sugiere:
@@ -363,9 +377,9 @@ WiFi temporizado y no existe. Sacarlo o conectarlo.
 
 ### 6h. El eco del modem tras un reinicio rompe el `AT+CIPOPEN`, y filtra el CONNECT
 
-**Hallazgo 2026-09-24, en hardware (`cof-test`, 0.2.72).** Al pasar de Ethernet a
-LTE, MQTT por LTE fallo ~6 min. El evento `lte_data` del panel (15:20:23 -03) trae
-el `handshake` completo y permite reconstruir la secuencia:
+**Hallazgo 2026-09-24, en hardware (`cof-test`, 0.2.72). RESUELTO en 0.2.74 (a y b).**
+Al pasar de Ethernet a LTE, MQTT por LTE fallo ~6 min. El evento `lte_data` del
+panel (15:20:23 -03) trae el `handshake` completo y permite reconstruir la secuencia:
 
 ```text
 open mqtt.callonfail.com.ar:1883 netopen
@@ -404,25 +418,34 @@ que es un reinicio del modulo. El usuario vio en la OLED el footer **"Modem rese
 escalera corrio. No se puede distinguir de un cuelgue espontaneo sin la
 instrumentacion de §6.
 
-**Dos efectos a arreglar:**
+**Dos efectos a arreglar (ambos resueltos en 0.2.74):**
 
-- **(a) Robustez:** re-aplicar `ATE0` cuando el modulo responde con eco, y/o
-  reconocer `*ATREADY` como "el modulo se reinicio" -> `initModem()` de nuevo.
-  Hoy un reinicio del modulo deja el firmware hablandole mal el resto del arranque.
-- **(b) SEGURIDAD - fuga de credencial:** el `verdict` que se guarda en el
-  `handshake` incluye los **bytes binarios del CONNECT MQTT** (client id, will,
+- **(a) Robustez:** re-aplicar `ATE0` cuando el modulo responde con eco, y
+  reconocer `*ATREADY` como "el modulo se reinicio" -> re-init. Un reinicio del
+  modulo dejaba el firmware hablandole mal el resto del arranque.
+- **(b) SEGURIDAD - fuga de credencial:** el `verdict` que se guardaba en el
+  `handshake` incluia los **bytes binarios del CONNECT MQTT** (client id, will,
   usuario y **password en texto plano**), porque el eco los devuelve. Con el
   default `change-me-device-mqtt` no se filtro nada real, pero con la credencial
-  puesta **el panel la muestra**. Ademas esos bytes de control son los que **rompen
-  el JSON**: el worker lo envuelve en `{"raw": ...}` (`mqtt_worker.py:91`), el
-  evento se guarda como `event` / "Sin mensaje" y **pierde su `severity: warning`**
-  (por eso el fallo aparece en el panel como `info`, ver §7).
+  puesta **el panel la mostraba**. Ademas esos bytes de control son los que
+  **rompian el JSON**: el worker lo envolvia en `{"raw": ...}` (`mqtt_worker.py:91`),
+  el evento se guardaba como `event` / "Sin mensaje" y **perdia su `severity:
+  warning`** (por eso el fallo aparece en el panel como `info`, ver §7).
 
-**Como cerrarlo:** (a) `sendAT` que detecte el eco y re-mande `ATE0`; tratar
-`*ATREADY` como reseteo de modulo. (b) En `LteMqttClient::write()`, no volcar la
-respuesta cruda al `handshake` cuando el chunk es el CONNECT: guardar solo la forma
-(el `+CIPSEND: 0,n,n` y el veredicto), no el payload. Y nunca loguear el eco de un
-`AT+CIPSEND` con datos.
+**Como se cerro (0.2.74):**
+
+- **(a)** `noteModemRebootDetected()` (`modem_at.cpp`): detecta `*ATREADY` en
+  `readModemUntil()`, `flushModemInput()` y `LteMqttClient::noteUrc()`, y marca
+  `modemReady/simReady/lteDataUp/lteMqttTransport = false` + cierra el socket.
+  El proximo `pollModem()` o `ensureLtePdp()` re-ejecuta `initModem()`, que
+  re-aplica `ATE0`, `CGDCONT`, `CGAUTH`, `CGSMS`, `CMGF`, `CSCA` y voz. Ademas
+  `sendAT()` detecta eco residual (respuesta que empieza con el comando) y
+  re-manda `ATE0` sin re-emitir el comando (ya se ejecuto).
+- **(b)** `LteMqttClient::write()` ya no vuelca la respuesta cruda al `handshake`:
+  guarda solo la forma del ACK (`+CIPSEND: 0,n,n` / `OK` / `ERROR`), nunca el eco
+  del comando ni el payload. Y `connect()` pasa la respuesta de un `CIPOPEN` fallido
+  por `sanitizeHandshake()` (solo ASCII imprimible, truncado) para que el evento
+  siempre serialice como JSON valido.
 
 ---
 
@@ -442,8 +465,10 @@ hallazgo que salio de ahi.
 Queda pendiente lo de fondo: el evento llego **mal clasificado** (`event`, mensaje
 "Sin mensaje", severity perdida) porque el payload no era JSON valido - el eco del
 modem metio bytes de control (`mqtt_worker.py:91` lo envuelve en `{"raw": ...}`).
-Eso es parte de §6h(b): mientras el `handshake` capture el eco crudo del CONNECT,
-el trace que mas importa es justo el que no se puede leer en el panel.
+La causa raiz (eco crudo en el `handshake`) quedo **resuelta en 0.2.74** con
+`sanitizeHandshake()` y el `write()` que ya no vuelca el payload (ver §6h(b)).
+Falta verificar en hardware que un `lte_data` de fallo ya no se guarda como
+`event`/`info`.
 
 Nota de proceso: la credencial del panel se pasa **en el chat**, nunca al repo (ver
 §Secretos).

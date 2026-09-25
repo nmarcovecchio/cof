@@ -450,6 +450,13 @@ void connectMqttIfNeeded() {
       state.mqttConnected = false;
       if (state.ethernetConnected && !state.lteMqttTransport) {
         markEthernetDown("mqtt loop");
+      } else if (state.lteMqttTransport && !lteMqttClient.sockOpen) {
+        // The AT socket died under us (radio loss / network PDP deactivation).
+        // Release the PDP now so pollModem() can run the radio recovery ladder
+        // instead of waiting out three failed reconnects first. See §6c.
+        Serial.println("[lte] socket dropped, releasing PDP for radio recovery");
+        stopLtePdp();
+        lteMqttConnectFails = 0;
       }
     } else {
       state.mqttConnected = true;
