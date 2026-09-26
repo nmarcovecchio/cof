@@ -349,6 +349,22 @@ después de drenar; un `+CMQTTSTART: 1` espera `PB DONE` y **no** manda STOP; si
 hubo `*ATREADY`, el teardown no manda DISC/REL/STOP; un RX más corto que el largo
 anunciado se descarta en vez de aplicarse como config.
 
+**0.2.87 no conectó (campo, 11:29).** Radio sana todo el rato (`+CREG: 0,1`,
+`+CPSI: LTE,Online`, CSQ 30). El único fallo, repetido:
+
+```
+AT+CMQTTSTART → ERROR
+AT+CMQTTSTOP  → ERROR
+```
+
+`ERROR` pelado en START es "el servicio ya estaba arrancado": el OTA reinició el
+ESP32 y dejó el cliente CMQTT de 0.2.86 vivo en el módem. `cmqttTearDown()` no
+mandó nada porque sus flags arrancan en false. El recovery mandó solo STOP, y
+STOP responde ERROR mientras el cliente sigue adquirido (hay que DISC, después
+REL, después STOP). El servicio nunca bajó, así que START siguió en ERROR.
+**0.2.88:** ante ese ERROR pelado hace `CMQTTDISC` + `CMQTTREL` + `CMQTTSTOP`
+(resultados ignorados) y recién ahí `CMQTTSTART`.
+
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
 `lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados

@@ -229,6 +229,22 @@ static int cmqttTryStart() {
   return 0;
 }
 
+static void cmqttForceRelease() {
+  // OTA reboots the ESP32 and clears our flags, but the modem keeps the CMQTT
+  // client it acquired on the previous firmware. cmqttTearDown() then sends
+  // nothing (it trusts the flags). A bare AT+CMQTTSTOP answers ERROR while that
+  // client is still held, and the next AT+CMQTTSTART stays ERROR — the 0.2.87
+  // field log, radio Online the whole time. DISC, then REL, then STOP, results
+  // ignored: a client that was never connected just answers ERROR.
+  sendAT("AT+CMQTTDISC=0,60", "+CMQTTDISC:", 10000);
+  sendAT("AT+CMQTTREL=0", "OK", 5000);
+  sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
+  cmqttBrokerUp = false;
+  cmqttClientAcquired = false;
+  cmqttServiceUp = false;
+  cmqttResetAssembler();
+}
+
 static void cmqttWaitForModemBoot() {
   // *ATREADY is followed by +CPIN, SMS DONE, +CGEV and finally PB DONE. CMQTTSTART
   // before PB DONE answers +CMQTTSTART: 1.
@@ -256,10 +272,10 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   if (!cmqttServiceUp) {
     int started = cmqttTryStart();
     if (started == 1) {
-      // Bare ERROR: the service survived an ESP32 reboot (OTA does not reset
-      // the modem). STOP is correct only in this case.
-      Serial.println("[cmqtt] CMQTTSTART already running; stopping stale service");
-      sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
+      // Bare ERROR: the service survived the ESP32 reboot. STOP alone answers
+      // ERROR while the old client is still acquired, so release it first.
+      Serial.println("[cmqtt] service still up on the modem, releasing it");
+      cmqttForceRelease();
       started = cmqttTryStart();
     } else if (started == 2) {
       // Code 1 / timeout. Do not STOP: on a module that just rebooted, STOP
