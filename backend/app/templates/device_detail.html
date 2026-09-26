@@ -855,6 +855,9 @@
   const charts = {};
   let tablePage = 1;
   let tablePages = 1;
+  // When true, live polls slide the range end to "now" so new samples appear.
+  // Custom historical ranges (Apply with an end in the past) turn this off.
+  let liveFollow = true;
 
   function toLocalInput(date) {
     const pad = (n) => String(n).padStart(2, '0');
@@ -867,6 +870,21 @@
     const start = new Date(now.getTime() - hours * 3600 * 1000);
     fromInput.value = toLocalInput(start);
     toInput.value = toLocalInput(now);
+    liveFollow = true;
+  }
+
+  function advanceRangeToNow() {
+    if (!liveFollow) return;
+    const from = fromInput.value ? new Date(fromInput.value) : null;
+    const to = toInput.value ? new Date(toInput.value) : null;
+    const now = new Date();
+    if (!from || !to || isNaN(from.getTime()) || isNaN(to.getTime())) {
+      setRange(24);
+      return;
+    }
+    const span = Math.max(to.getTime() - from.getTime(), 60 * 1000);
+    toInput.value = toLocalInput(now);
+    fromInput.value = toLocalInput(new Date(now.getTime() - span));
   }
 
   function showAlert(message) {
@@ -1223,7 +1241,12 @@
       load();
     });
   });
-  document.getElementById('telemetry-apply').addEventListener('click', load);
+  document.getElementById('telemetry-apply').addEventListener('click', function () {
+    const to = toInput.value ? new Date(toInput.value) : null;
+    // Follow live data only when the selected end is near "now".
+    liveFollow = !!(to && !isNaN(to.getTime()) && (Date.now() - to.getTime()) < 3 * 60 * 1000);
+    load();
+  });
   prevBtn.addEventListener('click', function () {
     if (tablePage <= 1) return;
     tablePage -= 1;
@@ -1238,9 +1261,12 @@
   setRange(24);
   load();
 
-  // Live poll on the device page calls this when a new sample arrives, without
-  // a full page reload.
-  window.cofReloadTelemetry = load;
+  // Live poll calls this when a new sample arrives. Slide the window to now so
+  // the fixed "Hasta" from page load does not exclude fresh points.
+  window.cofReloadTelemetry = function () {
+    advanceRangeToNow();
+    load();
+  };
 })();
 </script>
 {% endif %}
