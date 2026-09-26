@@ -388,6 +388,16 @@ que el comando no llegó. El trace `LTE MQTT OK` se sacaba antes de los dos
 **0.2.91 solo agrega log** (mismo AT de connect/SUB): el OK incluye el prompt
 de ambos SUB y el `+CMQTT*` que `flushModemInput` se llevaba; un URC posterior
 sale como `LTE URC`; si el SMS corre, el evento dice `SMS ...` con el `CMGS`.
+**0.2.91 en campo (12:19) mostró el fallo del SMS.** `CMQTTCONNECT: 0,0`.
+`AT+CMQTTSUB=0,31,1` (config) prompt OK, y el `AT+CMQTTSUB=0,24,1` (command)
+siguiente se comió `+CMQTTSUB: 0,14` + `ERROR` + `+CMQTTSUB: 0,0` +
+`+CMQTTRXSTART: 0,31,1994`. El 14 es "client is busy": command no quedó
+suscripto, por eso el `test_sms` de las 12:24 no tiene `command_ack`. El
+panel Modem no borró logs: muestra solo el `modem_log` más nuevo (ese de
+12:19); el resto sigue en el payload de cada evento, y la lista de la página
+es de 15. **0.2.92** no cambia el AT: después del prompt espera el
+`+CMQTTSUB` y, si arranca el config retenido, lo lee hasta `+CMQTTRXEND`
+antes de suscribir `command`.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con

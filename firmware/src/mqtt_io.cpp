@@ -576,7 +576,14 @@ static void connectMqttNativeIfNeeded() {
   }
 
   const bool subConfig = cmqttSubscribe(mqttTopic("config/desired"), 1);
-  const bool subCommand = cmqttSubscribe(mqttTopic("command"), 1);
+  // command only after config's +CMQTTSUB and its retained RX have finished.
+  // Issuing it anyway is what produced +CMQTTSUB: 0,14 on 0.2.91.
+  const bool subCommand = (subConfig && !cmqttIsRxBusy())
+                              ? cmqttSubscribe(mqttTopic("command"), 1)
+                              : false;
+  if (!subCommand && subConfig) {
+    appendModemLogForced("SUB command skipped");
+  }
   appendModemLog('>', String("SUB config ") + (subConfig ? "prompt-ok" : "prompt-fail"));
   appendModemLog('>', String("SUB command ") + (subCommand ? "prompt-ok" : "prompt-fail"));
   reportLteProgress = false;

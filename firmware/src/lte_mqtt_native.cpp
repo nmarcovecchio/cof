@@ -37,6 +37,9 @@ static int cmqttRxTopicTotal = 0;
 static int cmqttRxPayloadTotal = 0;
 static String cmqttRxTopic;
 static String cmqttRxPayload;
+// -2 means "no +CMQTTSUB result seen yet". Set from the URC, including when
+// readModemUntil already swallowed it into the prompt response.
+static int cmqttPendingSubCode = -2;
 
 static bool cmqttReadLine(String& line) {
   // Non-blocking: returns true once a full '\n'-terminated line is assembled,
@@ -115,6 +118,10 @@ static bool cmqttPromptWrite(const String& cmd, const String& data, uint32_t tim
   ModemSerial.write(reinterpret_cast<const uint8_t*>(data.c_str()), data.length());
   const String resp = readModemUntil(timeoutMs, "OK");
   appendModemLog('<', resp);
+  const int subAt = resp.indexOf("+CMQTTSUB:");
+  if (subAt >= 0) {
+    cmqttPendingSubCode = cmqttResult(resp.substring(subAt), "+CMQTTSUB:");
+  }
   return resp.indexOf("OK") >= 0;
 }
 
@@ -202,11 +209,36 @@ bool cmqttSubscribe(const String& topic, uint8_t qos) {
   if (!cmqttBrokerUp) {
     return false;
   }
+  // The async +CMQTTSUB arrives after the prompt OK. On this module a retained
+  // message (config/desired, ~2 KB) starts streaming in the same window. A
+  // second SUB while that is in flight gets +CMQTTSUB: 0,14 (client is busy)
+  // and the topic never subscribes — that is why devices/.../command was deaf
+  // and test_sms never produced a command_ack. Same AT as before; we just wait
+  // the result out, and if an RX starts, drain it to +CMQTTRXEND before returning.
+  cmqttPendingSubCode = -2;
   const String cmd = String("AT+CMQTTSUB=0,") + String(topic.length()) + "," + String(qos);
   if (!cmqttPromptWrite(cmd, topic, 5000)) {
+    appendModemLogForced("SUB prompt fail " + topic);
     return false;
   }
-  return true;
+  const uint32_t startedAt = millis();
+  uint32_t quietSince = millis();
+  while (millis() - startedAt < 12000) {
+    feedWatchdog();
+    const bool busy = ModemSerial.available() || cmqttLineBuf.length() > 0 || cmqttRxActive;
+    cmqttLoop();
+    if (busy) {
+      quietSince = millis();
+    }
+    if (cmqttPendingSubCode != -2 && !cmqttRxActive && !ModemSerial.available() &&
+        cmqttLineBuf.length() == 0 && millis() - quietSince >= 500) {
+      appendModemLogForced("SUB result " + String(cmqttPendingSubCode) + " " + topic);
+      return cmqttPendingSubCode == 0;
+    }
+    delay(5);
+  }
+  appendModemLogForced("SUB result timeout " + topic);
+  return false;
 }
 
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos) {
@@ -309,6 +341,10 @@ void cmqttLoop() {
       sawCmqtt = true;
     }
     // Passive loss of the connection / network. Both must force a reconnect.
+    if (line.startsWith("+CMQTTSUB:")) {
+      cmqttPendingSubCode = cmqttResult(line, "+CMQTTSUB:");
+      continue;
+    }
     if (line.startsWith("+CMQTTCONNLOST")) {
       cmqttBrokerUp = false;
       continue;
