@@ -161,20 +161,92 @@ bool cmqttIsRxBusy() {
   return cmqttRxActive;
 }
 
-// Start the MQTT service. Per the A76XX AT manual (ch.18), AT+CMQTTSTART
-// activates the PDP context itself and answers "OK\r\n+CMQTTSTART: 0" on
-// success; a bare ERROR means the service was already running.
-static bool cmqttStartService() {
+static void cmqttResetAssembler() {
+  cmqttLineBuf = "";
+  cmqttHeldInput = "";
+  cmqttRxActive = false;
+  cmqttRxInPayload = false;
+  cmqttRxTopic = "";
+  cmqttRxPayload = "";
+  cmqttRxTopicTotal = 0;
+  cmqttRxPayloadTotal = 0;
+}
+
+// Pump inbound URCs until the UART has been quiet. A successful SUB is followed
+// immediately by the retained message (config/desired is ~2 KB). Issuing the
+// next AT command before that burst finishes is what produced +CMQTTSUB: 0,14
+// ("client is busy"), a truncated JSON and, after CMQTTSTOP, the modem reboot
+// loop (*ATREADY / +CMQTTSTART: 1).
+static void cmqttDrainInbound(uint32_t quietMs, uint32_t maxMs) {
+  const uint32_t startedAt = millis();
+  uint32_t quietSince = 0;
+  while (millis() - startedAt < maxMs) {
+    feedWatchdog();
+    cmqttLoop();
+    const bool busy = cmqttIsRxBusy() || ModemSerial.available() || cmqttHeldInput.length() > 0;
+    if (busy) {
+      quietSince = 0;
+      delay(2);
+      continue;
+    }
+    if (quietSince == 0) {
+      quietSince = millis();
+    }
+    if (millis() - quietSince >= quietMs) {
+      return;
+    }
+    delay(10);
+  }
+  if (cmqttIsRxBusy()) {
+    Serial.println("[cmqtt] inbound drain timed out with RX still open");
+    appendModemLogForced("RX drain timeout");
+  }
+}
+
+// 0 = started, 1 = bare ERROR (service already running), 2 = failed.
+// +CMQTTSTART: 1 is "failed", not "already started". STOP after a code 1 while
+// the module is still printing *ATREADY / PB DONE reboots it and the next START
+// fails again — the loop in the 0.2.86 field log.
+static int cmqttTryStart() {
   String resp;
-  if (!sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp)) {
-    return false;   // timeout, or bare ERROR ("already started")
+  const bool sawTag = sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp);
+  if (!sawTag) {
+    if (resp.indexOf("ERROR") >= 0 && resp.indexOf("+CMQTTSTART:") < 0) {
+      return 1;
+    }
+    Serial.printf("[cmqtt] CMQTTSTART no result: %s\n", resp.c_str());
+    return 2;
   }
   if (cmqttResult(resp, "+CMQTTSTART:") != 0) {
     Serial.printf("[cmqtt] CMQTTSTART err: %s\n", resp.c_str());
-    return false;
+    if (resp.indexOf("*ATREADY") >= 0 || resp.indexOf("PB DONE") >= 0 ||
+        resp.indexOf("SMS DONE") >= 0) {
+      modemRebootUrcSeen = true;
+    }
+    return 2;
   }
   cmqttServiceUp = true;
-  return true;
+  return 0;
+}
+
+static void cmqttWaitForModemBoot() {
+  // *ATREADY is followed by +CPIN, SMS DONE, +CGEV and finally PB DONE. CMQTTSTART
+  // before PB DONE answers +CMQTTSTART: 1.
+  Serial.println("[cmqtt] modem booting, waiting for PB DONE");
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < 15000) {
+    feedWatchdog();
+    if (!ModemSerial.available()) {
+      delay(50);
+      continue;
+    }
+    const String resp = readModemUntil(2000, "PB DONE");
+    if (resp.indexOf("PB DONE") >= 0) {
+      break;
+    }
+  }
+  cmqttResetAssembler();
+  modemRebootUrcSeen = false;
 }
 
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
@@ -182,15 +254,25 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   cmqttTearDown();
 
   if (!cmqttServiceUp) {
-    if (!cmqttStartService()) {
-      // A bare ERROR from CMQTTSTART means "service already started" (the modem
-      // kept its state across an ESP32 OTA reboot - OTA never resets the modem).
-      // Stop the stale service and retry once.
-      Serial.println("[cmqtt] CMQTTSTART failed; stopping stale service and retrying");
+    int started = cmqttTryStart();
+    if (started == 1) {
+      // Bare ERROR: the service survived an ESP32 reboot (OTA does not reset
+      // the modem). STOP is correct only in this case.
+      Serial.println("[cmqtt] CMQTTSTART already running; stopping stale service");
       sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
-      if (!cmqttStartService()) {
-        return false;
+      started = cmqttTryStart();
+    } else if (started == 2) {
+      // Code 1 / timeout. Do not STOP: on a module that just rebooted, STOP
+      // collides with the boot URCs and resets it again.
+      if (modemRebootUrcSeen) {
+        cmqttWaitForModemBoot();
+      } else {
+        waitWithWatchdog(2000);
       }
+      started = cmqttTryStart();
+    }
+    if (started != 0) {
+      return false;
     }
   }
 
@@ -229,38 +311,54 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   return true;
 }
 
+// Length form (the one this A7672 accepts): AT+CMQTTSUB=0,<len>,<qos> then the
+// raw topic, then an async +CMQTTSUB: 0,<code>. OK alone is not success — the
+// result arrives after OK, and code 14 means "client is busy".
+static int cmqttSubscribeLength(const String& topic, uint8_t qos) {
+  const String cmd = String("AT+CMQTTSUB=0,") + String(topic.length()) + "," + String(qos);
+  if (!sendAT(cmd, ">", 5000)) {
+    return -1;   // no prompt: this firmware wants the other form
+  }
+  ModemSerial.write(reinterpret_cast<const uint8_t*>(topic.c_str()), topic.length());
+  const String resp = readModemUntil(8000, "+CMQTTSUB:");
+  const int code = cmqttResult(resp, "+CMQTTSUB:");
+  appendModemLogForced("SUB " + topic + " -> " + String(code));
+  return code;
+}
+
 bool cmqttSubscribe(const String& topic, uint8_t qos) {
   if (!cmqttBrokerUp) {
     return false;
   }
-  // Two documented subscribe forms. The A76XX AT manual (18.2.14) shows the
-  // length form (prompt, then raw topic bytes) and the parameter form
-  // (`AT+CMQTTSUB=0,"topic",qos`); which one a given A7672 firmware accepts
-  // depends on the CMQTTCFG "argtopic" setting. The old code sent only the
-  // length form and ignored the result, so a rejected SUB left the device
-  // publishing telemetry but deaf to inbound commands - exactly the LTE-only
-  // symptom. Try the length form, verify the +CMQTTSUB:<n>,0 result, and fall
-  // back to the parameter form.
-  const String cmd = String("AT+CMQTTSUB=0,") + String(topic.length()) + "," + String(qos);
-  String resp;
-  bool ok = false;
-  if (sendAT(cmd, ">", 5000)) {
-    ModemSerial.write(reinterpret_cast<const uint8_t*>(topic.c_str()), topic.length());
-    resp = readModemUntil(5000, "OK");
-    appendModemLogForced("SUB " + topic + " (len form) -> " + resp);
-    ok = resp.indexOf("OK") >= 0;
+  // Finish whatever the previous SUB already started pushing (retained config)
+  // before touching the UART again.
+  cmqttDrainInbound(200, 8000);
+
+  int code = cmqttSubscribeLength(topic, qos);
+  if (code == 14) {
+    // Busy with the previous delivery. Let it finish, then retry once.
+    Serial.printf("[cmqtt] SUB %s busy (14), draining and retrying\n", topic.c_str());
+    cmqttDrainInbound(200, 8000);
+    code = cmqttSubscribeLength(topic, qos);
   }
-  if (!ok) {
+  if (code < 0) {
+    // Length form gave no '>'. Only then try the parameter form. On this
+    // module the parameter form answers ERROR (argtopic is edit-mode) and
+    // sending it while a delivery is in flight is what corrupted the config.
     const String paramCmd = "AT+CMQTTSUB=0,\"" + topic + "\"," + String(qos);
-    ok = sendAT(paramCmd, "OK", 5000, &resp) && resp.indexOf("OK") >= 0;
-    appendModemLogForced("SUB " + topic + " (param form) -> " + resp);
+    String resp;
+    if (sendAT(paramCmd, "+CMQTTSUB:", 8000, &resp)) {
+      code = cmqttResult(resp, "+CMQTTSUB:");
+    }
+    appendModemLogForced("SUB " + topic + " param -> " + String(code));
   }
-  // +CMQTTSUB: <client>,0 is success; anything else (or a missing tag) is a
-  // failure we must not paper over.
-  if (ok && resp.indexOf("+CMQTTSUB:") >= 0 && cmqttResult(resp, "+CMQTTSUB:") != 0) {
-    ok = false;
-  }
-  Serial.printf("[cmqtt] SUB %s ok=%s\n", topic.c_str(), ok ? "yes" : "no");
+
+  // The retained publish follows +CMQTTSUB: 0,0 immediately. Absorb it before
+  // the caller issues another AT command.
+  cmqttDrainInbound(250, 8000);
+
+  const bool ok = code == 0;
+  Serial.printf("[cmqtt] SUB %s ok=%s code=%d\n", topic.c_str(), ok ? "yes" : "no", code);
   return ok;
 }
 
@@ -309,6 +407,17 @@ void cmqttDisconnect() {
 }
 
 void cmqttTearDown() {
+  // The module already rebooted (*ATREADY). Its CMQTT state is gone. DISC/REL/
+  // STOP during the boot URCs is the loop: STOP resets it again, the next
+  // START answers +CMQTTSTART: 1, and we STOP once more.
+  if (modemRebootUrcSeen) {
+    Serial.println("[cmqtt] modem already rebooted, skipping DISC/REL/STOP");
+    cmqttBrokerUp = false;
+    cmqttClientAcquired = false;
+    cmqttServiceUp = false;
+    cmqttResetAssembler();
+    return;
+  }
   // Full teardown back to a clean slate. DISC is issued unconditionally (when a
   // client was ever acquired): our cmqttBrokerUp flag can be false while the
   // modem still holds the broker connection - a failed publish or a route bounce
@@ -330,11 +439,7 @@ void cmqttTearDown() {
   }
   // Reset the inbound assembler so a half-read message never leaks across a
   // reconnect.
-  cmqttLineBuf = "";
-  cmqttRxActive = false;
-  cmqttRxInPayload = false;
-  cmqttRxTopic = "";
-  cmqttRxPayload = "";
+  cmqttResetAssembler();
 }
 
 // Dispatch a completed inbound message into the shared callback. onMqttMessage
@@ -452,7 +557,21 @@ void cmqttLoop() {
     }
 
     if (line.startsWith("+CMQTTRXEND:")) {
-      cmqttDispatchMessage();
+      // Drop a short read. Interleaving an AT command into the burst (0.2.86)
+      // delivered a truncated config and the firmware applied it as
+      // "config v0 rejected: invalid JSON".
+      const bool topicOk = cmqttRxTopicTotal <= 0 ||
+                           cmqttRxTopic.length() == cmqttRxTopicTotal;
+      const bool payloadOk = cmqttRxPayloadTotal < 0 ||
+                             static_cast<int>(cmqttRxPayload.length()) == cmqttRxPayloadTotal;
+      if (topicOk && payloadOk && cmqttRxTopic.length() > 0) {
+        cmqttDispatchMessage();
+      } else {
+        Serial.printf("[cmqtt] drop rx topic=%u/%d payload=%u/%d\n",
+                      static_cast<unsigned>(cmqttRxTopic.length()), cmqttRxTopicTotal,
+                      static_cast<unsigned>(cmqttRxPayload.length()), cmqttRxPayloadTotal);
+        appendModemLogForced("RX drop short");
+      }
       cmqttRxActive = false;
       cmqttRxInPayload = false;
       cmqttRxTopic = "";

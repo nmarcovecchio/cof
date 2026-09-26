@@ -555,12 +555,12 @@ static void connectMqttNativeIfNeeded() {
     }
   }
 
-  // Subscribe to the inbound topics. The result used to be ignored entirely: a
-  // rejected SUB left the device publishing telemetry but deaf to commands,
-  // which is exactly the "works on Ethernet, silent on LTE" symptom. cmqttSubscribe
-  // now verifies +CMQTTSUB:<n>,0 (and falls back to the parameter form).
-  const bool subConfig = cmqttSubscribe(mqttTopic("config/desired"), 1);
+  // Command first: it has no retained payload, so the SUB completes before the
+  // ~2 KB retained config/desired starts streaming. Subscribing config first
+  // and immediately subscribing command is what returned +CMQTTSUB: 0,14
+  // (client busy) and then corrupted that JSON (0.2.86 field log).
   const bool subCommand = cmqttSubscribe(mqttTopic("command"), 1);
+  const bool subConfig = cmqttSubscribe(mqttTopic("config/desired"), 1);
   appendModemLogForced("SUBS config=" + String(subConfig ? "ok" : "FAIL") +
                        " command=" + String(subCommand ? "ok" : "FAIL"));
 

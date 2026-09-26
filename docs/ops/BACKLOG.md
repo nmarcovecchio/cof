@@ -325,12 +325,29 @@ nativo**, que nunca había funcionado. Tres defectos, todos en el camino RX:
 
 También se agregó el parser de la forma alternativa de entrega
 `+CMQTTRECV: <client>,"<topic>",<len>,"<payload>"` (firmware MQTT-EX), además de
-`+CMQTTRXSTART/TOPIC/PAYLOAD/END`. **A validar en hardware:** con 0.2.86 en
-solo-LTE, el evento `LTE MQTT OK` debe mostrar `SUBS config=ok command=ok` en el
-`modem_log`, y al tocar "Probar SMS" debe aparecer `command_ack test_sms: accepted`
-(prueba de que el comando entró). Si el log muestra `command=FAIL`, el fix está en
-la forma del SUB; si muestra `ok` pero igual no entra el comando, el URC de
-recepción es otro y `modem_log` ahora lo va a mostrar.
+`+CMQTTRXSTART/TOPIC/PAYLOAD/END`.
+
+**Validado en hardware (0.2.86) y corregido en 0.2.87.** El log de campo mostró:
+
+- La forma por largo funciona: `AT+CMQTTSUB=0,31,1` → `>` → OK para
+  `config/desired`.
+- La forma por parámetro **no** existe en este firmware:
+  `AT+CMQTTSUB=0,"devices/cof-test/command",1` → `ERROR`.
+- El segundo SUB se mandó mientras el primero todavía entregaba el config
+  retenido (`+CMQTTRXSTART: 0,31,1994`): respuesta `+CMQTTSUB: 0,14` (manual
+  §18.3, code 14 = "client is busy"). El JSON de ~2 KB llegó cortado y el
+  firmware lo rechazó (`config v0 rejected: invalid JSON`).
+- A partir de ahí `CMQTTDISC: 0,11` → `CMQTTREL ERROR` → `CMQTTSTOP` en medio de
+  `*ATREADY` reinicia el módulo, y cada `CMQTTSTART` siguiente responde
+  `+CMQTTSTART: 1` (failed, no "ya estaba arrancado"). El STOP ante un code 1
+  vuelve a resetear el módem: el loop.
+
+0.2.87: espera `+CMQTTSUB: 0,0` y drena el URC retenido **antes** del próximo AT;
+suscribe `command` primero (no tiene payload retenido) y `config/desired` después;
+no usa la forma por parámetro si la forma por largo dio `>`; un code 14 reintenta
+después de drenar; un `+CMQTTSTART: 1` espera `PB DONE` y **no** manda STOP; si ya
+hubo `*ATREADY`, el teardown no manda DISC/REL/STOP; un RX más corto que el largo
+anunciado se descarta en vez de aplicarse como config.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
