@@ -494,3 +494,62 @@ def bucket_rows(rows, series: list[dict], resolution: int):
             point["v"].get(item["id"]) is not None for point in points
         )
     return points, total
+
+
+def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int) -> dict:
+    """One page of raw telemetry rows for the device table.
+
+    ``rows`` must already be the page slice (newest first). Each cell honours
+    the same half-open window as the chart/CSV, so a reassigned alias does not
+    claim samples that belong to its successor.
+    """
+    page = max(int(page or 1), 1)
+    per_page = max(1, min(int(per_page or 10), 50))
+    total = max(int(total or 0), 0)
+    pages = max((total + per_page - 1) // per_page, 1) if total else 1
+    if page > pages:
+        page = pages
+
+    spans = {
+        item["id"]: (
+            _parse_iso_epoch(item.get("starts_at")),
+            _parse_iso_epoch(item.get("ends_at")),
+        )
+        for item in series
+    }
+    out_rows = []
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        at = _to_epoch(getattr(row, "received_at", None))
+        values = {}
+        for item in series:
+            starts, ends = spans[item["id"]]
+            if at is None or (starts is not None and at < starts) or (
+                ends is not None and at >= ends
+            ):
+                values[item["id"]] = None
+            else:
+                values[item["id"]] = extract_value(payload, item)
+        out_rows.append(
+            {
+                "t": _iso_utc(getattr(row, "received_at", None)),
+                "v": values,
+            }
+        )
+
+    columns = [
+        {
+            "id": item["id"],
+            "label": item.get("label") or item["id"],
+            "unit": item.get("unit") or "",
+        }
+        for item in series
+    ]
+    return {
+        "columns": columns,
+        "rows": out_rows,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "pages": pages,
+    }

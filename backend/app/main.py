@@ -57,6 +57,7 @@ from .telemetry_series import (
     extract_aux_values,
     extract_value,
     last_readings,
+    raw_rows_page,
     series_for_range,
     windows_for_range,
 )
@@ -90,6 +91,7 @@ MAX_RULE_AUDIO_ASSETS = 40
 TELEMETRY_MAX_RANGE_DAYS = 30
 TELEMETRY_CHART_MAX_ROWS = 50000
 TELEMETRY_CSV_MAX_ROWS = 200000
+TELEMETRY_TABLE_PER_PAGE = 10
 
 
 def login_required(view):
@@ -1041,6 +1043,42 @@ def create_app() -> Flask:
                 "truncated": truncated,
             }
         )
+
+    @app.get("/devices/<device_uid>/telemetry/rows.json")
+    @login_required
+    def device_telemetry_rows_json(device_uid):
+        """Paginated raw telemetry rows for the device table (newest first)."""
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        from_dt, to_dt, error = parse_telemetry_range()
+        if error:
+            return jsonify({"error": error}), 400
+        try:
+            page = int(request.args.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        per_page = TELEMETRY_TABLE_PER_PAGE
+        series = series_for_range(device_sensor_windows(device), from_dt, to_dt)
+        base = Telemetry.query.filter(
+            Telemetry.device_id == device.id,
+            Telemetry.received_at >= from_dt,
+            Telemetry.received_at <= to_dt,
+        )
+        total = base.count()
+        page = max(page, 1)
+        pages = max((total + per_page - 1) // per_page, 1) if total else 1
+        if page > pages:
+            page = pages
+        rows = (
+            base.order_by(Telemetry.received_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        payload = raw_rows_page(rows, series, page, per_page, total)
+        payload["device_uid"] = device.device_uid
+        payload["from"] = _iso_utc(from_dt)
+        payload["to"] = _iso_utc(to_dt)
+        return jsonify(payload)
 
     @app.get("/devices/<device_uid>/telemetry.csv")
     @login_required

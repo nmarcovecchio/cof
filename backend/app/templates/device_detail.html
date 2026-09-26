@@ -165,11 +165,25 @@
           </a>
         </div>
         <div id="telemetry-alert" class="alert alert-warning py-2 small d-none" role="alert"></div>
-        <div id="telemetry-series-picker" class="d-flex flex-wrap gap-3 mb-2 small"></div>
-        <div class="position-relative" style="height: 380px;">
-          <canvas id="telemetry-chart"></canvas>
-          <div id="telemetry-empty" class="text-muted small position-absolute top-50 start-50 translate-middle d-none">
-            Sin datos en el rango seleccionado.
+        <div id="telemetry-charts"></div>
+        <div id="telemetry-empty" class="text-muted small d-none mb-2">
+          Sin datos en el rango seleccionado.
+        </div>
+        <div class="mt-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <h3 class="h6 mb-0">Datos crudos</h3>
+            <span class="small text-muted" id="telemetry-table-summary">&nbsp;</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-2" id="telemetry-raw-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="telemetry-table-prev" disabled>Anterior</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="telemetry-table-next" disabled>Siguiente</button>
+            <span class="small text-muted" id="telemetry-table-page">&nbsp;</span>
           </div>
         </div>
         {% else %}
@@ -809,8 +823,16 @@
 (function () {
   const SERIES = {{ telemetry_series|tojson }};
   const ENDPOINT = "{{ url_for('device_telemetry_json', device_uid=device.device_uid) }}";
+  const ROWS_ENDPOINT = "{{ url_for('device_telemetry_rows_json', device_uid=device.device_uid) }}";
   const CSV_ENDPOINT = "{{ url_for('device_telemetry_csv', device_uid=device.device_uid) }}";
   const MAX_DAYS = {{ telemetry_max_days }};
+  const UNIT_ORDER = ['\u00b0C', '%', 'ADC'];
+  const UNIT_TITLES = {
+    '\u00b0C': 'Temperatura (\u00b0C)',
+    '%': 'Humedad (%)',
+    'ADC': 'Red electrica (ADC crudo)',
+    '': 'Otros',
+  };
 
   const fromInput = document.getElementById('telemetry-from');
   const toInput = document.getElementById('telemetry-to');
@@ -818,10 +840,20 @@
   const emptyBox = document.getElementById('telemetry-empty');
   const summary = document.getElementById('telemetry-summary');
   const exportLink = document.getElementById('telemetry-export');
-  const picker = document.getElementById('telemetry-series-picker');
-  let chart = null;
+  const chartsHost = document.getElementById('telemetry-charts');
+  const tableEl = document.getElementById('telemetry-raw-table');
+  const tableHead = tableEl.querySelector('thead');
+  const tableBody = tableEl.querySelector('tbody');
+  const tableSummary = document.getElementById('telemetry-table-summary');
+  const tablePageLabel = document.getElementById('telemetry-table-page');
+  const prevBtn = document.getElementById('telemetry-table-prev');
+  const nextBtn = document.getElementById('telemetry-table-next');
 
-  // datetime-local wants "YYYY-MM-DDTHH:MM" in local time, not ISO/UTC.
+  // One Chart.js instance per unit group, keyed by unit string.
+  const charts = {};
+  let tablePage = 1;
+  let tablePages = 1;
+
   function toLocalInput(date) {
     const pad = (n) => String(n).padStart(2, '0');
     return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
@@ -845,65 +877,140 @@
     alertBox.classList.remove('d-none');
   }
 
-  function query() {
-    // The inputs are local time; the API expects UTC. toISOString gives UTC.
+  function query(extra) {
     const from = fromInput.value ? new Date(fromInput.value).toISOString() : '';
     const to = toInput.value ? new Date(toInput.value).toISOString() : '';
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(extra || {});
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     return params.toString();
   }
 
-  function buildPicker() {
-    SERIES.forEach(function (item) {
+  function groupByUnit(series) {
+    const buckets = {};
+    series.forEach(function (item) {
+      const unit = item.unit || '';
+      if (!buckets[unit]) buckets[unit] = [];
+      buckets[unit].push(item);
+    });
+    const keys = Object.keys(buckets).sort(function (a, b) {
+      const ia = UNIT_ORDER.indexOf(a);
+      const ib = UNIT_ORDER.indexOf(b);
+      const ra = ia === -1 ? UNIT_ORDER.length : ia;
+      const rb = ib === -1 ? UNIT_ORDER.length : ib;
+      if (ra !== rb) return ra - rb;
+      return a.localeCompare(b);
+    });
+    return keys.map(function (unit) {
+      return {
+        unit: unit,
+        title: UNIT_TITLES[unit] || (unit ? ('Sensores (' + unit + ')') : 'Otros'),
+        series: buckets[unit],
+      };
+    });
+  }
+
+  function ensureChartBlocks(groups) {
+    const seen = {};
+    groups.forEach(function (group) {
+      seen[group.unit] = true;
+      let block = document.getElementById('telemetry-group-' + encodeURIComponent(group.unit));
+      if (block) {
+        block.querySelector('.telemetry-group-title').textContent = group.title;
+        return;
+      }
+      block = document.createElement('div');
+      block.className = 'telemetry-unit-group mb-4';
+      block.id = 'telemetry-group-' + encodeURIComponent(group.unit);
+      block.dataset.unit = group.unit;
+
+      const title = document.createElement('h3');
+      title.className = 'h6 mb-2 telemetry-group-title';
+      title.textContent = group.title;
+
+      const picker = document.createElement('div');
+      picker.className = 'd-flex flex-wrap gap-3 mb-2 small telemetry-group-picker';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'position-relative';
+      wrap.style.height = '280px';
+      const canvas = document.createElement('canvas');
+      canvas.className = 'telemetry-group-canvas';
+      wrap.appendChild(canvas);
+
+      block.appendChild(title);
+      block.appendChild(picker);
+      block.appendChild(wrap);
+      chartsHost.appendChild(block);
+    });
+
+    Array.from(chartsHost.children).forEach(function (block) {
+      if (!seen[block.dataset.unit]) {
+        const unit = block.dataset.unit;
+        if (charts[unit]) {
+          charts[unit].destroy();
+          delete charts[unit];
+        }
+        block.remove();
+      }
+    });
+  }
+
+  function buildPicker(group, seriesMeta) {
+    const block = document.getElementById('telemetry-group-' + encodeURIComponent(group.unit));
+    if (!block) return;
+    const picker = block.querySelector('.telemetry-group-picker');
+    const previous = {};
+    picker.querySelectorAll('input[type="checkbox"]').forEach(function (input) {
+      previous[input.id] = input.checked;
+    });
+    picker.innerHTML = '';
+    group.series.forEach(function (item) {
+      const live = (seriesMeta || []).find(function (s) { return s.id === item.id; }) || item;
       const wrapper = document.createElement('div');
       wrapper.className = 'form-check form-check-inline';
       const input = document.createElement('input');
       input.className = 'form-check-input';
       input.type = 'checkbox';
       input.id = 'series-' + item.id;
-      input.checked = true;
+      input.checked = previous[input.id] !== false;
       input.addEventListener('change', function () {
+        const chart = charts[group.unit];
         if (!chart) return;
-        const index = SERIES.findIndex((s) => s.id === item.id);
+        const index = group.series.findIndex(function (s) { return s.id === item.id; });
+        if (index < 0) return;
         chart.setDatasetVisibility(index, input.checked);
         chart.update();
       });
       const label = document.createElement('label');
       label.className = 'form-check-label';
       label.setAttribute('for', input.id);
-      label.innerHTML = '<span style="color:' + item.color + '">&#9632;</span> '
-        + item.label + (item.unit ? ' (' + item.unit + ')' : '')
-        + (item.note ? ' <span class="text-muted">&mdash; ' + item.note + '</span>' : '')
-        + (item.closed ? ' <span class="badge bg-dark" title="Este sensor dejo de registrar; el historial queda">cerrado</span>' : '')
-        + (item.has_data ? '' : ' <span class="badge bg-secondary">sin datos en el rango</span>');
+      label.innerHTML = seriesLabelHtml(live);
       wrapper.appendChild(input);
       wrapper.appendChild(label);
       picker.appendChild(wrapper);
     });
   }
 
-  function refreshPicker(data) {
-    // The picker is seeded from SERIES (the server-side snapshot), which always
-    // arrives with has_data false because the real counts are only known once
-    // the range has been queried. Rebuild each label from the live response so
-    // a reporting sensor stops claiming "sin datos en el rango" as soon as its
-    // data lands.
+  function seriesLabelHtml(item) {
+    const note = item.note ? ' <span class="text-muted">&mdash; ' + item.note + '</span>' : '';
+    const closed = item.closed
+      ? ' <span class="badge bg-dark" title="Este sensor dejo de registrar; el historial queda">cerrado</span>'
+      : '';
+    const idle = item.has_data
+      ? ''
+      : ' <span class="badge bg-secondary">sin datos en el rango</span>';
+    return '<span style="color:' + item.color + '">&#9632;</span> '
+      + item.label + (item.unit ? ' (' + item.unit + ')' : '') + note + closed + idle;
+  }
+
+  function refreshPickers(data) {
     (data.series || []).forEach(function (item) {
       const input = document.getElementById('series-' + item.id);
       if (!input) return;
       const label = input.nextElementSibling;
       if (!label) return;
-      const note = item.note ? ' — ' + item.note : '';
-      const closed = item.closed
-        ? ' <span class="badge bg-dark" title="Este sensor dejo de registrar; el historial queda">cerrado</span>'
-        : '';
-      const idle = item.has_data
-        ? ''
-        : ' <span class="badge bg-secondary">sin datos en el rango</span>';
-      label.innerHTML = '<span style="color:' + item.color + '">&#9632;</span> '
-        + item.label + (item.unit ? ' (' + item.unit + ')' : '') + note + closed + idle;
+      label.innerHTML = seriesLabelHtml(item);
     });
   }
 
@@ -912,108 +1019,173 @@
     return 'promedio cada ' + Math.round(seconds / 3600) + ' h';
   }
 
-  function render(data) {
+  function renderCharts(data) {
+    const liveSeries = data.series && data.series.length ? data.series : SERIES;
+    const groups = groupByUnit(liveSeries);
     const hasData = data.points && data.points.length > 0;
-    emptyBox.classList.toggle('d-none', hasData);
+    emptyBox.classList.toggle('d-none', hasData || !groups.length);
+    ensureChartBlocks(groups);
 
     const points = data.points || [];
 
-    // Plot {x, y} pairs against a real time axis instead of string labels.
-    // With category labels Chart.js cannot skip ticks by available width, so
-    // the handful it draws overlap; a time scale spaces them out properly.
-    const datasets = SERIES.map(function (item) {
-      return {
-        label: item.label + (item.unit ? ' (' + item.unit + ')' : ''),
-        data: points.map(function (point) {
-          const value = point.v[item.id];
-          return { x: new Date(point.t).getTime(), y: value === null || value === undefined ? null : value };
-        }),
-        borderColor: item.color,
-        backgroundColor: item.color,
-        yAxisID: item.axis === 'mains' ? 'yMains' : 'yClimate',
-        spanGaps: false,
-        tension: 0.15,
-        pointRadius: points.length > 200 ? 0 : 2,
-        borderWidth: 2,
-      };
-    });
+    groups.forEach(function (group) {
+      buildPicker(group, liveSeries);
+      const block = document.getElementById('telemetry-group-' + encodeURIComponent(group.unit));
+      const canvas = block.querySelector('.telemetry-group-canvas');
+      const datasets = group.series.map(function (item) {
+        return {
+          label: item.label + (item.unit ? ' (' + item.unit + ')' : ''),
+          data: points.map(function (point) {
+            const value = point.v[item.id];
+            return { x: new Date(point.t).getTime(), y: value === null || value === undefined ? null : value };
+          }),
+          borderColor: item.color,
+          backgroundColor: item.color,
+          spanGaps: false,
+          tension: 0.15,
+          pointRadius: points.length > 200 ? 0 : 2,
+          borderWidth: 2,
+        };
+      });
 
-    const config = {
-      type: 'line',
-      data: { datasets: datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          // The picker above toggles visibility, but a legend in the canvas is
-          // what maps a colour back to a sensor once the lines are on screen.
-          legend: {
-            display: true,
-            position: 'bottom',
-            labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true, padding: 14 },
-          },
-          tooltip: {
-            // The {x, y} points carry no label of their own, so name the
-            // timestamp explicitly in the header.
-            callbacks: {
-              title: function (items) {
-                if (!items.length) return '';
-                return new Date(items[0].parsed.x).toLocaleString();
+      const config = {
+        type: 'line',
+        data: { datasets: datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'bottom',
+              labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true, padding: 14 },
+            },
+            tooltip: {
+              callbacks: {
+                title: function (items) {
+                  if (!items.length) return '';
+                  return new Date(items[0].parsed.x).toLocaleString();
+                },
               },
             },
           },
-        },
-        scales: {
-          x: {
-            type: 'time',
-            time: {
-              // The bucket endpoint returns UTC instants; render them in the
-              // operator's own timezone so the axis matches the range inputs.
-              tooltipFormat: 'dd/MM/yyyy HH:mm',
-              displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'dd/MM HH:mm' },
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                tooltipFormat: 'dd/MM/yyyy HH:mm',
+                displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'dd/MM HH:mm' },
+              },
+              ticks: { maxTicksLimit: 12, autoSkip: true, maxRotation: 0 },
+              grid: { display: false },
+              title: { display: true, text: 'Fecha y hora' },
             },
-            ticks: { maxTicksLimit: 12, autoSkip: true, maxRotation: 0 },
-            grid: { display: false },
-            title: { display: true, text: 'Fecha y hora' },
-          },
-          yClimate: {
-            position: 'left',
-            title: { display: true, text: 'Temperatura (\u00b0C) / Humedad (%)' },
-          },
-          yMains: {
-            position: 'right',
-            title: { display: true, text: 'Red electrica (ADC crudo)' },
-            grid: { drawOnChartArea: false },
+            y: {
+              position: 'left',
+              title: { display: true, text: group.title },
+            },
           },
         },
-      },
-    };
+      };
 
-    if (chart) {
-      chart.data = config.data;
-      chart.options = config.options;
-      chart.update();
-    } else {
-      chart = new Chart(document.getElementById('telemetry-chart'), config);
-    }
+      if (charts[group.unit]) {
+        charts[group.unit].data = config.data;
+        charts[group.unit].options = config.options;
+        charts[group.unit].update();
+      } else {
+        charts[group.unit] = new Chart(canvas, config);
+      }
+    });
 
     const bits = [];
     bits.push(data.total_samples + ' muestras');
     bits.push(bucketLabel(data.bucket_seconds));
     if (data.truncated) bits.push('rango truncado');
-    const idle = (data.series || []).filter((item) => !item.has_data);
+    const idle = (data.series || []).filter(function (item) { return !item.has_data; });
     if (idle.length) bits.push(idle.length + ' sensor(es) sin datos');
     summary.textContent = bits.join(' · ');
 
-    refreshPicker(data);
+    refreshPickers(data);
 
     if (data.truncated) {
       showAlert('El rango tiene mas muestras de las que se pueden graficar; se muestran las primeras. Acota el rango para ver todo.');
     }
   }
 
-  function load() {
+  function formatCell(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number') {
+      return Number.isInteger(value) ? String(value) : value.toFixed(2);
+    }
+    return String(value);
+  }
+
+  function renderTable(data) {
+    const columns = data.columns || [];
+    tableHead.innerHTML = '';
+    const headRow = document.createElement('tr');
+    const thTime = document.createElement('th');
+    thTime.textContent = 'Fecha y hora';
+    headRow.appendChild(thTime);
+    columns.forEach(function (col) {
+      const th = document.createElement('th');
+      th.textContent = col.label + (col.unit ? ' (' + col.unit + ')' : '');
+      headRow.appendChild(th);
+    });
+    tableHead.appendChild(headRow);
+
+    tableBody.innerHTML = '';
+    (data.rows || []).forEach(function (row) {
+      const tr = document.createElement('tr');
+      const tdTime = document.createElement('td');
+      tdTime.className = 'text-nowrap';
+      tdTime.textContent = row.t ? new Date(row.t).toLocaleString() : '—';
+      tr.appendChild(tdTime);
+      columns.forEach(function (col) {
+        const td = document.createElement('td');
+        td.textContent = formatCell(row.v ? row.v[col.id] : null);
+        tr.appendChild(td);
+      });
+      tableBody.appendChild(tr);
+    });
+
+    if (!(data.rows || []).length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = columns.length + 1;
+      td.className = 'text-muted small';
+      td.textContent = 'Sin filas en el rango seleccionado.';
+      tr.appendChild(td);
+      tableBody.appendChild(tr);
+    }
+
+    tablePage = data.page || 1;
+    tablePages = data.pages || 1;
+    const total = data.total || 0;
+    tableSummary.textContent = total + ' filas en el rango';
+    tablePageLabel.textContent = 'Pagina ' + tablePage + ' de ' + tablePages;
+    prevBtn.disabled = tablePage <= 1;
+    nextBtn.disabled = tablePage >= tablePages;
+  }
+
+  function loadTable() {
+    const qs = query({ page: String(tablePage) });
+    fetch(ROWS_ENDPOINT + (qs ? '?' + qs : ''), { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'No se pudo cargar la tabla.');
+          return body;
+        });
+      })
+      .then(renderTable)
+      .catch(function (error) {
+        tableSummary.textContent = error.message;
+        tableBody.innerHTML = '';
+      });
+  }
+
+  function loadCharts() {
     showAlert('');
     const qs = query();
     exportLink.href = CSV_ENDPOINT + (qs ? '?' + qs : '');
@@ -1024,11 +1196,17 @@
           return body;
         });
       })
-      .then(render)
+      .then(renderCharts)
       .catch(function (error) {
         showAlert(error.message);
         emptyBox.classList.remove('d-none');
       });
+  }
+
+  function load() {
+    tablePage = 1;
+    loadCharts();
+    loadTable();
   }
 
   document.querySelectorAll('[data-range-hours]').forEach(function (button) {
@@ -1044,8 +1222,17 @@
     });
   });
   document.getElementById('telemetry-apply').addEventListener('click', load);
+  prevBtn.addEventListener('click', function () {
+    if (tablePage <= 1) return;
+    tablePage -= 1;
+    loadTable();
+  });
+  nextBtn.addEventListener('click', function () {
+    if (tablePage >= tablePages) return;
+    tablePage += 1;
+    loadTable();
+  });
 
-  buildPicker();
   setRange(24);
   load();
 })();
