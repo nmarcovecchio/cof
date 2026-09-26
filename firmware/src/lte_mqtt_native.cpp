@@ -302,7 +302,12 @@ void cmqttLoop() {
   }
 
   String line;
+  bool sawCmqtt = false;
   while (cmqttReadLine(line)) {
+    if (line.startsWith("+CMQTT")) {
+      appendModemLogForced(line);
+      sawCmqtt = true;
+    }
     // Passive loss of the connection / network. Both must force a reconnect.
     if (line.startsWith("+CMQTTCONNLOST")) {
       cmqttBrokerUp = false;
@@ -364,6 +369,7 @@ void cmqttLoop() {
     }
 
     if (line.startsWith("+CMQTTRXEND:")) {
+      appendModemLogForced("RX topic " + cmqttRxTopic);
       cmqttDispatchMessage();
       cmqttRxActive = false;
       cmqttRxInPayload = false;
@@ -371,6 +377,9 @@ void cmqttLoop() {
       cmqttRxPayload = "";
       continue;
     }
+  }
+  if (sawCmqtt && !cmqttRxActive) {
+    captureLteUrcLog();
   }
 }
 

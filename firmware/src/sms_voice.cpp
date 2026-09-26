@@ -1002,9 +1002,11 @@ String transmitSms(const String& phone, const String& body) {
 #endif
   }
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
+    appendModemLogForced("SMS CMGF fail");
     setStatus("SMS mode fail");
     return "SMS mode fail";
   }
+  appendModemLogForced("SMS CMGF ok");
 
   flushModemInput();
   Serial.println("[modem] >> AT+CMGS=\"" + phone + "\"");
@@ -1012,14 +1014,17 @@ String transmitSms(const String& phone, const String& body) {
   ModemSerial.print(phone);
   ModemSerial.print("\"\r");
   if (!modemWaitForPrompt(10000)) {
+    appendModemLogForced("SMS prompt fail");
     setStatus("SMS prompt fail");
     return "SMS prompt fail";
   }
+  appendModemLogForced("SMS prompt ok");
 
   ModemSerial.print(body);
   ModemSerial.write(static_cast<uint8_t>(0x1A));
   const String response = readModemUntil(60000, "OK");
   Serial.println("[modem] << " + response);
+  appendModemLogForced("SMS rsp " + response);
   if (response.indexOf("+CMGS") < 0 && response.indexOf("OK") < 0) {
     String err = response;
     err.replace("\r", " ");

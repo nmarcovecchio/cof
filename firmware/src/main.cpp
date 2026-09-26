@@ -801,7 +801,13 @@ void loop() {
     pendingTestSmsPhone = "";
     pendingTestSmsText = "";
     pendingTestSmsCommandId = "";
+    appendModemLogForced("SMS run " + smsPhone);
     const String result = sendTestSms(smsPhone, smsText);
+    appendModemLogForced("SMS result " + result);
+    lteTraceLog = modemCallLog;
+    pendingLteTraceMessage = "SMS " + result;
+    pendingLteTraceOk = result == "SMS sent";
+    pendingLteTracePublish = true;
     connectMqttIfNeeded();
     const bool ok = result == "SMS sent";
     publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId);

@@ -63,6 +63,10 @@ void stopLtePdp();
 
 // ---- owned by modem_at --------------------------------------
 void appendModemLog(char direction, const String& text);
+// Records a line even when no call/LTE handshake is in progress. Used so the
+// device page shows CMQTT URCs and SMS AT that the gated logger drops.
+void appendModemLogForced(const String& text);
+void captureLteUrcLog();
 void beginInternalWatchdog();
 void configureCellularApn();
 bool cpinResponseReady(const String& response);

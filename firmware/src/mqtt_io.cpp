@@ -368,6 +368,21 @@ bool publishDeviceEvent(const char* type, const char* severity, const String& me
   flushDeferredEvents();
   return true;
 }
+void captureLteUrcLog() {
+  // A CMQTT URC arrived outside the connect handshake. Publish it once the
+  // throttle window allows, without replacing a trace already waiting to go out
+  // (the connect result, or an SMS result snapped before the reconnect).
+  if (reportLteProgress || pendingLteTracePublish || !state.mqttConnected) {
+    return;
+  }
+  if (modemCallLog.length() == 0) {
+    return;
+  }
+  lteTraceLog = modemCallLog;
+  pendingLteTraceMessage = "LTE URC";
+  pendingLteTraceOk = true;
+  pendingLteTracePublish = true;
+}
 void publishLteDataTrace() {
   if (!pendingLteTracePublish || !state.mqttConnected) {
     return;
@@ -532,20 +547,17 @@ static void connectMqttNativeIfNeeded() {
       }
     }
     lteTraceLog = modemCallLog;
-    pendingLteTraceMessage = "LTE MQTT fail (native)";
-    pendingLteTraceOk = false;
-    pendingLteTracePublish = true;
+    if (!(pendingLteTracePublish && pendingLteTraceMessage.startsWith("SMS"))) {
+      pendingLteTraceMessage = "LTE MQTT fail (native)";
+      pendingLteTraceOk = false;
+      pendingLteTracePublish = true;
+    }
     reportLteProgress = false;
     return;
   }
 
   lteMqttConnectFails = 0;
   lteMqttRebuildCycles = 0;
-  lteTraceLog = modemCallLog;
-  pendingLteTraceMessage = "LTE MQTT OK (native)";
-  pendingLteTraceOk = true;
-  pendingLteTracePublish = true;
-  reportLteProgress = false;
 
   // The native path never ran NETOPEN, so state.lteIpAddress is still "-".
   // CMQTTSTART already activated the PDP on CID 1 (CGDCONT=1); read the real
@@ -553,7 +565,9 @@ static void connectMqttNativeIfNeeded() {
   // instead of "-" (observed: "L --" while MQTT rode LTE). Queried BEFORE the
   // subscribes: right after CONNECT the UART is quiet, so the AT round-trip
   // cannot steal an inbound +CMQTTRX URC (a retained config/desired message is
-  // delivered immediately after SUB).
+  // delivered immediately after SUB). reportLteProgress stays true across these
+  // two AT dialogs so the SUB prompt/OK is in the trace. The async +CMQTTSUB
+  // usually lands in the next sendAT()'s flush; flushModemInput records it.
   {
     String ip;
     if (queryLteIp(ip)) {
@@ -561,8 +575,11 @@ static void connectMqttNativeIfNeeded() {
     }
   }
 
-  cmqttSubscribe(mqttTopic("config/desired"), 1);
-  cmqttSubscribe(mqttTopic("command"), 1);
+  const bool subConfig = cmqttSubscribe(mqttTopic("config/desired"), 1);
+  const bool subCommand = cmqttSubscribe(mqttTopic("command"), 1);
+  appendModemLog('>', String("SUB config ") + (subConfig ? "prompt-ok" : "prompt-fail"));
+  appendModemLog('>', String("SUB command ") + (subCommand ? "prompt-ok" : "prompt-fail"));
+  reportLteProgress = false;
 
   state.mqttConnected = true;
   lastMqttOkMs = millis();
@@ -570,6 +587,16 @@ static void connectMqttNativeIfNeeded() {
   publishDeviceStatus("online", true);
   publishTelemetryNow();
   lastTelemetryPublishMs = millis();
+  // Snapshot after the first publishes: their sendAT() flush is what usually
+  // catches the async +CMQTTSUB / +CMQTTRX that follow the SUB prompt OK.
+  // A test SMS snaps its own trace before reconnecting; keep that message and
+  // only refresh the log so the reconnect AT does not erase the CMGS lines.
+  lteTraceLog = modemCallLog;
+  if (!(pendingLteTracePublish && pendingLteTraceMessage.startsWith("SMS"))) {
+    pendingLteTraceMessage = "LTE MQTT OK (native)";
+    pendingLteTraceOk = true;
+    pendingLteTracePublish = true;
+  }
   publishLteDataTrace();
   lastCellularStatusMs = millis();
   setStatus("MQTT OK");

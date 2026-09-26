@@ -381,6 +381,13 @@ de 0.2.83: `AT+CFUN=0` / `AT+CFUN=1` con la radio Online (CSQ 30), el módem
 respondió `phone failure` + `*ATREADY` y quedó un rato en `NO SERVICE`. El
 camino nativo de `lte_mqtt_native.cpp`, `mqtt_io.cpp` y `modem_at.cpp` volvió
 al de 0.2.85. El SMS por LTE sigue pendiente: en 0.2.85 el comando no entraba.
+El panel de las 12:03 (`command_sent`, sin `command_ack` ni `test_sms`) confirma
+que el comando no llegó. El trace `LTE MQTT OK` se sacaba antes de los dos
+`CMQTTSUB`, y `appendModemLog` tira todo lo que no es handshake, así que el
+`+CMQTTSUB` asíncrono y cualquier `+CMQTTRX` no quedaban en ningún evento.
+**0.2.91 solo agrega log** (mismo AT de connect/SUB): el OK incluye el prompt
+de ambos SUB y el `+CMQTT*` que `flushModemInput` se llevaba; un URC posterior
+sale como `LTE URC`; si el SMS corre, el evento dice `SMS ...` con el `CMGS`.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con

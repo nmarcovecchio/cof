@@ -106,21 +106,13 @@ bool modemLineInteresting(const String& line) {
          upper.indexOf("COLP") >= 0 || upper.indexOf("CCMX") >= 0 ||
          upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("CHUP") >= 0;
 }
-void appendModemLog(char direction, const String& text) {
-  if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress) {
+static void appendModemLogLine(String entry) {
+  entry.replace("\r", " ");
+  entry.replace("\n", " | ");
+  entry.trim();
+  if (entry.length() == 0) {
     return;
   }
-  String line = text;
-  line.replace("\r", " ");
-  line.replace("\n", " | ");
-  line.trim();
-  if (line.length() == 0) {
-    return;
-  }
-  if (!reportLteProgress && !modemLineInteresting(line)) {
-    return;
-  }
-  String entry = String(direction == '>' ? ">> " : "<< ") + line;
   if (entry.length() > 140) {
     entry = entry.substring(0, 140);
   }
@@ -136,6 +128,25 @@ void appendModemLog(char direction, const String& text) {
     modemCallLog += '\n';
   }
   modemCallLog += entry;
+}
+void appendModemLog(char direction, const String& text) {
+  if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress) {
+    return;
+  }
+  String line = text;
+  line.replace("\r", " ");
+  line.replace("\n", " | ");
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+  if (!reportLteProgress && !modemLineInteresting(line)) {
+    return;
+  }
+  appendModemLogLine(String(direction == '>' ? ">> " : "<< ") + line);
+}
+void appendModemLogForced(const String& text) {
+  appendModemLogLine(text);
 }
 void waitWithWatchdog(uint32_t ms) {
   const uint32_t startedAt = millis();
@@ -194,6 +205,7 @@ void flushModemInput() {
   // used to make this loop run forever and block every AT command that follows
   // (sendAT() calls it first). Cap the bytes per call; the next call drains more.
   int drained = 0;
+  String swept;
   while (ModemSerial.available() && drained < 1024) {
     const char c = static_cast<char>(ModemSerial.read());
     drained++;
@@ -201,10 +213,21 @@ void flushModemInput() {
       pendingCallUrcs += c;
     } else {
       pendingModemUrcs += c;
+      swept += c;
+      if (swept.length() > 400) {
+        swept.remove(0, swept.length() - 200);
+      }
       if (pendingModemUrcs.length() > 2048) {
         pendingModemUrcs.remove(0, pendingModemUrcs.length() - 1024);
       }
     }
+  }
+  // sendAT() drains the UART before every command. A +CMQTTSUB / +CMQTTRX that
+  // arrived after the previous OK lives in that drain and never reaches
+  // cmqttLoop(). Record it; the bytes still go to pendingModemUrcs as before.
+  const int at = swept.indexOf("+CMQTT");
+  if (at >= 0) {
+    appendModemLogForced(swept.substring(at));
   }
 }
 String readModemUntil(uint32_t timeoutMs, const String& token) {
