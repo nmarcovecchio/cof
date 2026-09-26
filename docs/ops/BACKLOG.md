@@ -193,6 +193,39 @@ proxima vez si la escalera llega a `ESP.restart()` o si es RF del sitio. La sena
 Sin `esp_reset_reason()` no se puede distinguir "stage 5" de un crash/panic: la
 instrumentacion de arriba sigue siendo el cierre real de este item.
 
+**Cuarta confirmacion en hardware: 2026-09-25 ~22:13 -03 (solo LTE, piso 12, buena
+senal).** El modem volvio a flapear `NO SERVICE` (8 eventos `modem_recovery` en
+rafaga) y MQTT reconecto cada ~1,5-2,5 min. Con senal buena (piso 12, segun el
+usuario) el flap dejo de ser atribuible a RF ambiental y apunto a **la propia
+escalera como causa**: el step 1 mandaba `AT+CGATT=0` (detach) ante el **primer**
+`CPSI: NO SERVICE`, y ese detach *generaba* el siguiente flap de registro que
+re-disparaba la escalera. Es un loop de retroalimentacion autoinfligido, no un
+problema de senal. **Fix en 0.2.78:**
+
+- **Ventana de gracia (`kModemNoServiceGraceMs` = 45 s).** `pollModem()` ya no
+  arranca la escalera ante un unico `NO SERVICE`; exige que persista 45 s
+  (`noServiceSinceMs`). La banda base del A7672 re-selecciona sola en ~2 s.
+- **Step 1 suave.** Antes era `stopLtePdp()` + `CGATT=0/1` (detach/attach). Ahora
+  es solo `AT+COPS=0` (re-seleccion de operador). El re-attach PS (`CGATT=1`) pasa
+  al step 2 y el ciclo de RF (`CFUN=0/1`) al step 3. El detach desaparece de la
+  escalera.
+- **`+IPCLOSE` vs `+CIPEVENT: NETWORK CLOSED`.** Antes ambos derribaban el PDP
+  (`stopLtePdp()` ~45 s de `NETCLOSE`/`NETOPEN`). Segun el manual del A76XX,
+  `+IPCLOSE` es cierre pasivo del socket (broker) con el PDP **vivo**, mientras
+  `+CIPEVENT: NETWORK CLOSED UNEXPECTEDLY` es la red caida (PDP muerto). 0.2.78
+  solo reconstruye el PDP en el segundo caso (`ltePdpDown`); un cierre de broker
+  ahora reabre el socket (~5 s) en vez de un corte visible.
+
+**Hallazgo de arquitectura (queda pendiente): MQTT nativo `AT+CMQTT*`.** El A7672
+tiene un cliente MQTT nativo (`AT+CMQTTSTART` activa el PDP, `AT+CMQTTCONNECT`,
+`AT+CMQTTSUB`, `AT+CMQTTPUB`, y la recepcion llega por URC `+CMQTTRXPAYLOAD` en vez
+de poll de `AT+CIPRXGET`; `+CMQTTNONET` avisa cuando la red se cae). Hoy
+reimplementamos MQTT a mano sobre `CIPOPEN`/`CIPSEND`/`CIPRXGET`, que es exactamente
+la capa fragil que produce estos cortes. Mover la ruta LTE a MQTT nativo elimina el
+polling, el keepalive manual y el estado de socket/PDP duplicado. Es el "switch de
+2 segundos" de un celular. Requiere reescribir el transporte LTE de MQTT y probarlo
+en hardware (ver §6j).
+
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 
 `pollModem()` (`firmware/src/main.cpp`) tiene gate `!state.lteMqttTransport`:
