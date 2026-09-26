@@ -362,8 +362,15 @@ ESP32 y dejó el cliente CMQTT de 0.2.86 vivo en el módem. `cmqttTearDown()` no
 mandó nada porque sus flags arrancan en false. El recovery mandó solo STOP, y
 STOP responde ERROR mientras el cliente sigue adquirido (hay que DISC, después
 REL, después STOP). El servicio nunca bajó, así que START siguió en ERROR.
-**0.2.88:** ante ese ERROR pelado hace `CMQTTDISC` + `CMQTTREL` + `CMQTTSTOP`
-(resultados ignorados) y recién ahí `CMQTTSTART`.
+**0.2.88 conectó el servicio y falló el socket (campo, 11:35).** `CMQTTSTART: 0`,
+`ACCQ` OK, will OK, y `+CMQTTCONNECT: 0,3`. El código 3 del manual §18.3 es
+"sock connect fail" (el 25 sería DNS, el 30 sería usuario/clave). El broker
+`mqtt.callonfail.com.ar:1883` (54.207.204.86) acepta TCP desde afuera. El módem
+marcó el TCP como fallido dos veces, y entre medio el firmware tiró STOP y
+volvió a marcar igual. **0.2.89:** espera una IP en `CGPADDR` antes de marcar;
+si Ethernet ya resolvió el broker, marca a esa IP; ante un code 3 reintenta el
+CONNECT en el mismo cliente (sin STOP) y, si sigue, resuelve con `CDNSGIP` y
+marca a la IP.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con

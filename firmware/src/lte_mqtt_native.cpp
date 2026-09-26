@@ -265,6 +265,40 @@ static void cmqttWaitForModemBoot() {
   modemRebootUrcSeen = false;
 }
 
+static int cmqttDial(const String& serverAddr, const String& username, const String& password) {
+  String connectCmd = "AT+CMQTTCONNECT=0,\"" + serverAddr + "\"," +
+                      String(kMqttKeepAliveSeconds) + ",1";
+  if (username.length() > 0) {
+    connectCmd += ",\"" + username + "\",\"" + password + "\"";
+  }
+  String resp;
+  if (!sendAT(connectCmd, "+CMQTTCONNECT:", 25000, &resp)) {
+    appendModemLogForced("CONNECT " + serverAddr + " -> no result");
+    return -1;
+  }
+  const int code = cmqttResult(resp, "+CMQTTCONNECT:");
+  appendModemLogForced("CONNECT " + serverAddr + " -> " + String(code));
+  return code;
+}
+
+// CMQTTSTART can answer 0 before CID 1 has an address. CONNECT in that window
+// is +CMQTTCONNECT: 0,3 (sock connect fail), which is what 0.2.88 logged twice
+// while the broker itself was reachable.
+static bool cmqttWaitForPdp() {
+  for (int i = 0; i < 6; i++) {
+    String resp;
+    String ip;
+    if (sendAT("AT+CGPADDR=1", "OK", 3000, &resp) && parseLteIp(resp, ip) && looksLikeIp(ip)) {
+      state.lteIpAddress = ip;
+      appendModemLogForced("PDP " + ip);
+      return true;
+    }
+    waitWithWatchdog(1000);
+  }
+  appendModemLogForced("PDP no ip");
+  return false;
+}
+
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
                   const String& host, int port, const String& username, const String& password) {
   cmqttTearDown();
@@ -306,24 +340,48 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
     cmqttPromptWrite(String("AT+CMQTTWILLMSG=0,") + String(willPayload.length()) + ",1", willPayload, 5000);
   }
 
-  String serverAddr = "tcp://" + host + ":" + String(port);
-  String connectCmd = "AT+CMQTTCONNECT=0,\"" + serverAddr + "\"," +
-                      String(kMqttKeepAliveSeconds) + ",1";
-  if (username.length() > 0) {
-    connectCmd += ",\"" + username + "\",\"" + password + "\"";
-  }
-  String resp;
-  if (!sendAT(connectCmd, "+CMQTTCONNECT:", 20000, &resp)) {
-    Serial.println("[cmqtt] CMQTTCONNECT no response");
+  if (!cmqttWaitForPdp()) {
     return false;
   }
-  if (cmqttResult(resp, "+CMQTTCONNECT:") != 0) {
-    Serial.printf("[cmqtt] CMQTTCONNECT err: %s\n", resp.c_str());
+
+  // Dial the address Ethernet already reached when we have it. The modem's
+  // resolver is a separate step: a hostname CONNECT that dies with code 3
+  // (sock connect fail, not 25 DNS error) never opens TCP, even when the
+  // broker answers from the LAN.
+  String cached;
+  if (static_cast<uint32_t>(cachedMqttIp) != 0) {
+    cached = cachedMqttIp.toString();
+  }
+  const String primary = cached.length() > 0 ? cached : host;
+  const String secondary = (cached.length() > 0 && cached != host) ? host : String("");
+
+  int code = cmqttDial("tcp://" + primary + ":" + String(port), username, password);
+  if (code == 3) {
+    // Same client, no STOP. Tearing the service down and dialing again at once
+    // is the second identical code 3 in the 0.2.88 log.
+    waitWithWatchdog(3000);
+    code = cmqttDial("tcp://" + primary + ":" + String(port), username, password);
+  }
+  if (code == 3 && secondary.length() > 0) {
+    code = cmqttDial("tcp://" + secondary + ":" + String(port), username, password);
+  }
+  if (code == 3) {
+    String resp;
+    if (sendAT("AT+CDNSGIP=\"" + host + "\"", "+CDNSGIP:", 10000, &resp)) {
+      const String resolved = nthQuoted(resp, 2);
+      if (looksLikeIp(resolved) && resolved != primary) {
+        appendModemLogForced("DNS " + resolved);
+        code = cmqttDial("tcp://" + resolved + ":" + String(port), username, password);
+      }
+    }
+  }
+  if (code != 0) {
+    Serial.printf("[cmqtt] CMQTTCONNECT code %d\n", code);
     return false;
   }
 
   cmqttBrokerUp = true;
-  Serial.println("[cmqtt] connected to " + serverAddr);
+  Serial.println("[cmqtt] connected");
   return true;
 }
 
