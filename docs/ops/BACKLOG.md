@@ -216,15 +216,23 @@ problema de senal. **Fix en 0.2.78:**
   solo reconstruye el PDP en el segundo caso (`ltePdpDown`); un cierre de broker
   ahora reabre el socket (~5 s) en vez de un corte visible.
 
-**Hallazgo de arquitectura (queda pendiente): MQTT nativo `AT+CMQTT*`.** El A7672
-tiene un cliente MQTT nativo (`AT+CMQTTSTART` activa el PDP, `AT+CMQTTCONNECT`,
-`AT+CMQTTSUB`, `AT+CMQTTPUB`, y la recepcion llega por URC `+CMQTTRXPAYLOAD` en vez
-de poll de `AT+CIPRXGET`; `+CMQTTNONET` avisa cuando la red se cae). Hoy
-reimplementamos MQTT a mano sobre `CIPOPEN`/`CIPSEND`/`CIPRXGET`, que es exactamente
-la capa fragil que produce estos cortes. Mover la ruta LTE a MQTT nativo elimina el
-polling, el keepalive manual y el estado de socket/PDP duplicado. Es el "switch de
-2 segundos" de un celular. Requiere reescribir el transporte LTE de MQTT y probarlo
-en hardware (ver §6j).
+**Hallazgo de arquitectura: MQTT nativo `AT+CMQTT*` — implementado en 0.2.79,
+pendiente validación en hardware.** El A7672 tiene un cliente MQTT nativo
+(`AT+CMQTTSTART` activa el PDP, `AT+CMQTTCONNECT`, `AT+CMQTTSUB`, `AT+CMQTTPUB`, y
+la recepción llega por URC `+CMQTTRXPAYLOAD` en vez de poll de `AT+CIPRXGET`;
+`+CMQTTNONET` avisa cuando la red se cae). Hoy reimplementábamos MQTT a mano sobre
+`CIPOPEN`/`CIPSEND`/`CIPRXGET`, que es exactamente la capa frágil que produce estos
+cortes. Mover la ruta LTE a MQTT nativo elimina el polling, el keepalive manual y el
+estado de socket/PDP duplicado. Es el "switch de 2 segundos" de un celular.
+
+**Estado (0.2.79):** la ruta LTE usa `firmware/src/lte_mqtt_native.cpp`
+(compilada tras `#define COF_LTE_MQTT_NATIVE 1` en `cof_config.h`); el camino LAN
+(`PubSubClient`) queda intacto y el socket AT legacy queda detrás del switch por si
+un firmware de módulo regresiona. **Falta la prueba en hardware** con el dispositivo
+en modo solo-LTE: verificar que el `lte_data` trace muestre `CMQTTSTART`/`ACCQ`/
+`CONNECT` y que la caída de red llegue por `+CMQTTNONET` (rebuild de PDP) en vez de
+un cierre silencioso. Si el arranque LTE tarda más que antes es por `CMQTTSTART`
+(activa el PDP, ~12 s peor caso la primera vez).
 
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 
