@@ -529,6 +529,17 @@ static void connectMqttNativeIfNeeded() {
   cmqttSubscribe(mqttTopic("config/desired"), 1);
   cmqttSubscribe(mqttTopic("command"), 1);
 
+  // The native path never ran NETOPEN, so state.lteIpAddress is still "-".
+  // CMQTTSTART already activated the PDP on CID 1 (CGDCONT=1); read the real
+  // address so the OLED "L" line and the status/telemetry report the LTE IP
+  // instead of "-" (observed: "L --" on the OLED while MQTT rode LTE).
+  {
+    String ip;
+    if (queryLteIp(ip)) {
+      state.lteIpAddress = ip;
+    }
+  }
+
   state.mqttConnected = true;
   lastMqttOkMs = millis();
   lastSilenceProbeMs = 0;

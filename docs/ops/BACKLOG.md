@@ -250,8 +250,27 @@ falsa). `0.2.81` revierte eso y arregla:
 2. `AT+CMQTTPUB=<client>,<qos>,<pub_timeout>,<retained>` (orden correcto A76XX).
 3. `cmqttConnect()` auto-recupera un servicio ya arrancado (STOP → retry START).
 
-**Pendiente:** re-probar en hardware solo-LTE (trace debe mostrar `CMQTTSTART` →
-`+CMQTTSTART: 0` → `ACCQ` → `CONNECT`, y `+CMQTTNONET` en la caída).
+**Validado en hardware (0.2.81):** solo-LTE conectó y publicó (`LTE MQTT OK
+(native)`, telemetría entró al backend). Trace real:
+
+```
+>> AT+CMQTTSTART  → ERROR          (servicio viejo del OTA anterior)
+>> AT+CMQTTSTOP   → OK +CMQTTSTOP: 0
+>> AT+CMQTTSTART  → OK +CMQTTSTART: 0
+>> AT+CMQTTCONNECT → OK +CMQTTCONNECT: 0,0
+```
+
+**Observado en ese trace (0.2.82):** dos CONNECT seguidos con `REL → ERROR` y
+`STOP → ERROR` en el medio. La segunda conexión la disparó `cmqttBrokerUp=false`
+tras la primera (publicación inicial fallida o `+CMQTTCONNLOST` del broker); el
+teardown previo salteaba `DISC` porque el flag estaba apagado pero el módem seguía
+conectado, así que REL/STOP respondían "client is busy". Autorecuperó, pero **0.2.82**
+endurece `cmqttTearDown()` (DISC incondicional antes de REL/STOP) y además lee el IP
+real del PDP (`queryLteIp()` tras CONNECT) para que el OLED muestre `L <ip>` en vez
+de `L --` (el camino nativo nunca corre `NETOPEN`, así que `lteIpAddress` quedaba "-").
+
+**Pendiente:** re-probar solo-LTE en 0.2.82 y confirmar (a) una sola secuencia de
+CONNECT, (b) `L <ip>` en el OLED, (c) `+CMQTTNONET` en la caída de red.
 
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 

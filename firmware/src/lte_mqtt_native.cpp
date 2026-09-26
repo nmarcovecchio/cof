@@ -246,8 +246,17 @@ void cmqttDisconnect() {
 }
 
 void cmqttTearDown() {
-  // Full teardown: DISC (if still up) -> REL -> STOP, back to a clean slate.
-  cmqttDisconnect();
+  // Full teardown back to a clean slate. DISC is issued unconditionally (when a
+  // client was ever acquired): our cmqttBrokerUp flag can be false while the
+  // modem still holds the broker connection - a failed publish or a route bounce
+  // clears only our flag, not the module's socket. Skipping DISC in that state
+  // made REL answer ERROR ("client is busy") and STOP answer ERROR too, because
+  // the module refuses to release a connected client. The DISC result is ignored:
+  // a client that never connected just answers ERROR, which is harmless.
+  if (cmqttClientAcquired) {
+    sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000);
+  }
+  cmqttBrokerUp = false;
   if (cmqttClientAcquired) {
     sendAT("AT+CMQTTREL=0", "OK", 5000);
     cmqttClientAcquired = false;
