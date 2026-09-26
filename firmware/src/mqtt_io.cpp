@@ -547,19 +547,22 @@ static void connectMqttNativeIfNeeded() {
   pendingLteTracePublish = true;
   reportLteProgress = false;
 
-  cmqttSubscribe(mqttTopic("config/desired"), 1);
-  cmqttSubscribe(mqttTopic("command"), 1);
-
   // The native path never ran NETOPEN, so state.lteIpAddress is still "-".
   // CMQTTSTART already activated the PDP on CID 1 (CGDCONT=1); read the real
-  // address so the OLED "L" line and the status/telemetry report the LTE IP
-  // instead of "-" (observed: "L --" on the OLED while MQTT rode LTE).
+  // address (AT+CGPADDR=1) so the OLED "L" line and status/telemetry report it
+  // instead of "-" (observed: "L --" while MQTT rode LTE). Queried BEFORE the
+  // subscribes: right after CONNECT the UART is quiet, so the AT round-trip
+  // cannot steal an inbound +CMQTTRX URC (a retained config/desired message is
+  // delivered immediately after SUB).
   {
     String ip;
     if (queryLteIp(ip)) {
       state.lteIpAddress = ip;
     }
   }
+
+  cmqttSubscribe(mqttTopic("config/desired"), 1);
+  cmqttSubscribe(mqttTopic("command"), 1);
 
   state.mqttConnected = true;
   lastMqttOkMs = millis();

@@ -67,19 +67,27 @@ bool parseLteIp(const String& resp, String& ipOut) {
     if (q1 >= 0 && q2 > q1 + 1) {
       ipOut = resp.substring(q1 + 1, q2);
     } else {
+      // Unquoted. Two layouts exist:
+      //   +IPADDR: 10.84.17.161          (address only)
+      //   +CGPADDR: 1,10.83.214.110       (CID first, then address)
+      // The CID is always the first comma-separated field, so take the LAST one.
       int start = idx + static_cast<int>(strlen(tags[i]));
       while (start < static_cast<int>(resp.length()) &&
              (resp[start] == ' ' || resp[start] == ':')) {
         start++;
       }
       int end = start;
-      while (end < static_cast<int>(resp.length()) && resp[end] != '\r' && resp[end] != '\n' &&
-             resp[end] != ',') {
+      while (end < static_cast<int>(resp.length()) && resp[end] != '\r' && resp[end] != '\n') {
         end++;
       }
-      ipOut = resp.substring(start, end);
-      ipOut.trim();
+      String field = resp.substring(start, end);
+      const int lastComma = field.lastIndexOf(',');
+      if (lastComma >= 0) {
+        field = field.substring(lastComma + 1);
+      }
+      ipOut = field;
     }
+    ipOut.trim();
     ipOut.replace("\"", "");
     if (looksLikeIp(ipOut)) {
       return true;

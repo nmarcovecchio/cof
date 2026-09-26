@@ -272,6 +272,16 @@ de `L --` (el camino nativo nunca corre `NETOPEN`, así que `lteIpAddress` queda
 **Pendiente:** re-probar solo-LTE en 0.2.82 y confirmar (a) una sola secuencia de
 CONNECT, (b) `L <ip>` en el OLED, (c) `+CMQTTNONET` en la caída de red.
 
+**OLED `L --` arreglado en 0.2.84.** El `queryLteIp()` de 0.2.82 seguía devolviendo
+false en el camino nativo porque `parseLteIp()` tomaba el **primer** campo tras el
+tag: `AT+CGPADDR=1` responde `+CGPADDR: 1,10.83.214.110` (CID primero, sin
+comillas) y el parser agarraba `"1"`. Además `AT+IPADDR` en modo sin NETOPEN
+responde `+IP ERROR: Network not opened` (el camino nativo no abre NETOPEN). Fix:
+`parseLteIp()` toma el **último** campo separado por coma (la dirección), y la
+consulta se movió **antes** de los `CMQTTSUB` — justo tras CONNECT la UART está
+quieta, así el `sendAT` no puede robarse un `+CMQTTRX` entrante (un config/desired
+retenido llega inmediatamente tras el SUB).
+
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
 `lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados
