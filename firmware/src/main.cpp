@@ -149,6 +149,9 @@ uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
 uint8_t lteMqttConnectFails = 0;
 uint32_t lastSilenceProbeMs = 0;
+uint32_t lastLteHealthProbeMs = 0;
+uint32_t lteNoServiceSinceMs = 0;
+uint8_t lteMqttRebuildCycles = 0;
 // Events produced while MQTT is down, drained in order once it is back.
 DeferredEvent deferredEvents[kDeferredEventMax];
 size_t deferredEventCount = 0;
@@ -750,6 +753,7 @@ void loop() {
   connectMqttIfNeeded();
   maintainWifiBackup();
   enforceMqttSilenceWatchdog();
+  serviceLteMqttHealth();
 
   if (state.mqttConnected && pendingNetworkStatusReport) {
     pendingNetworkStatusReport = false;

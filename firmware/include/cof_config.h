@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.82"
+#define COF_FIRMWARE_VERSION "0.2.83"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -129,6 +129,21 @@ constexpr uint32_t kTelemetryIntervalMaxSeconds = 300;
 constexpr uint32_t kMqttSilenceReconnectMs = 90UL * 1000UL;
 constexpr uint32_t kSilenceProbeIntervalMs = 45UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
+// Native LTE MQTT liveness. While MQTT rides the modem's CMQTT stack,
+// pollModem()/refreshCellularStatus() are gated off (their AT chatter would steal
+// inbound +CMQTTRX URC bytes), so the only designed loss signals are the
+// +CMQTTCONNLOST / +CMQTTNONET URCs. A radio that dies *silently* emits neither
+// and would leave the device "connected" over a dead bearer. One cheap AT+CSQ per
+// kLteHealthProbeMs catches +CSQ: 99,99 (no service); once it persists
+// kModemNoServiceGraceMs the PDP is torn down so pollModem()'s recovery ladder can
+// run. See serviceLteMqttHealth() in lte_mqtt_native.cpp.
+constexpr uint32_t kLteHealthProbeMs = 30UL * 1000UL;
+// Connect-failure escalation for the native path. A connect that fails even though
+// the radio still claims "registered + Online" is a wedged data plane, not a radio
+// outage: after this many full PDP rebuilds without a successful connect, force a
+// radio cycle (resetModemRadio stage 3) instead of looping connect -> rebuild.
+constexpr uint8_t kLteMqttConnectFailLimit = 3;
+constexpr uint8_t kLteMqttRebuildEscalateCycles = 3;
 // Modem radio recovery. pollModem() runs every 30 s on LAN and 5 s without it, so
 // this interval only has to be long enough for one recovery step to take effect.
 // 150 s over 5 steps means a stuck radio escalates to a full ESP32 restart in

@@ -505,11 +505,31 @@ static void connectMqttNativeIfNeeded() {
   if (!ok) {
     setStatus("MQTT fail");
     lteMqttConnectFails++;
-    if (lteMqttConnectFails >= 3) {
+    if (lteMqttConnectFails >= kLteMqttConnectFailLimit) {
       lteMqttConnectFails = 0;
       Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
       stopLtePdp();
       lastLteAttemptMs = 0;
+      // CMQTT is now fully down (cmqttTearDown ran), so it is safe to interrogate
+      // the radio. This is the LTE-only escape hatch: if the radio died, hand off
+      // to pollModem()'s recovery ladder; if it still claims "registered + Online"
+      // yet the data plane will not connect, the module is wedged and needs a
+      // radio cycle. Without this the native path could loop connect -> rebuild
+      // -> connect forever and never reach the ladder (which is gated off while
+      // MQTT rides LTE).
+      refreshCellularStatus();
+      if (radioReportsService()) {
+        lteMqttRebuildCycles++;
+        if (lteMqttRebuildCycles >= kLteMqttRebuildEscalateCycles) {
+          lteMqttRebuildCycles = 0;
+          Serial.println("[lte] connect keeps failing despite registered radio, cycling RF");
+          resetModemRadio(3);
+          lastModemRecoveryMs = millis();
+        }
+      } else {
+        lteMqttRebuildCycles = 0;
+        noServiceSinceMs = 1;   // arm the ladder to fire immediately
+      }
     }
     lteTraceLog = modemCallLog;
     pendingLteTraceMessage = "LTE MQTT fail (native)";
@@ -520,6 +540,7 @@ static void connectMqttNativeIfNeeded() {
   }
 
   lteMqttConnectFails = 0;
+  lteMqttRebuildCycles = 0;
   lteTraceLog = modemCallLog;
   pendingLteTraceMessage = "LTE MQTT OK (native)";
   pendingLteTraceOk = true;

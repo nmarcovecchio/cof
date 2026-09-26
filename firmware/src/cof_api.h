@@ -96,10 +96,12 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
                   const String& host, int port, const String& username, const String& password);
 void cmqttDisconnect();
 bool cmqttIsConnected();
+bool cmqttIsRxBusy();
 void cmqttLoop();
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos);
 bool cmqttSubscribe(const String& topic, uint8_t qos);
 void cmqttTearDown();
+void serviceLteMqttHealth();
 
 // ---- owned by mqtt_io ---------------------------------------
 void bounceMqttForRouteChange();

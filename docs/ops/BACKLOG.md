@@ -272,6 +272,35 @@ de `L --` (el camino nativo nunca corre `NETOPEN`, así que `lteIpAddress` queda
 **Pendiente:** re-probar solo-LTE en 0.2.82 y confirmar (a) una sola secuencia de
 CONNECT, (b) `L <ip>` en el OLED, (c) `+CMQTTNONET` en la caída de red.
 
+**Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
+quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
+`lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados
+(§6c), así que una radio que muere *en silencio* — sin emitir `+CMQTTNONET` —
+dejaba al equipo "conectado" sobre un bearer muerto, dependiendo solo del watchdog
+de silencio de 6 min (`ESP.restart()`, que además no toca el módem). 0.2.83 cierra
+eso con dos mecanismos:
+
+1. **`serviceLteMqttHealth()`** (en `lte_mqtt_native.cpp`, corre cada pass): un
+   `AT+CSQ` cada `kLteHealthProbeMs` (30 s) mientras `cmqttIsConnected()`. Si
+   `+CSQ: 99,99` persiste `kModemNoServiceGraceMs` (45 s), suelta el PDP
+   (`stopLtePdp()`) y arma `noServiceSinceMs` para que la escalera de `pollModem()`
+   dispare de inmediato. Es URC-safe: `cmqttLoop()` drena antes del probe y el probe
+   se saltea si hay un mensaje a medio ensamblar (`cmqttIsRxBusy()`).
+2. **Escalada de fallo de connect** en `connectMqttNativeIfNeeded()`: si tras
+   `kLteMqttConnectFailLimit` (3) fallos se derriba el PDP y `refreshCellularStatus()`
+   (seguro, CMQTT ya está caído) muestra que la radio **sigue "registered + Online"**
+   pero el plano de datos no conecta, eso es un data-plane wedged, no un corte de
+   radio: tras `kLteMqttRebuildEscalateCycles` (3) ciclos de rebuild sin conectar,
+   fuerza un ciclo de RF (`resetModemRadio(3)`). Si en cambio reporta NO SERVICE,
+   cede a la escalera (`noServiceSinceMs = 1`).
+
+Con esto, en cualquier estado el equipo o publica por LTE, o está activamente
+reconectando/escalando (radio cycle → modem reset → ESP32 restart), nunca idle-muerto.
+
+**Pendiente:** validar en hardware solo-LTE: cortar el servicio de la SIM y
+confirmar que (a) aparece `+CSQ: 99,99` en el trace del probe, (b) en ~45 s suelta
+el PDP y la escalera arranca, (c) al volver la señal reconecta sin tocar nada.
+
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 
 `pollModem()` (`firmware/src/main.cpp`) tiene gate `!state.lteMqttTransport`:

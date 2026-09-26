@@ -122,6 +122,14 @@ bool cmqttIsConnected() {
   return cmqttBrokerUp;
 }
 
+bool cmqttIsRxBusy() {
+  // True while a published message is mid-delivery (+CMQTTRXSTART seen, not yet
+  // +CMQTTRXEND). serviceLteMqttHealth() skips its AT+CSQ probe in this window so
+  // the probe cannot interleave with the raw topic/payload bytes that follow the
+  // URC header.
+  return cmqttRxActive;
+}
+
 // Start the MQTT service. Per the A76XX AT manual (ch.18), AT+CMQTTSTART
 // activates the PDP context itself and answers "OK\r\n+CMQTTSTART: 0" on
 // success; a bare ERROR means the service was already running.
@@ -364,4 +372,56 @@ void cmqttLoop() {
       continue;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Silent-death supervision (see kLteHealthProbeMs in cof_config.h).
+//
+// While MQTT rides the modem's native CMQTT stack, pollModem() and
+// refreshCellularStatus() are gated off: their AT chatter would steal inbound
+// +CMQTTRX URC bytes. The designed loss signals are +CMQTTCONNLOST / +CMQTTNONET,
+// but a radio that dies *silently* emits neither and leaves the device "connected"
+// over a dead bearer. One cheap AT+CSQ per kLteHealthProbeMs catches +CSQ: 99,99
+// (no service); once it persists kModemNoServiceGraceMs we tear the PDP down,
+// which drops lteMqttTransport so pollModem()'s radio-recovery ladder takes over.
+//
+// URC safety: cmqttLoop() drains anything already buffered before we touch the
+// UART, and the probe is skipped while a message is mid-assembly. The residual
+// risk of a command arriving inside the ~200 ms probe window is accepted - the
+// backend publishes commands at QoS 1 and re-delivers.
+void serviceLteMqttHealth() {
+  if (!state.lteMqttTransport || !cmqttIsConnected()) {
+    lteNoServiceSinceMs = 0;
+    return;
+  }
+  cmqttLoop();   // dispatch anything already buffered before touching the UART
+  const uint32_t now = millis();
+  if (now - lastLteHealthProbeMs < kLteHealthProbeMs) {
+    return;
+  }
+  if (cmqttIsRxBusy()) {
+    return;      // a message is mid-delivery; do not interleave AT here
+  }
+  lastLteHealthProbeMs = now == 0 ? 1 : now;
+
+  String resp;
+  if (!sendAT("AT+CSQ", "OK", 2000, &resp)) {
+    return;      // no answer; the reconnect path / silence watchdog react
+  }
+  const int marker = resp.indexOf("+CSQ:");
+  const int csq = marker >= 0 ? resp.substring(marker + 5).toInt() : -1;
+  state.signalQuality = csq;
+
+  if (csq == 99) {   // +CSQ: 99,99 = no service
+    if (lteNoServiceSinceMs == 0) {
+      lteNoServiceSinceMs = now == 0 ? 1 : now;
+    } else if (now - lteNoServiceSinceMs >= kModemNoServiceGraceMs) {
+      Serial.println("[lte] CSQ 99,99 sustained: releasing PDP for radio recovery");
+      lteNoServiceSinceMs = 0;
+      noServiceSinceMs = 1;   // arm pollModem()'s ladder to fire immediately
+      stopLtePdp();           // drops lteMqttTransport so pollModem() runs
+    }
+    return;
+  }
+  lteNoServiceSinceMs = 0;
 }
