@@ -200,6 +200,30 @@ void ensureEchoOffIfNeeded(const String& command, const String& response) {
   String discard;
   readModemUntil(1000, "OK");
 }
+// String::indexOf() is strstr and stops at the first 0x00. The A7672 prefixes
+// a spontaneous reboot with a NUL (`\0\r\n*ATREADY`), so the URC was invisible
+// and 0.2.94 kept sending CMQTTDISC/REL/STOP through the boot (ethernet unplug,
+// 2026-09-26 13:25).
+static bool textHasAtReady(const String& text) {
+  static const char kTag[] = "*ATREADY";
+  constexpr int kTagLen = 8;
+  if (text.length() < kTagLen) {
+    return false;
+  }
+  for (int i = 0; i <= text.length() - kTagLen; i++) {
+    bool match = true;
+    for (int j = 0; j < kTagLen; j++) {
+      if (text[i + j] != kTag[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+  return false;
+}
 void flushModemInput() {
   // Bound the drain: a module spewing (echo ON / boot-URC flood / line noise)
   // used to make this loop run forever and block every AT command that follows
@@ -229,7 +253,7 @@ void flushModemInput() {
   if (at >= 0) {
     appendModemLogForced(swept.substring(at));
   }
-  if (swept.indexOf("*ATREADY") >= 0) {
+  if (textHasAtReady(swept)) {
     modemRebootUrcSeen = true;
   }
 }
@@ -276,7 +300,7 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
       response += c;
       // A module reboot emits *ATREADY as a URC, possibly in the middle of the
       // command we are waiting on. Detect it cheaply at line boundaries.
-      if (!rebootSeen && (c == '\n' || c == '\r') && response.indexOf("*ATREADY") >= 0) {
+      if (!rebootSeen && (c == '\n' || c == '\r') && textHasAtReady(response)) {
         rebootSeen = true;
         // The module just rebooted under this command. Waiting out the rest of
         // the timeout (and the CMQTT commands that follow) is what kept talking

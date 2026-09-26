@@ -171,8 +171,19 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
       // kept its state across an ESP32 OTA reboot - OTA never resets the modem).
       // Stop the stale service and retry once.
       Serial.println("[cmqtt] CMQTTSTART failed; stopping stale service and retrying");
+      if (modemRebootUrcSeen) {
+        cmqttDropAfterReboot();
+        return false;
+      }
       sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
+      if (modemRebootUrcSeen) {
+        cmqttDropAfterReboot();
+        return false;
+      }
       if (!cmqttStartService()) {
+        if (modemRebootUrcSeen) {
+          cmqttDropAfterReboot();
+        }
         return false;
       }
     }
@@ -181,6 +192,9 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   if (!cmqttClientAcquired) {
     if (!sendAT("AT+CMQTTACCQ=0,\"" + clientId + "\"", "OK", 5000)) {
       Serial.println("[cmqtt] CMQTTACCQ fail");
+      if (modemRebootUrcSeen) {
+        cmqttDropAfterReboot();
+      }
       return false;
     }
     cmqttClientAcquired = true;
@@ -201,6 +215,9 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   String resp;
   if (!sendAT(connectCmd, "+CMQTTCONNECT:", 20000, &resp)) {
     Serial.println("[cmqtt] CMQTTCONNECT no response");
+    if (modemRebootUrcSeen) {
+      cmqttDropAfterReboot();
+    }
     return false;
   }
   if (cmqttResult(resp, "+CMQTTCONNECT:") != 0) {

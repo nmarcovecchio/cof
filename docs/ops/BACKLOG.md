@@ -416,6 +416,30 @@ started` (escalera, `AT+COPS=0`). **0.2.94** corta el AT de CMQTT en cuanto
 ve `*ATREADY`, tira el estado del cliente y deja que `pollModem()` haga
 `initModem()` (espera `+CPIN`) antes de volver a marcar. No suma ese fallo
 a la escalera de `CFUN`.
+**0.2.94 no lo cortó (Ethernet desenchufado, 13:25).** El mismo trace: `CMQTTCONNECT`
+responde `\0` + `*ATREADY` y después igual salen `DISC` / `REL` / `STOP` /
+`START`. `String::indexOf` es `strstr` y se frena en el NUL, así que el flag
+nunca se levantó. Al final publicó `LTE MQTT OK`, pero recién después de
+esa ráfaga. **0.2.95** busca `*ATREADY` por longitud (pasa el NUL), suelta
+el cliente CMQTT y no manda `DISC`/`STOP` hasta que `initModem()` vea `+CPIN`.
+
+### Caídas de ruta que no se pueden romper
+
+Cualquier cambio en Ethernet, WiFi o LTE se relee contra esta lista. El código
+tiene que seguir haciendo cada fila; un fix de un caso no agrega AT de CMQTT
+sobre un módem en `*ATREADY` ni manda `CFUN`/`COPS` si la radio estaba bien.
+
+| Caso | Qué tiene que pasar |
+|---|---|
+| Boot solo LTE | `CMQTTSTART` → `CONNECT: 0,0` → SUB config y command en `0` |
+| Boot con Ethernet | MQTT por el cable. LTE no hace falta para el broker |
+| Desenchufar Ethernet | Soltar el socket LAN y abrir CMQTT. Sin `DISC`/`STOP` si el módem acaba de emitir `*ATREADY` |
+| Volver a enchufar Ethernet | MQTT vuelve al cable y `stopLtePdp()` baja CMQTT |
+| WiFi mientras hay LTE (sin cable) | Probar el WiFi, pasar MQTT al WiFi, bajar el PDP |
+| Olvidar WiFi, sin cable | Volver a CMQTT, igual que desenchufar Ethernet |
+| Olvidar WiFi, con cable | Quedarse en Ethernet |
+| SMS o llamada por LTE | Soltar CMQTT, hacer el AT, reconectar y publicar el resultado |
+| `*ATREADY` en cualquier fila | Parar CMQTT, `initModem()` hasta `+CPIN`, recién ahí volver a marcar. No sumar a la escalera de `CFUN` |
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
