@@ -230,22 +230,12 @@ bool ensureLtePdp() {
   sendAT("AT+CMEE=2", "OK", 2000);
   sendAT("AT+CGATT=1", "OK", 15000);
 
-#if COF_LTE_MQTT_NATIVE
-  // Native MQTT (AT+CMQTT*): CMQTTSTART activates the PDP context itself, so
-  // there is no NETOPEN and no IP to query here. Just pin the APN/auth and mark
-  // the data path ready; the actual network attach happens inside cmqttConnect.
-  sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 5000);
-  sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"", "OK", 3000);
-  state.ltePdpCid = 1;
-  state.lteDataUp = true;
-  state.lteIpAddress = "-";
-  ltePdpDown = false;
-  lastLteRetryDelayMs = kLteRetryIntervalMs;
-  lteMqttConnectFails = 0;
-  pendingNetworkStatusReport = true;
-  finishLteAttempt(true, "LTE ready (native MQTT)");
-  return true;
-#else
+  // Activate the data bearer. BOTH MQTT transports need it: the legacy socket
+  // path (CIPOPEN) and the native CMQTT path alike. CMQTTSTART does NOT bring
+  // the PDP up by itself - it attaches to the bearer that NETOPEN/CNACT opened.
+  // This was the 0.2.79 failure: `AT+CMQTTSTART -> ERROR` with no NETOPEN in the
+  // trace, because the native branch used to skip activation and assume CMQTT
+  // dialed its own PDP.
   detectLteIpStack();
 
   String ip;
@@ -260,7 +250,6 @@ bool ensureLtePdp() {
     lteIpStack = kLteStackNetopen;
     return markLtePdpUp(ip, 1);
   }
-#endif
 
   finishLteAttempt(false, "LTE PDP fail");
   lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
@@ -268,12 +257,14 @@ bool ensureLtePdp() {
 }
 void stopLtePdp() {
 #if COF_LTE_MQTT_NATIVE
-  // Native MQTT: release the CMQTT client and service. cmqttTearDown() is a
-  // no-op when the service was never started, so calling it unconditionally is
-  // safe (e.g. when LAN MQTT comes up and LTE was never used).
+  // Release the CMQTT client + service first: it runs over the bearer we are
+  // about to tear down. cmqttTearDown() is a no-op when the service was never
+  // started, so calling it unconditionally is safe (e.g. when LAN MQTT comes up
+  // and LTE was never used).
   cmqttTearDown();
 #else
   lteMqttClient.stop();
+#endif
   // Tear down exactly one stack, and only the one that is actually up.
   //
   // These used to be two independent `if`s both keyed on `state.lteDataUp`, so
@@ -292,7 +283,6 @@ void stopLtePdp() {
     sendAT("AT+CIPCLOSE=0", "OK", 5000);
     sendAT("AT+NETCLOSE", "+NETCLOSE:", 12000);
   }
-#endif
   state.lteDataUp = false;
   state.lteMqttTransport = false;
   state.lteIpAddress = "-";

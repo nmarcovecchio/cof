@@ -7,7 +7,7 @@
 //
 // This replaces the hand-rolled TCP socket emulation (AT+CIPOPEN / AT+CIPSEND /
 // AT+CIPRXGET) for the cellular path. The module's own MQTT stack:
-//   * activates the PDP context itself (AT+CMQTTSTART),
+//   * runs over the data bearer opened by ensureLtePdp() (NETOPEN/CNACT),
 //   * keeps the connection warm with the broker (keepalive_time in CONNECT),
 //   * delivers inbound messages as URCs (+CMQTTRXSTART/TOPIC/PAYLOAD/END),
 //   * and reports passive loss via +CMQTTCONNLOST / +CMQTTNONET.
@@ -117,7 +117,9 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   cmqttTearDown();
 
   if (!cmqttServiceUp) {
-    // Activates the PDP context itself; ~12 s worst case per the app note.
+    // Starts the MQTT service. It attaches to the data bearer already opened by
+    // ensureLtePdp() (NETOPEN/CNACT); it does NOT dial its own PDP, so running
+    // this before the bearer is up returns ERROR - the 0.2.79 failure.
     String resp;
     if (!sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp)) {
       Serial.println("[cmqtt] CMQTTSTART no response");
