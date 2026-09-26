@@ -217,7 +217,7 @@ problema de senal. **Fix en 0.2.78:**
   ahora reabre el socket (~5 s) en vez de un corte visible.
 
 **Hallazgo de arquitectura: MQTT nativo `AT+CMQTT*` — implementado en 0.2.79,
-corregido en 0.2.80.** El A7672 tiene un cliente MQTT nativo (`AT+CMQTTSTART`,
+corregido en 0.2.81.** El A7672 tiene un cliente MQTT nativo (`AT+CMQTTSTART`,
 `AT+CMQTTCONNECT`, `AT+CMQTTSUB`, `AT+CMQTTPUB`, y la recepción llega por URC
 `+CMQTTRXPAYLOAD` en vez de poll de `AT+CIPRXGET`; `+CMQTTNONET` avisa cuando la
 red se cae). Hoy reimplementábamos MQTT a mano sobre `CIPOPEN`/`CIPSEND`/`CIPRXGET`,
@@ -225,21 +225,33 @@ que es exactamente la capa frágil que produce estos cortes. Mover la ruta LTE a
 nativo elimina el polling, el keepalive manual y el estado de socket/PDP duplicado.
 Es el "switch de 2 segundos" de un celular.
 
-**Estado (0.2.79 → 0.2.80):** la ruta LTE usa `firmware/src/lte_mqtt_native.cpp`
+**Estado (0.2.79 → 0.2.81):** la ruta LTE usa `firmware/src/lte_mqtt_native.cpp`
 (compilada tras `#define COF_LTE_MQTT_NATIVE 1` en `cof_config.h`); el camino LAN
 (`PubSubClient`) queda intacto y el socket AT legacy queda detrás del switch.
 
-**Bug confirmado en hardware (0.2.79):** `AT+CMQTTSTART -> ERROR`. La suposición
-"CMQTTSTART activa el PDP solo" es falsa: el flujo de la app note de SIMCom es
-**NETOPEN (o CNACT) primero, después CMQTTSTART**. El 0.2.79 saltaba la activación
-del bearer (`ensureLtePdp()` en modo nativo solo fijaba APN/auth y no corría
-`NETOPEN`), así que CMQTTSTART no tenía bearer de datos y devolvía ERROR. **0.2.80**
-restaura la activación (`detectLteIpStack()` + `activateNetopenPdp()`/`activateCnactPdp()`)
-para ambos transportes, y `stopLtePdp()` ahora hace `cmqttTearDown()` + el NETCLOSE
-compartido.
+**Causa raíz real (leída del manual A76XX ch.18, no de la app note SIM7672X):**
+el `AT+CMQTTSTART -> ERROR` era una *pista falsa de diagnóstico*. El manual A76XX
+(el que corresponde al A7672) dice:
 
-**Pendiente:** re-probar en hardware solo-LTE (trace debe mostrar `NETOPEN` → IP →
-`CMQTTSTART` → `ACCQ` → `CONNECT`, y `+CMQTTNONET` en la caída).
+- `AT+CMQTTSTART` **activa el PDP por sí mismo** y responde `OK` + `+CMQTTSTART: 0`
+  en éxito. No hace falta `NETOPEN`/`CNACT` previo (el result code 23 es "network
+  is opened", i.e. conflictúa).
+- Un `ERROR` pelado (sin `+CMQTTSTART: <err>`) significa **"el servicio ya estaba
+  arrancado"**.
+
+El bug estaba en `cmqttResult()` (`lte_mqtt_native.cpp`): solo parseaba resultados
+con coma (`+CMQTTCONNECT: 0,0`) y devolvía -1 para `+CMQTTSTART: 0` (sin coma). El
+primer START **sí tuvo éxito** pero se marcó como falla, se dejó el servicio corriendo
+en el módem (el OTA reinicia el ESP32, no el módem), y cada reintento dio "ya
+arrancado → ERROR". `0.2.80` empeoró metiendo `NETOPEN` antes de `CMQTTSTART` (pista
+falsa). `0.2.81` revierte eso y arregla:
+
+1. `cmqttResult()` parsea resultados sin coma.
+2. `AT+CMQTTPUB=<client>,<qos>,<pub_timeout>,<retained>` (orden correcto A76XX).
+3. `cmqttConnect()` auto-recupera un servicio ya arrancado (STOP → retry START).
+
+**Pendiente:** re-probar en hardware solo-LTE (trace debe mostrar `CMQTTSTART` →
+`+CMQTTSTART: 0` → `ACCQ` → `CONNECT`, y `+CMQTTNONET` en la caída).
 
 ### 6c. La escalera de recuperacion del modem no corre mientras MQTT usa LTE
 

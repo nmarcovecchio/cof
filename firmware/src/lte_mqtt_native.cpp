@@ -7,7 +7,8 @@
 //
 // This replaces the hand-rolled TCP socket emulation (AT+CIPOPEN / AT+CIPSEND /
 // AT+CIPRXGET) for the cellular path. The module's own MQTT stack:
-//   * runs over the data bearer opened by ensureLtePdp() (NETOPEN/CNACT),
+//   * runs over the PDP context that AT+CMQTTSTART activates itself (A76XX AT
+//     manual ch.18); there is no NETOPEN/CNACT on this path,
 //   * keeps the connection warm with the broker (keepalive_time in CONNECT),
 //   * delivers inbound messages as URCs (+CMQTTRXSTART/TOPIC/PAYLOAD/END),
 //   * and reports passive loss via +CMQTTCONNLOST / +CMQTTNONET.
@@ -82,8 +83,9 @@ static bool cmqttReadExact(String& out, int n) {
   return n == 0;
 }
 
-// Result code of a CMQTT command, e.g. "+CMQTTCONNECT: 0,0" -> 0. Returns -1
-// when the tag (or the comma) is absent.
+// Result code of a CMQTT command. The A76XX manual formats results either as
+// "+CMQTTCONNECT: 0,0" (code after the last comma) or "+CMQTTSTART: 0" (code
+// after the colon, no comma). Returns -1 when the tag is absent.
 static int cmqttResult(const String& resp, const char* tag) {
   const int at = resp.indexOf(tag);
   if (at < 0) {
@@ -91,8 +93,16 @@ static int cmqttResult(const String& resp, const char* tag) {
   }
   const int lineEnd = resp.indexOf('\n', at);
   const String line = lineEnd < 0 ? resp.substring(at) : resp.substring(at, lineEnd);
-  const int comma = line.lastIndexOf(',');
-  return comma >= 0 ? line.substring(comma + 1).toInt() : -1;
+  int delim = line.lastIndexOf(',');
+  if (delim < 0) {
+    delim = line.lastIndexOf(':');
+  }
+  if (delim < 0) {
+    return -1;
+  }
+  String code = line.substring(delim + 1);
+  code.trim();
+  return code.toInt();
 }
 
 // Send a command that prompts with '>' and then takes raw data on the next
@@ -112,25 +122,37 @@ bool cmqttIsConnected() {
   return cmqttBrokerUp;
 }
 
+// Start the MQTT service. Per the A76XX AT manual (ch.18), AT+CMQTTSTART
+// activates the PDP context itself and answers "OK\r\n+CMQTTSTART: 0" on
+// success; a bare ERROR means the service was already running.
+static bool cmqttStartService() {
+  String resp;
+  if (!sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp)) {
+    return false;   // timeout, or bare ERROR ("already started")
+  }
+  if (cmqttResult(resp, "+CMQTTSTART:") != 0) {
+    Serial.printf("[cmqtt] CMQTTSTART err: %s\n", resp.c_str());
+    return false;
+  }
+  cmqttServiceUp = true;
+  return true;
+}
+
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
                   const String& host, int port, const String& username, const String& password) {
   cmqttTearDown();
 
   if (!cmqttServiceUp) {
-    // Starts the MQTT service. It attaches to the data bearer already opened by
-    // ensureLtePdp() (NETOPEN/CNACT); it does NOT dial its own PDP, so running
-    // this before the bearer is up returns ERROR - the 0.2.79 failure.
-    String resp;
-    if (!sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp)) {
-      Serial.println("[cmqtt] CMQTTSTART no response");
-      return false;
+    if (!cmqttStartService()) {
+      // A bare ERROR from CMQTTSTART means "service already started" (the modem
+      // kept its state across an ESP32 OTA reboot - OTA never resets the modem).
+      // Stop the stale service and retry once.
+      Serial.println("[cmqtt] CMQTTSTART failed; stopping stale service and retrying");
+      sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
+      if (!cmqttStartService()) {
+        return false;
+      }
     }
-    if (cmqttResult(resp, "+CMQTTSTART:") != 0) {
-      Serial.printf("[cmqtt] CMQTTSTART err: %s\n", resp.c_str());
-      cmqttTearDown();
-      return false;
-    }
-    cmqttServiceUp = true;
   }
 
   if (!cmqttClientAcquired) {
@@ -199,8 +221,9 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     return false;
   }
   String resp;
-  const String pubCmd = String("AT+CMQTTPUB=0,") + String(qos) + "," +
-                        String(retained ? 1 : 0) + ",60";
+  // A76XX: AT+CMQTTPUB=<client>,<qos>,<pub_timeout>[,<retained>[,<dup>]]
+  const String pubCmd = String("AT+CMQTTPUB=0,") + String(qos) + ",60," +
+                        String(retained ? 1 : 0);
   if (!sendAT(pubCmd, "+CMQTTPUB:", 20000, &resp)) {
     cmqttBrokerUp = false;
     return false;
