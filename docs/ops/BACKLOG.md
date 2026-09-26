@@ -398,6 +398,14 @@ panel Modem no borró logs: muestra solo el `modem_log` más nuevo (ese de
 es de 15. **0.2.92** no cambia el AT: después del prompt espera el
 `+CMQTTSUB` y, si arranca el config retenido, lo lee hasta `+CMQTTRXEND`
 antes de suscribir `command`.
+**0.2.92 en campo (12:34–12:37) dejó el SMS y la llamada andando.**
+`SUB result 0` en config y en command, `RX topic devices/cof-test/command`,
+`test_sms: SMS sent`, `test_call: Call done` con CSFB LTE→GSM y `CEER=0`.
+La espera de 500 ms de silencio después del URC no aportaba: en el reconnect
+de la llamada el config retenido igual llegó después, y lo drenó el wait del
+segundo SUB. **0.2.93** sale del subscribe en cuanto está el `+CMQTTSUB` y,
+si había un RX abierto, el `+CMQTTRXEND`. El tope de 12 s queda solo si ese
+URC no aparece.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con

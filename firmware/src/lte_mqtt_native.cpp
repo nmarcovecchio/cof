@@ -221,17 +221,16 @@ bool cmqttSubscribe(const String& topic, uint8_t qos) {
     appendModemLogForced("SUB prompt fail " + topic);
     return false;
   }
+  // Ready is the URC, not a pause: +CMQTTSUB is the subscribe result, and a
+  // retained message that started must reach +CMQTTRXEND before the next AT.
+  // 12 s is only the give-up if that URC never arrives. delay(5) is the poll
+  // between UART reads while it is still outstanding.
   const uint32_t startedAt = millis();
-  uint32_t quietSince = millis();
   while (millis() - startedAt < 12000) {
     feedWatchdog();
-    const bool busy = ModemSerial.available() || cmqttLineBuf.length() > 0 || cmqttRxActive;
     cmqttLoop();
-    if (busy) {
-      quietSince = millis();
-    }
     if (cmqttPendingSubCode != -2 && !cmqttRxActive && !ModemSerial.available() &&
-        cmqttLineBuf.length() == 0 && millis() - quietSince >= 500) {
+        cmqttLineBuf.length() == 0) {
       appendModemLogForced("SUB result " + String(cmqttPendingSubCode) + " " + topic);
       return cmqttPendingSubCode == 0;
     }
