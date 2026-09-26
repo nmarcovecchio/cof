@@ -989,17 +989,13 @@ String resolveTestPhone(const String& phoneOverride) {
 }
 String transmitSms(const String& phone, const String& body) {
   if (!lanHasInternet()) {
-    // MQTT is riding the modem. Do not tear the LTE socket down: on LTE the SMS
-    // and the PDP coexist (AT+CGSMS=1 prefers the CS bearer), and killing MQTT
-    // is what used to lose the command result. Only release the socket when the
-    // command will actually collide with the IP stack, i.e. when it fails.
+    // MQTT is riding the modem. Free the modem for the SMS dialog: the native
+    // CMQTT session and AT+CMGS both need the single UART, and the SMS read can
+    // block past the 30 s broker keepalive, dropping the connection mid-send.
+    // The caller reconnects (connectMqttIfNeeded) and publishDeviceEvent defers
+    // the result until MQTT is back, so releasing the socket no longer loses it.
 #if COF_LTE_MQTT_NATIVE
-    // Native CMQTT has no socket to refresh; its connection state is maintained
-    // by cmqttLoop() in the main loop, so there is nothing to sync here.
-    if (!state.lteMqttTransport) {
-      mqttClient.loop();
-      state.mqttConnected = mqttClient.connected();
-    }
+    releaseLteMqttForModem();
 #else
     mqttClient.loop();
     state.mqttConnected = mqttClient.connected();
@@ -1073,6 +1069,13 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     body = body.substring(0, 160);
   }
 
+  // Free the modem before the SMS exchange. When MQTT rides LTE (native CMQTT)
+  // the single UART is shared with the broker session; an AT+CMGS dialog over a
+  // live CMQTT connection can collide with it, and the SMS read can block past
+  // the 30 s broker keepalive, dropping the connection and losing the result.
+  // Release first, send on a quiet modem, reconnect on the way out.
+  releaseLteMqttForModem();
+
   if (!waitUntilModemReady(false, 25000)) {
     restorePacketServices();
     if (!waitUntilModemReady(false, 20000)) {
@@ -1083,9 +1086,8 @@ String sendTestSms(const String& phoneOverride, const String& text) {
 
   String result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
-    // First attempt failed: only now is it worth giving up the LTE MQTT socket,
-    // restore the packet services and try once more.
-    releaseLteMqttForModem();
+    // First attempt failed on a quiet modem: the radio/PDP may have been
+    // disturbed, so restore packet services and try once more before giving up.
     restorePacketServices();
     result = transmitSms(phone, body);
   }

@@ -282,6 +282,18 @@ consulta se movió **antes** de los `CMQTTSUB` — justo tras CONNECT la UART es
 quieta, así el `sendAT` no puede robarse un `+CMQTTRX` entrante (un config/desired
 retenido llega inmediatamente tras el SUB).
 
+**SMS/llamada sobre LTE (0.2.85).** SMS y llamada son operaciones del módem
+(`AT+CMGS` / `ATD`), a diferencia de Telegram/email que salen por MQTT del backend.
+Cuando MQTT viaja por LTE (CMQTT nativo), el único UART del A7672 está compartido
+entre la sesión CMQTT y el diálogo de SMS: `transmitSms()` intentaba coexistir
+("SMS y PDP coexisten con `AT+CGSMS=1`") y solo soltaba el socket en el reintento.
+Resultado en hardware: el comando `test_sms` no mandó nada y el resultado se perdió
+porque el `readModemUntil(60 s)` del SMS se bloqueó más que el keepalive de 30 s
+del broker y tiró la conexión. Fix: `sendTestSms()`/`transmitSms()` llaman
+`releaseLteMqttForModem()` **antes** del diálogo de SMS (módem quieto), el caller
+reconecta (`connectMqttIfNeeded`) y `publishDeviceEvent` difiere el resultado
+(`deferDeviceEvent`) hasta que MQTT vuelve. Pendiente de re-validar solo-LTE.
+
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
 `lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados
