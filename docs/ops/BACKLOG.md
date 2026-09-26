@@ -406,6 +406,16 @@ de la llamada el config retenido igual llegó después, y lo drenó el wait del
 segundo SUB. **0.2.93** sale del subscribe en cuanto está el `+CMQTTSUB` y,
 si había un RX abierto, el `+CMQTTRXEND`. El tope de 12 s queda solo si ese
 URC no aparece.
+**0.2.93, Olvidar WiFi con solo LTE (12:49–13:03).** El clear se aceptó y el
+fallback marcó `CMQTTCONNECT` mientras el módulo se reiniciaba: la respuesta
+fue `*ATREADY` / `+CPIN: READY` / `SMS DONE`, y el firmware siguió con
+`CMQTTDISC` (código 11), `CMQTTREL → ERROR` y `CMQTTSTOP` encima del boot.
+`PB DONE` llegó recién en el `AT+IPADDR` de un connect que igual publicó
+`LTE MQTT OK`. A las 13:03, `modem_recovery`: `Radio NO SERVICE, recovery
+started` (escalera, `AT+COPS=0`). **0.2.94** corta el AT de CMQTT en cuanto
+ve `*ATREADY`, tira el estado del cliente y deja que `pollModem()` haga
+`initModem()` (espera `+CPIN`) antes de volver a marcar. No suma ese fallo
+a la escalera de `CFUN`.
 
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con

@@ -26,6 +26,7 @@
 static bool cmqttServiceUp = false;     // AT+CMQTTSTART succeeded
 static bool cmqttClientAcquired = false;// AT+CMQTTACCQ succeeded
 static bool cmqttBrokerUp = false;      // AT+CMQTTCONNECT ok, and no passive drop
+static void cmqttDropAfterReboot();
 
 // Inbound message assembly. The modem sends each subscribed message as a burst
 // of URCs; long topics/payloads are split into several +CMQTTRXTOPIC/PAYLOAD
@@ -155,7 +156,14 @@ static bool cmqttStartService() {
 
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
                   const String& host, int port, const String& username, const String& password) {
+  if (modemRebootUrcSeen) {
+    cmqttDropAfterReboot();
+    return false;
+  }
   cmqttTearDown();
+  if (modemRebootUrcSeen) {
+    return false;
+  }
 
   if (!cmqttServiceUp) {
     if (!cmqttStartService()) {
@@ -275,6 +283,17 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
   return true;
 }
 
+static void cmqttDropAfterReboot() {
+  cmqttServiceUp = false;
+  cmqttClientAcquired = false;
+  cmqttBrokerUp = false;
+  cmqttLineBuf = "";
+  cmqttRxActive = false;
+  cmqttRxInPayload = false;
+  cmqttRxTopic = "";
+  cmqttRxPayload = "";
+}
+
 void cmqttDisconnect() {
   // Graceful disconnect, keeps the service + client so the next connect is fast.
   if (cmqttBrokerUp) {
@@ -285,6 +304,13 @@ void cmqttDisconnect() {
 }
 
 void cmqttTearDown() {
+  // A reboot already wiped the module's CMQTT client. Further DISC/REL/STOP
+  // while it is still printing *ATREADY / SMS DONE is what left the radio in
+  // NO SERVICE after clear_wifi.
+  if (modemRebootUrcSeen) {
+    cmqttDropAfterReboot();
+    return;
+  }
   // Full teardown back to a clean slate. DISC is issued unconditionally (when a
   // client was ever acquired): our cmqttBrokerUp flag can be false while the
   // modem still holds the broker connection - a failed publish or a route bounce
@@ -294,15 +320,27 @@ void cmqttTearDown() {
   // a client that never connected just answers ERROR, which is harmless.
   if (cmqttClientAcquired) {
     sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000);
+    if (modemRebootUrcSeen) {
+      cmqttDropAfterReboot();
+      return;
+    }
   }
   cmqttBrokerUp = false;
   if (cmqttClientAcquired) {
     sendAT("AT+CMQTTREL=0", "OK", 5000);
     cmqttClientAcquired = false;
+    if (modemRebootUrcSeen) {
+      cmqttDropAfterReboot();
+      return;
+    }
   }
   if (cmqttServiceUp) {
     sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
     cmqttServiceUp = false;
+    if (modemRebootUrcSeen) {
+      cmqttDropAfterReboot();
+      return;
+    }
   }
   // Reset the inbound assembler so a half-read message never leaks across a
   // reconnect.

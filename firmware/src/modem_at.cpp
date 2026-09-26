@@ -229,6 +229,9 @@ void flushModemInput() {
   if (at >= 0) {
     appendModemLogForced(swept.substring(at));
   }
+  if (swept.indexOf("*ATREADY") >= 0) {
+    modemRebootUrcSeen = true;
+  }
 }
 String readModemUntil(uint32_t timeoutMs, const String& token) {
   String response;
@@ -275,6 +278,12 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
       // command we are waiting on. Detect it cheaply at line boundaries.
       if (!rebootSeen && (c == '\n' || c == '\r') && response.indexOf("*ATREADY") >= 0) {
         rebootSeen = true;
+        // The module just rebooted under this command. Waiting out the rest of
+        // the timeout (and the CMQTT commands that follow) is what kept talking
+        // to a modem that was still emitting SMS DONE / PB DONE (2026-09-26,
+        // clear_wifi -> *ATREADY inside CMQTTCONNECT, then NO SERVICE).
+        modemRebootUrcSeen = true;
+        return response;
       }
       if (token.length() == 0) {
         continue;
@@ -312,6 +321,14 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
 }
 bool sendAT(const String& command, const String& expected, uint32_t timeoutMs, String* responseOut) {
   flushModemInput();
+  if (modemRebootUrcSeen && command.startsWith("AT+CMQTT")) {
+    Serial.println("[modem] skip " + command + " (module rebooted, waiting for re-init)");
+    appendModemLogForced("skip " + command + " (ATREADY)");
+    if (responseOut != nullptr) {
+      *responseOut = "";
+    }
+    return false;
+  }
   Serial.println("[modem] >> " + command);
   appendModemLog('>', command);
   ModemSerial.print(command);

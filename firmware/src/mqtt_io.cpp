@@ -518,6 +518,21 @@ static void connectMqttNativeIfNeeded() {
   const bool ok = cmqttConnect(clientId, willTopic, willPayload,
                                state.mqttHost, state.mqttPort, username, password);
   if (!ok) {
+    if (modemRebootUrcSeen) {
+      // *ATREADY mid-connect: the module rebooted and its CMQTT client is gone.
+      // Do not count this toward the CFUN ladder and do not send another STOP.
+      // noteModemRebootDetected() drops the LTE transport so pollModem() runs
+      // initModem() and waits for CPIN before the next CMQTTSTART.
+      Serial.println("[lte] modem rebooted during CMQTT connect, waiting for re-init");
+      noteModemRebootDetected();
+      lteMqttConnectFails = 0;
+      lteTraceLog = modemCallLog;
+      pendingLteTraceMessage = "LTE modem rebooted";
+      pendingLteTraceOk = false;
+      pendingLteTracePublish = true;
+      reportLteProgress = false;
+      return;
+    }
     setStatus("MQTT fail");
     lteMqttConnectFails++;
     if (lteMqttConnectFails >= kLteMqttConnectFailLimit) {
