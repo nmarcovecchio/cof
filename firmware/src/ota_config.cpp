@@ -604,6 +604,12 @@ String ruleAudioPathForSha(const String& sha);
 void checkManifest(bool allowFirmwareUpdate) {
   String payload;
   setStatus("Check manifest");
+  // OTA over LTE is intentionally blocked: HTTPClient needs Ethernet/WiFi.
+  // Do not paint that skip as "Manifest fail" — it looks like a fault.
+  if (!lanConnected()) {
+    setStatus("OTA needs LAN");
+    return;
+  }
   if (!httpGetString(COF_MANIFEST_URL, payload)) {
     setStatus("Manifest fail");
     return;

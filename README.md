@@ -586,11 +586,13 @@ AT+CFTRANRX=?
 
 ## OTA por Ethernet o WiFi
 
-El ESP32 consulta:
+El ESP32 consulta el manifest en el mismo origen que el binario:
 
 ```text
-https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json
+https://app.callonfail.com.ar/ota/manifest.json
 ```
+
+(OTA por LTE esta bloqueado a proposito; sin LAN el OLED muestra `OTA needs LAN`.)
 
 Para publicar una nueva version:
 

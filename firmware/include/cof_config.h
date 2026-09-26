@@ -8,10 +8,10 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.96"
+#define COF_FIRMWARE_VERSION "0.2.97"
 
-// Raw GitHub manifest. After merging, keep this URL pointing at main.
-#define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
+// Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
+#define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
 
 // Safety switch: set to 1 only after configuring COF_PHONE_NUMBER.
 #define COF_ENABLE_CALLS 0

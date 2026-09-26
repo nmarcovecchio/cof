@@ -1,7 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-25**. Ultimo firmware publicado: **0.2.75** (en `ota/manifest.json`
-y corriendo en `cof-test`).
+Estado: **2026-09-26**. Ultimo firmware publicado: **0.2.97** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -37,7 +36,8 @@ bool httpGetString(const String& url, String& out, uint32_t timeoutMs) {
 `lanConnected()` es Ethernet o WiFi **solamente**: no cuenta `lteDataUp`. Y
 `checkManifest()` es quien decide si hay version nueva. Consecuencia: en un sitio
 solo-LTE el manifest **nunca se lee**, el equipo nunca ve una version nueva y
-**jamas se actualiza solo**.
+**jamas se actualiza solo**. Desde 0.2.97 el OLED dice `OTA needs LAN` (no
+`Manifest fail`) para no parecer un fallo; el panel sigue bloqueando el boton.
 
 Es la misma raiz que §8c (el audio y el OTA necesitan `HTTPClient`, que necesita
 lwIP), pero aca el sintoma es mas grave porque no depende de una descarga fallida:
@@ -60,9 +60,9 @@ partir de ahi B abre el OTA por LTE.
 
 **Como cerrarlo:** darle al manifest una via que no requiera lwIP, que es el mismo
 trabajo de §8c (`AT+HTTPINIT` -> `AT+HTTPPARA="URL"` -> `AT+HTTPACTION`, y leer el
-cuerpo). Ojo: `COF_MANIFEST_URL` apunta a `raw.githubusercontent.com`, **no** al
-VPS, asi que esa via tendria que alcanzar GitHub (o el manifest tiene que mudarse
-al VPS primero). Ver §8c y la prueba end-to-end del probe en 0.2.69.
+cuerpo). `COF_MANIFEST_URL` ya apunta al VPS (`/ota/manifest.json`, mismo origen
+que el bin); la via del modem solo tiene que alcanzar `app.callonfail.com.ar`.
+Ver §8c y la prueba end-to-end del probe en 0.2.69.
 
 ### 1. El VPS nunca se sincroniza solo (causa raiz)
 
@@ -82,15 +82,6 @@ Opciones (elegir una):
 - **c)** Cron/systemd timer en el VPS: `git pull` periodico + aviso si cambia.
 
 Mientras tanto: **`cd /opt/callonfail && git pull` en el VPS antes de cada OTA.**
-
-### 2. `raw.githubusercontent.com` cachea el manifest
-
-`COF_MANIFEST_URL` (`firmware/include/cof_config.h:14`) apunta a raw GitHub, que
-sirve cacheado unos minutos. Un OTA apretado justo despues del release ve la
-version vieja y no baja nada.
-
-Fix: agregar cache-busting (`?...&t=<epoch>`) al pedir el manifest, o servirlo
-desde el VPS con `no-store`.
 
 ### 3. Nadie verifica que el device haya actualizado
 

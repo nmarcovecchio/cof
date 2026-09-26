@@ -1255,6 +1255,20 @@ def create_app() -> Flask:
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    @app.get("/ota/manifest.json")
+    def ota_manifest_json():
+        # Same OTA_DIR as firmware.bin. Devices (COF_MANIFEST_URL) read this
+        # instead of raw GitHub so discovery and download share one origin and
+        # skip the CDN cache that used to serve a stale version after release.
+        path = Path(os.environ.get("OTA_DIR", "/opt/cof-ota")) / "manifest.json"
+        if not path.is_file():
+            abort(404)
+        data = path.read_bytes()
+        resp = app.response_class(data, mimetype="application/json")
+        resp.headers["Content-Length"] = str(len(data))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
     @app.post("/devices/<device_uid>/commands/status-report")
     @login_required
     def device_command_status_report(device_uid):
