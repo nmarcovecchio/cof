@@ -377,6 +377,165 @@ def device_is_live(device) -> bool:
     return is_fresh(getattr(device, "last_seen_at", None))
 
 
+def compare_firmware_versions(left: str | None, right: str | None) -> int:
+    """Compare dotted numeric versions. Positive if left > right."""
+    def parts(value: str | None) -> list[int]:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        out = []
+        for chunk in text.split("."):
+            digits = "".join(ch for ch in chunk if ch.isdigit())
+            out.append(int(digits) if digits else 0)
+        return out
+
+    a = parts(left)
+    b = parts(right)
+    length = max(len(a), len(b))
+    a.extend([0] * (length - len(a)))
+    b.extend([0] * (length - len(b)))
+    for x, y in zip(a, b):
+        if x != y:
+            return 1 if x > y else -1
+    return 0
+
+
+def published_firmware_version() -> str | None:
+    """Version announced by the OTA manifest on disk (same file the device reads)."""
+    path = Path(os.environ.get("OTA_DIR", "/opt/cof-ota")) / "manifest.json"
+    if not path.is_file():
+        # Local/dev: fall back to the repo copy so the UI still works without
+        # the VPS mount.
+        path = Path(__file__).resolve().parents[2] / "ota" / "manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    version = ((data.get("firmware") or {}) if isinstance(data, dict) else {}).get("version")
+    text = str(version or "").strip()
+    return text or None
+
+
+def firmware_update_available(device) -> bool:
+    published = published_firmware_version()
+    current = str(getattr(device, "firmware_version", None) or "").strip()
+    if not published or not current:
+        return False
+    return compare_firmware_versions(published, current) > 0
+
+
+def device_network_summary(device) -> dict:
+    """Badge + label for the active MQTT path (same rules as _network.html)."""
+    live = device_is_live(device)
+    network = (getattr(device, "discovered", None) or {}).get("network") or {}
+    if not isinstance(network, dict):
+        network = {}
+    active = network.get("active")
+    wifi = network.get("wifi") or {}
+    eth = network.get("ethernet") or {}
+    lte = network.get("lte") or {}
+    ssid = wifi.get("ssid")
+
+    if not live:
+        return {
+            "badge_class": "text-bg-secondary",
+            "badge_text": "sin reporte",
+            "path_label": "ultimo reporte, no sale ahora",
+            "active": None,
+        }
+    if active == "ethernet":
+        return {
+            "badge_class": "text-bg-primary",
+            "badge_text": "Ethernet",
+            "path_label": "Saliendo por Ethernet",
+            "active": "ethernet",
+        }
+    if active == "wifi":
+        badge = f"WiFi · {ssid}" if ssid else "WiFi"
+        label = f"Saliendo por WiFi ({ssid})" if ssid else "Saliendo por WiFi"
+        return {
+            "badge_class": "text-bg-info",
+            "badge_text": badge,
+            "path_label": label,
+            "active": "wifi",
+        }
+    if active == "lte":
+        return {
+            "badge_class": "text-bg-warning",
+            "badge_text": "LTE",
+            "path_label": "Saliendo por LTE",
+            "active": "lte",
+        }
+    if eth.get("up") or wifi.get("up"):
+        return {
+            "badge_class": "text-bg-secondary",
+            "badge_text": "LAN sin salida",
+            "path_label": "Red local arriba pero sin salida a internet",
+            "active": None,
+        }
+    if lte.get("up"):
+        return {
+            "badge_class": "text-bg-warning",
+            "badge_text": "LTE (datos)",
+            "path_label": "Saliendo por LTE (datos)",
+            "active": "lte",
+        }
+    return {
+        "badge_class": "text-bg-secondary",
+        "badge_text": "sin ruta",
+        "path_label": "Sin ruta a internet",
+        "active": None,
+    }
+
+
+def device_live_payload(device) -> dict:
+    """Compact snapshot for the device page live poll (no full HTML refresh)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    windows = device_sensor_windows(device)
+    readings = last_readings(device.id, windows, now)
+    latest = (
+        Telemetry.query.filter_by(device_id=device.id)
+        .order_by(Telemetry.received_at.desc())
+        .limit(1)
+        .first()
+    )
+    latest_at = _iso_utc(getattr(latest, "received_at", None)) if latest else None
+    published = published_firmware_version()
+    current = str(getattr(device, "firmware_version", None) or "").strip() or None
+    network = device_network_summary(device)
+    live = device_is_live(device)
+    revision = "|".join(
+        [
+            current or "",
+            published or "",
+            latest_at or "",
+            _iso_utc(getattr(device, "last_seen_at", None)) or "",
+            str(getattr(device, "ip_address", None) or ""),
+            "1" if live else "0",
+            network.get("badge_text") or "",
+            str(getattr(device, "status", "") or ""),
+        ]
+    )
+    return {
+        "revision": revision,
+        "live": live,
+        "status": getattr(device, "status", None),
+        "firmware_version": current,
+        "published_firmware_version": published,
+        "firmware_update_available": bool(
+            published and current and compare_firmware_versions(published, current) > 0
+        ),
+        "ota_block_reason": device_ota_block_reason(device),
+        "ip_address": getattr(device, "ip_address", None),
+        "last_seen_at": _iso_utc(getattr(device, "last_seen_at", None)),
+        "network": network,
+        "last_readings": readings,
+        "latest_telemetry_at": latest_at,
+    }
+
+
 def device_ota_block_reason(device) -> str | None:
     """Why an OTA check cannot work on this device right now, or None if it can.
 
@@ -995,6 +1154,7 @@ def create_app() -> Flask:
             alarm_state = alarm_states_map([device]).get(device.id)
         except Exception:
             app.logger.exception("alarm_states_map failed device=%s", device.device_uid)
+        published_fw = published_firmware_version()
         return render_template(
             "device_detail.html",
             device=device,
@@ -1018,7 +1178,19 @@ def create_app() -> Flask:
                 datetime.now(timezone.utc).replace(tzinfo=None),
             ),
             telemetry_max_days=TELEMETRY_MAX_RANGE_DAYS,
+            published_firmware_version=published_fw,
+            firmware_update_available=bool(
+                published_fw
+                and getattr(device, "firmware_version", None)
+                and compare_firmware_versions(published_fw, device.firmware_version) > 0
+            ),
         )
+
+    @app.get("/devices/<device_uid>/live.json")
+    @login_required
+    def device_live_json(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        return jsonify(device_live_payload(device))
 
     @app.get("/devices/<device_uid>/telemetry.json")
     @login_required

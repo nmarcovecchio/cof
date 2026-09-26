@@ -64,8 +64,8 @@
       {% if device.archived_at %}
       <span class="badge text-bg-dark">archivado</span>
       {% else %}
-      <span class="badge text-bg-{{ 'success' if device|device_live else 'secondary' }}">{{ 'online' if device|device_live else 'offline' }}</span>
-      {{ network_path(device) }}
+      <span id="device-live-badge" class="badge text-bg-{{ 'success' if device|device_live else 'secondary' }}">{{ 'online' if device|device_live else 'offline' }}</span>
+      <span id="device-network-badge">{{ network_path(device) }}</span>
       {{ alarm_badge(alarm_state) }}
       {% endif %}
     </div>
@@ -83,7 +83,11 @@
       </div>
       <div class="col-6 col-md-4 col-xl-2">
         <div class="meta-label">Firmware</div>
-        <div class="meta-value">{{ device.firmware_version or '-' }}</div>
+        <div class="meta-value" id="device-firmware">{{ device.firmware_version or '-' }}</div>
+        <div id="device-firmware-update"
+             class="small text-warning mt-1{% if not firmware_update_available %} d-none{% endif %}">
+          Nueva version <strong id="device-firmware-published">{{ published_firmware_version or '' }}</strong> disponible — usar OTA (requiere LAN)
+        </div>
       </div>
       <div class="col-6 col-md-4 col-xl-3">
         <div class="meta-label">Hardware</div>
@@ -91,22 +95,21 @@
       </div>
       <div class="col-6 col-md-4 col-xl-2">
         <div class="meta-label">Sale por</div>
-        <div class="meta-value">{{ network_path_label(device) }}</div>
+        <div class="meta-value" id="device-path-label">{{ network_path_label(device) }}</div>
       </div>
       <div class="col-6 col-md-4 col-xl-2">
         <div class="meta-label">IP</div>
-        <div class="meta-value"><code>{{ device.ip_address or '-' }}</code></div>
+        <div class="meta-value"><code id="device-ip">{{ device.ip_address or '-' }}</code></div>
       </div>
       <div class="col-12 col-md-8 col-xl-3">
         <div class="meta-label">Ultima conexion</div>
-        <div class="meta-value">{{ device.last_seen_at|datetime_local }}</div>
+        <div class="meta-value" id="device-last-seen" data-iso="{{ device.last_seen_at.isoformat() if device.last_seen_at else '' }}">{{ device.last_seen_at|datetime_local }}</div>
       </div>
     </div>
   </div>
 </div>
 
-{% if last_readings %}
-<div class="card mb-4">
+<div class="card mb-4" id="last-readings-card"{% if not last_readings %} style="display:none"{% endif %}>
   <div class="card-body py-3">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
       <div class="fw-semibold">Ultima lectura por sensor</div>
@@ -114,7 +117,7 @@
         El valor mas reciente que reporto cada sensor activo. La hora es la de esa muestra, no la de esta pantalla.
       </div>
     </div>
-    <div class="row g-2">
+    <div class="row g-2" id="last-readings-row">
       {% for reading in last_readings %}
       <div class="col-6 col-md-4 col-xl-3">
         <div class="reading-tile{% if reading.value is none %} is-stale{% endif %}">
@@ -134,7 +137,6 @@
     </div>
   </div>
 </div>
-{% endif %}
 
     <div class="card mb-4">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -1235,6 +1237,10 @@
 
   setRange(24);
   load();
+
+  // Live poll on the device page calls this when a new sample arrives, without
+  // a full page reload.
+  window.cofReloadTelemetry = load;
 })();
 </script>
 {% endif %}
@@ -1268,7 +1274,7 @@
 
   function paint() {
     const base = Date.now();
-    tiles.forEach(function (el) {
+    document.querySelectorAll('[data-reading-at]').forEach(function (el) {
       const raw = el.getAttribute('data-reading-at');
       if (!raw) return;
       const at = new Date(raw);
@@ -1276,16 +1282,161 @@
       const seconds = Math.max(0, (base - at.getTime()) / 1000);
       // Keep the server-rendered absolute timestamp and append the age, so the
       // tile never loses the exact instant it is reporting.
-      const absolute = el.getAttribute('data-absolute') || el.textContent.trim();
+      const absolute = el.getAttribute('data-absolute') || el.textContent.split(' · ')[0].trim();
       el.setAttribute('data-absolute', absolute);
       el.textContent = absolute + ' · ' + humanise(seconds);
       el.className = 'reading-when' + toneFor(seconds);
     });
   }
 
+  window.cofPaintReadingAges = paint;
   paint();
   // Refresh so an open tab does not show a frozen "hace instantes" for hours.
   setInterval(paint, 60000);
 })();
 </script>
+{% if not device.archived_at %}
+<script>
+(function () {
+  const LIVE_URL = "{{ url_for('device_live_json', device_uid=device.device_uid) }}";
+  const POLL_MS = 5000;
+  let revision = null;
+  let latestTelemetryAt = null;
+
+  function formatWhen(iso) {
+    if (!iso) return '-';
+    const at = new Date(iso);
+    if (isNaN(at.getTime())) return '-';
+    return at.toLocaleString();
+  }
+
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+
+  function renderReadings(readings) {
+    const card = document.getElementById('last-readings-card');
+    const row = document.getElementById('last-readings-row');
+    if (!card || !row) return;
+    if (!readings || !readings.length) {
+      card.style.display = 'none';
+      row.innerHTML = '';
+      return;
+    }
+    card.style.display = '';
+    row.innerHTML = '';
+    readings.forEach(function (reading) {
+      const col = document.createElement('div');
+      col.className = 'col-6 col-md-4 col-xl-3';
+      const tile = document.createElement('div');
+      tile.className = 'reading-tile' + (reading.value === null || reading.value === undefined ? ' is-stale' : '');
+      const label = document.createElement('div');
+      label.className = 'reading-label';
+      label.title = reading.label || '';
+      label.textContent = reading.label || '';
+      tile.appendChild(label);
+      if (reading.value === null || reading.value === undefined) {
+        const value = document.createElement('div');
+        value.className = 'reading-value text-muted';
+        value.textContent = 'sin datos';
+        const when = document.createElement('div');
+        when.className = 'reading-when';
+        when.textContent = 'Sin lecturas en los ultimos 7 dias.';
+        tile.appendChild(value);
+        tile.appendChild(when);
+      } else {
+        const value = document.createElement('div');
+        value.className = 'reading-value';
+        const num = typeof reading.value === 'number' ? reading.value.toFixed(1) : String(reading.value);
+        value.textContent = num;
+        if (reading.unit) {
+          const unit = document.createElement('span');
+          unit.className = 'reading-unit';
+          unit.textContent = ' ' + reading.unit;
+          value.appendChild(unit);
+        }
+        const when = document.createElement('div');
+        when.className = 'reading-when';
+        when.setAttribute('data-reading-at', reading.at || '');
+        when.setAttribute('data-absolute', formatWhen(reading.at));
+        when.textContent = formatWhen(reading.at);
+        tile.appendChild(value);
+        tile.appendChild(when);
+      }
+      col.appendChild(tile);
+      row.appendChild(col);
+    });
+    if (typeof window.cofPaintReadingAges === 'function') {
+      window.cofPaintReadingAges();
+    }
+  }
+
+  function applyLive(data) {
+    const liveBadge = document.getElementById('device-live-badge');
+    if (liveBadge) {
+      liveBadge.className = 'badge text-bg-' + (data.live ? 'success' : 'secondary');
+      liveBadge.textContent = data.live ? 'online' : 'offline';
+    }
+
+    const net = data.network || {};
+    const netHost = document.getElementById('device-network-badge');
+    if (netHost) {
+      netHost.innerHTML = '<span class="badge ' + (net.badge_class || 'text-bg-secondary') + '">'
+        + (net.badge_text || 'sin ruta') + '</span>';
+    }
+
+    setText('device-firmware', data.firmware_version || '-');
+    setText('device-path-label', net.path_label || '-');
+    setText('device-ip', data.ip_address || '-');
+
+    const lastSeen = document.getElementById('device-last-seen');
+    if (lastSeen) {
+      lastSeen.setAttribute('data-iso', data.last_seen_at || '');
+      lastSeen.textContent = formatWhen(data.last_seen_at);
+    }
+
+    const updateBox = document.getElementById('device-firmware-update');
+    const published = document.getElementById('device-firmware-published');
+    if (updateBox && published) {
+      published.textContent = data.published_firmware_version || '';
+      updateBox.classList.toggle('d-none', !data.firmware_update_available);
+    }
+
+    renderReadings(data.last_readings || []);
+
+    if (data.latest_telemetry_at && data.latest_telemetry_at !== latestTelemetryAt) {
+      latestTelemetryAt = data.latest_telemetry_at;
+      if (revision !== null && typeof window.cofReloadTelemetry === 'function') {
+        window.cofReloadTelemetry();
+      }
+    }
+  }
+
+  function poll() {
+    fetch(LIVE_URL, { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        if (!response.ok) throw new Error('live ' + response.status);
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data || data.revision === revision) return;
+        const first = revision === null;
+        revision = data.revision;
+        if (first) {
+          latestTelemetryAt = data.latest_telemetry_at || null;
+          // Seed UI once so the revision baseline matches the DOM we painted.
+          applyLive(data);
+          return;
+        }
+        applyLive(data);
+      })
+      .catch(function () { /* keep last good snapshot */ });
+  }
+
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+{% endif %}
 {% endblock %}
