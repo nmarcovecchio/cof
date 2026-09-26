@@ -372,6 +372,16 @@ si Ethernet ya resolvió el broker, marca a esa IP; ante un code 3 reintenta el
 CONNECT en el mismo cliente (sin STOP) y, si sigue, resuelve con `CDNSGIP` y
 marca a la IP.
 
+**0.2.86 → 0.2.89 revertidos en 0.2.90.** Esas cuatro versiones tocaron el
+camino de conexión que en 0.2.84/0.2.85 ya publicaba `LTE MQTT OK`. 0.2.86
+metió el segundo `CMQTTSUB` encima del config retenido (`+CMQTTSUB: 0,14`) y
+cortó el JSON. 0.2.87 dejó el servicio colgado (`CMQTTSTART → ERROR`). 0.2.88
+llegó a `+CMQTTCONNECT: 0,3`. 0.2.89, tras varios fallos, disparó la escalera
+de 0.2.83: `AT+CFUN=0` / `AT+CFUN=1` con la radio Online (CSQ 30), el módem
+respondió `phone failure` + `*ATREADY` y quedó un rato en `NO SERVICE`. El
+camino nativo de `lte_mqtt_native.cpp`, `mqtt_io.cpp` y `modem_at.cpp` volvió
+al de 0.2.85. El SMS por LTE sigue pendiente: en 0.2.85 el comando no entraba.
+
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
 `lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados

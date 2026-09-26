@@ -541,13 +541,19 @@ static void connectMqttNativeIfNeeded() {
 
   lteMqttConnectFails = 0;
   lteMqttRebuildCycles = 0;
+  lteTraceLog = modemCallLog;
+  pendingLteTraceMessage = "LTE MQTT OK (native)";
+  pendingLteTraceOk = true;
+  pendingLteTracePublish = true;
+  reportLteProgress = false;
 
   // The native path never ran NETOPEN, so state.lteIpAddress is still "-".
   // CMQTTSTART already activated the PDP on CID 1 (CGDCONT=1); read the real
   // address (AT+CGPADDR=1) so the OLED "L" line and status/telemetry report it
-  // instead of "-" (observed: "L --" while MQTT rode LTE). The AT round-trip is
-  // safe now that flushModemInput()/readModemUntil() hand any inbound
-  // +CMQTTRX bytes to the native assembler instead of discarding them.
+  // instead of "-" (observed: "L --" while MQTT rode LTE). Queried BEFORE the
+  // subscribes: right after CONNECT the UART is quiet, so the AT round-trip
+  // cannot steal an inbound +CMQTTRX URC (a retained config/desired message is
+  // delivered immediately after SUB).
   {
     String ip;
     if (queryLteIp(ip)) {
@@ -555,23 +561,8 @@ static void connectMqttNativeIfNeeded() {
     }
   }
 
-  // Command first: it has no retained payload, so the SUB completes before the
-  // ~2 KB retained config/desired starts streaming. Subscribing config first
-  // and immediately subscribing command is what returned +CMQTTSUB: 0,14
-  // (client busy) and then corrupted that JSON (0.2.86 field log).
-  const bool subCommand = cmqttSubscribe(mqttTopic("command"), 1);
-  const bool subConfig = cmqttSubscribe(mqttTopic("config/desired"), 1);
-  appendModemLogForced("SUBS config=" + String(subConfig ? "ok" : "FAIL") +
-                       " command=" + String(subCommand ? "ok" : "FAIL"));
-
-  // Capture the trace AFTER the subscribes so the SUB results (and any URC the
-  // broker pushes right after SUB) reach the event's modem_log. Capturing before
-  // is what hid the failure.
-  lteTraceLog = modemCallLog;
-  pendingLteTraceMessage = "LTE MQTT OK (native)";
-  pendingLteTraceOk = true;
-  pendingLteTracePublish = true;
-  reportLteProgress = false;
+  cmqttSubscribe(mqttTopic("config/desired"), 1);
+  cmqttSubscribe(mqttTopic("command"), 1);
 
   state.mqttConnected = true;
   lastMqttOkMs = millis();
