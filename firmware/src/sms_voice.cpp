@@ -993,8 +993,17 @@ String transmitSms(const String& phone, const String& body) {
     // and the PDP coexist (AT+CGSMS=1 prefers the CS bearer), and killing MQTT
     // is what used to lose the command result. Only release the socket when the
     // command will actually collide with the IP stack, i.e. when it fails.
+#if COF_LTE_MQTT_NATIVE
+    // Native CMQTT has no socket to refresh; its connection state is maintained
+    // by cmqttLoop() in the main loop, so there is nothing to sync here.
+    if (!state.lteMqttTransport) {
+      mqttClient.loop();
+      state.mqttConnected = mqttClient.connected();
+    }
+#else
     mqttClient.loop();
     state.mqttConnected = mqttClient.connected();
+#endif
   }
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
     setStatus("SMS mode fail");

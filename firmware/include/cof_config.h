@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.78"
+#define COF_FIRMWARE_VERSION "0.2.79"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -50,6 +50,13 @@
 // Overridden by the real credential over Serial and stored in Preferences.
 // This repo is PUBLIC: never commit a real value here, not even temporarily.
 #define COF_DEFAULT_MQTT_PASSWORD "change-me-device-mqtt"
+
+// MQTT over LTE: use the modem's native AT+CMQTT* client instead of the
+// hand-rolled CIPOPEN/CIPSEND/CIPRXGET socket emulation. Native handles the PDP
+// activation, keepalive and inbound delivery (URC) itself. Keep as a switch so a
+// regression on some module firmware can be reverted to the legacy socket path
+// without touching the LAN (PubSubClient) path.
+#define COF_LTE_MQTT_NATIVE 1
 
 // ---------------------------------------------------------------------------
 // Timing and behaviour constants.

@@ -189,11 +189,18 @@ void publishTestCallProgress(const String& message) {
   }
   setStatus(message);
   if (state.mqttConnected) {
-    // Keep the keepalive serviced so the broker does not drop us mid-call.
-    if (mqttClient.loop()) {
-      lastMqttOkMs = millis();
-    } else {
-      state.mqttConnected = false;
+#if COF_LTE_MQTT_NATIVE
+    if (state.lteMqttTransport) {
+      // Native CMQTT keepalives on the module; nothing to pump here.
+    } else
+#endif
+    {
+      // Keep the keepalive serviced so the broker does not drop us mid-call.
+      if (mqttClient.loop()) {
+        lastMqttOkMs = millis();
+      } else {
+        state.mqttConnected = false;
+      }
     }
     publishDeviceEvent("test_call", "info", withFirmware(message));
   }

@@ -209,6 +209,9 @@ void clearMqttConfig() {
   state.mqttUsername = COF_DEFAULT_MQTT_USERNAME;
   state.mqttPassword = COF_DEFAULT_MQTT_PASSWORD;
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
+#if COF_LTE_MQTT_NATIVE
+  cmqttTearDown();
+#endif
   mqttClient.disconnect();
   setStatus("MQTT defaults");
 }

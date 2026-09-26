@@ -15,6 +15,11 @@ void requestMqttBounce(const char* reason) {
   Serial.printf("[mqtt] bounce requested: %s\n", reason);
 }
 void bounceMqttForRouteChange() {
+#if COF_LTE_MQTT_NATIVE
+  if (state.lteMqttTransport) {
+    cmqttDisconnect();
+  } else
+#endif
   if (mqttClient.connected() || state.mqttConnected) {
     mqttClient.disconnect();
   }
@@ -162,16 +167,29 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained, uin
   }
 
   const size_t length = serializeJson(doc, payload, sizeof(payload));
+#if COF_LTE_MQTT_NATIVE
+  const bool ok = state.lteMqttTransport
+      ? cmqttPublish(topic, reinterpret_cast<const uint8_t*>(payload), length, retained, qos)
+      : mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
+#else
   const bool ok = mqttClient.publish(topic.c_str(), reinterpret_cast<const uint8_t*>(payload), length, retained);
-  Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
   (void)qos;
+#endif
+  Serial.printf("[mqtt] publish topic=%s ok=%s payload=%s\n", topic.c_str(), ok ? "yes" : "no", payload);
   if (ok) {
     lastMqttOkMs = millis();
     lanMqttFailCount = 0;
   } else {
     state.mqttConnected = false;
-    mqttClient.disconnect();
-    noteLanMqttFailure("publish");
+#if COF_LTE_MQTT_NATIVE
+    if (state.lteMqttTransport) {
+      cmqttDisconnect();
+    } else
+#endif
+    {
+      mqttClient.disconnect();
+      noteLanMqttFailure("publish");
+    }
   }
   return ok;
 }
@@ -440,6 +458,89 @@ void publishTelemetryNow() {
   doc["output_2"] = false;
   publishMqttJson("telemetry", doc, false, 0);
 }
+#if COF_LTE_MQTT_NATIVE
+// Native CMQTT connect/reconnect path for the LTE transport. Mirrors the LAN
+// PubSubClient block below: backoff, connect, will, subscribe, then the same
+// first-publish burst. cmqttLoop() runs here every pass while connected, which
+// drains inbound URCs and folds +CMQTTCONNLOST / +CMQTTNONET into the connection
+// state (no separate watchdog ping is needed - the modem keepalives by itself).
+static void connectMqttNativeIfNeeded() {
+  if (cmqttIsConnected()) {
+    cmqttLoop();
+    if (!cmqttIsConnected()) {
+      // A URC dropped us (CONNLOST, or NONET which also set ltePdpDown).
+      state.mqttConnected = false;
+      if (ltePdpDown) {
+        ltePdpDown = false;
+        Serial.println("[lte] network closed (out of service), releasing PDP");
+        stopLtePdp();
+      }
+      lteMqttConnectFails = 0;
+    } else {
+      state.mqttConnected = true;
+    }
+    return;
+  }
+
+  state.mqttConnected = false;
+  const uint32_t now = millis();
+  if (now - lastMqttReconnectMs < kMqttReconnectIntervalMs) {
+    return;
+  }
+  lastMqttReconnectMs = now;
+
+  const String clientId = state.mqttDeviceId + "-" + String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX);
+  const String willTopic = mqttTopic("status");
+  const String willPayload = "{\"status\":\"offline\",\"device_id\":\"" + state.mqttDeviceId + "\"}";
+  const String username = state.mqttUsername;
+  const String password = state.mqttPassword;
+
+  Serial.printf("[mqtt] connecting (native CMQTT) host=%s port=%d device=%s\n",
+                state.mqttHost.c_str(), state.mqttPort, state.mqttDeviceId.c_str());
+
+  reportLteProgress = true;
+  feedWatchdog();
+  const bool ok = cmqttConnect(clientId, willTopic, willPayload,
+                               state.mqttHost, state.mqttPort, username, password);
+  if (!ok) {
+    setStatus("MQTT fail");
+    lteMqttConnectFails++;
+    if (lteMqttConnectFails >= 3) {
+      lteMqttConnectFails = 0;
+      Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
+      stopLtePdp();
+      lastLteAttemptMs = 0;
+    }
+    lteTraceLog = modemCallLog;
+    pendingLteTraceMessage = "LTE MQTT fail (native)";
+    pendingLteTraceOk = false;
+    pendingLteTracePublish = true;
+    reportLteProgress = false;
+    return;
+  }
+
+  lteMqttConnectFails = 0;
+  lteTraceLog = modemCallLog;
+  pendingLteTraceMessage = "LTE MQTT OK (native)";
+  pendingLteTraceOk = true;
+  pendingLteTracePublish = true;
+  reportLteProgress = false;
+
+  cmqttSubscribe(mqttTopic("config/desired"), 1);
+  cmqttSubscribe(mqttTopic("command"), 1);
+
+  state.mqttConnected = true;
+  lastMqttOkMs = millis();
+  lastSilenceProbeMs = 0;
+  publishDeviceStatus("online", true);
+  publishTelemetryNow();
+  lastTelemetryPublishMs = millis();
+  publishLteDataTrace();
+  lastCellularStatusMs = millis();
+  setStatus("MQTT OK");
+}
+#endif
+
 void connectMqttIfNeeded() {
   maintainLteFallback();
 
@@ -455,6 +556,21 @@ void connectMqttIfNeeded() {
   if (!state.mqttConfigured || !networkConnected()) {
     return;
   }
+
+#if COF_LTE_MQTT_NATIVE
+  // Native CMQTT path. The decision is cheap and side-effect free; the full
+  // PubSubClient setup (configureMqttClientTransport) still runs only on the LAN
+  // path below, right before a connect, exactly as it did pre-CMQTT.
+  {
+    const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive() && lanHasInternet();
+    if (state.lteDataUp && !lanLooksUsable) {
+      state.lteMqttTransport = true;
+      connectMqttNativeIfNeeded();
+      return;
+    }
+    state.lteMqttTransport = false;
+  }
+#endif
 
   if (mqttClient.connected()) {
     if (!mqttClient.loop()) {
@@ -613,6 +729,20 @@ void enforceMqttSilenceWatchdog() {
     ESP.restart();
   }
 
+#if COF_LTE_MQTT_NATIVE
+  if (state.lteMqttTransport) {
+    // The A7672's CMQTT stack runs keepalive natively (keepalive_time in
+    // CMQTTCONNECT) and surfaces passive loss as +CMQTTCONNLOST / +CMQTTNONET,
+    // which cmqttLoop() folds back into the connection state. There is no
+    // PubSubClient socket to ping, so nothing to probe here; the reconnect path
+    // in connectMqttNativeIfNeeded() is what reacts to a dropped broker link.
+    if (!cmqttIsConnected()) {
+      lastSilenceProbeMs = 0;
+    }
+    return;
+  }
+#endif
+
   if (!mqttClient.connected()) {
     lastSilenceProbeMs = 0;
     return;
@@ -653,6 +783,25 @@ void configureMqttClientTransport() {
   // a probe has already set the interface's health flag, so adding it here would
   // only create a window where a dead LAN can reclaim MQTT.
   const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive() && lanHasInternet();
+#if COF_LTE_MQTT_NATIVE
+  if (state.lteDataUp && !lanLooksUsable) {
+    // Native CMQTT owns the cellular path entirely; PubSubClient is not involved
+    // (cmqttConnect() dials tcp:// and activates its own PDP context). The
+    // reportLteProgress flag is raised in connectMqttNativeIfNeeded() during the
+    // actual connect attempt, not here - this runs every pass and must stay
+    // side-effect free so modemCallLog isn't polluted with steady-state traffic.
+    state.lteMqttTransport = true;
+  } else {
+    state.lteMqttTransport = false;
+    if (mqttUsesTls()) {
+      mqttTlsClient.setInsecure();
+      mqttClient.setClient(mqttTlsClient);
+    } else {
+      mqttClient.setClient(mqttPlainClient);
+    }
+    mqttClient.setSocketTimeout(kMqttSocketTimeoutSeconds);
+  }
+#else
   if (state.lteDataUp && !lanLooksUsable) {
     mqttClient.setClient(lteMqttClient);
     state.lteMqttTransport = true;
@@ -668,6 +817,7 @@ void configureMqttClientTransport() {
     }
     mqttClient.setSocketTimeout(kMqttSocketTimeoutSeconds);
   }
+#endif
   mqttClient.setServer(state.mqttHost.c_str(), state.mqttPort);
   mqttClient.setCallback(onMqttMessage);
   mqttClient.setBufferSize(4096);

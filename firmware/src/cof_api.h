@@ -91,6 +91,16 @@ bool waitUntilModemReady(bool forCall, uint32_t timeoutMs);
 void waitWithMqtt(uint32_t ms);
 void waitWithWatchdog(uint32_t ms);
 
+// ---- owned by lte_mqtt_native -------------------------------
+bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
+                  const String& host, int port, const String& username, const String& password);
+void cmqttDisconnect();
+bool cmqttIsConnected();
+void cmqttLoop();
+bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos);
+bool cmqttSubscribe(const String& topic, uint8_t qos);
+void cmqttTearDown();
+
 // ---- owned by mqtt_io ---------------------------------------
 void bounceMqttForRouteChange();
 void configureMqttClientTransport();

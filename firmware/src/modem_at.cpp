@@ -222,7 +222,15 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
     // - `available()` issuing `AT+CIPRXGET` and `loop()` emitting a PINGREQ -
     // are writes to the module that corrupt the exchange. The send is waiting
     // on the prompt it just paid for; nothing may talk over it.
+    //
+    // Native CMQTT (COF_LTE_MQTT_NATIVE) is excluded for the same reason and one
+    // more: the module keepalives by itself, and cmqttLoop() reads the same UART
+    // this function is draining, so pumping it here would steal the AT response.
+#if COF_LTE_MQTT_NATIVE
+    if (state.mqttConnected && !state.lteMqttTransport && !lteMqttClient.atCommandBusy) {
+#else
     if (state.mqttConnected && !lteMqttClient.atCommandBusy) {
+#endif
       if (mqttClient.loop()) {
         lastMqttOkMs = millis();
       } else {
