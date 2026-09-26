@@ -549,6 +549,7 @@ void serviceNetworkPaths() {
   }
   ltePreemptSinceMs = 0;
   Serial.println("[net] LAN path recovered, releasing LTE");
+  noteLteSessionDrop("lan-recovered");
   stopLtePdp();
   applyPreferredRoute();
   requestMqttBounce("lan recovered");

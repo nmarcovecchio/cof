@@ -276,7 +276,25 @@ bool ensureLtePdp() {
   lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
   return false;
 }
+static const char* lteSessionDropReason = nullptr;
+
+void noteLteSessionDrop(const char* reason) {
+  if (reason == nullptr || reason[0] == '\0') {
+    return;
+  }
+  if (lteSessionDropReason == nullptr) {
+    lteSessionDropReason = reason;
+  }
+}
+
+const char* takeLteSessionDrop() {
+  const char* reason = lteSessionDropReason;
+  lteSessionDropReason = nullptr;
+  return reason;
+}
+
 void stopLtePdp() {
+  noteLteSessionDrop("stop");
 #if COF_LTE_MQTT_NATIVE
   // Native MQTT: release the CMQTT client and service. cmqttTearDown() is a
   // no-op when the service was never started, so calling it unconditionally is

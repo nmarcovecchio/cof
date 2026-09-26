@@ -174,6 +174,7 @@ void noteModemRebootDetected() {
     return;  // already flagged; avoid log spam
   }
   Serial.println("[modem] *ATREADY detected: modem rebooted, flagging for re-init");
+  noteLteSessionDrop("atready");
   state.modemReady = false;
   state.simReady = false;
   state.networkRegistered = false;

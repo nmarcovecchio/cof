@@ -239,6 +239,7 @@ void maintainLteFallback() {
     lastLteAttemptMs = 0;
     if (state.lteDataUp || state.lteMqttTransport) {
       Serial.println("[lte] LAN MQTT ok, stopping PDP");
+      noteLteSessionDrop("lan-mqtt");
       stopLtePdp();
       lastMqttReconnectMs = 0;
     }

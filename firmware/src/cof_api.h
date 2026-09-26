@@ -60,6 +60,9 @@ void releaseLteMqttForModem();
 String resolveLteMqttPeer(const char* host);
 void restorePacketServices();
 void stopLtePdp();
+// First cause wins until takeLteSessionDrop() publishes it on the next LTE OK.
+void noteLteSessionDrop(const char* reason);
+const char* takeLteSessionDrop();
 
 // ---- owned by modem_at --------------------------------------
 void appendModemLog(char direction, const String& text);

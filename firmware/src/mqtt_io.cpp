@@ -180,6 +180,14 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained, uin
     lastMqttOkMs = millis();
     lanMqttFailCount = 0;
   } else {
+#if COF_LTE_MQTT_NATIVE
+    // A publish that missed its URC leaves the broker link up. DISC here is
+    // what turned one telemetry into DISC+REL+STOP and a new PDP about once
+    // a minute. Only drop the socket when CMQTT itself says the link is gone.
+    if (state.lteMqttTransport && cmqttIsConnected()) {
+      return false;
+    }
+#endif
     state.mqttConnected = false;
 #if COF_LTE_MQTT_NATIVE
     if (state.lteMqttTransport) {
@@ -471,7 +479,10 @@ void publishTelemetryNow() {
   doc["input_1"] = lastButtonPressed;
   doc["output_1"] = false;
   doc["output_2"] = false;
-  publishMqttJson("telemetry", doc, false, 0);
+  // QoS 1 on the modem. The A76XX examples use it, and a QoS 0 CMQTTPUB that
+  // never emits +CMQTTPUB was a candidate for the once-a-minute teardown
+  // (telemetry default is 60s). LAN PubSubClient ignores this argument.
+  publishMqttJson("telemetry", doc, false, state.lteMqttTransport ? 1 : 0);
 }
 #if COF_LTE_MQTT_NATIVE
 // Native CMQTT connect/reconnect path for the LTE transport. Mirrors the LAN
@@ -538,6 +549,7 @@ static void connectMqttNativeIfNeeded() {
     if (lteMqttConnectFails >= kLteMqttConnectFailLimit) {
       lteMqttConnectFails = 0;
       Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
+      noteLteSessionDrop("connect-fail");
       stopLtePdp();
       lastLteAttemptMs = 0;
       // CMQTT is now fully down (cmqttTearDown ran), so it is safe to interrogate
@@ -613,9 +625,15 @@ static void connectMqttNativeIfNeeded() {
   // catches the async +CMQTTSUB / +CMQTTRX that follow the SUB prompt OK.
   // A test SMS snaps its own trace before reconnecting; keep that message and
   // only refresh the log so the reconnect AT does not erase the CMGS lines.
+  const char* dropReason = takeLteSessionDrop();
+  if (dropReason != nullptr) {
+    appendModemLogForced(String("drop ") + dropReason);
+  }
   lteTraceLog = modemCallLog;
   if (!(pendingLteTracePublish && pendingLteTraceMessage.startsWith("SMS"))) {
-    pendingLteTraceMessage = "LTE MQTT OK (native)";
+    pendingLteTraceMessage = dropReason == nullptr
+        ? "LTE MQTT OK (native)"
+        : String("LTE MQTT OK (native) after ") + dropReason;
     pendingLteTraceOk = true;
     pendingLteTracePublish = true;
   }

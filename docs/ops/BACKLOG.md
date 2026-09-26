@@ -422,6 +422,18 @@ responde `\0` + `*ATREADY` y después igual salen `DISC` / `REL` / `STOP` /
 nunca se levantó. Al final publicó `LTE MQTT OK`, pero recién después de
 esa ráfaga. **0.2.95** busca `*ATREADY` por longitud (pasa el NUL), suelta
 el cliente CMQTT y no manda `DISC`/`STOP` hasta que `initModem()` vea `+CPIN`.
+**0.2.95 en campo, solo LTE, repite `LTE MQTT OK` cada ~1 min (13:44–13:49).**
+Cada evento es un PDP nuevo (el log arranca en `AT+CREG?`, la IP de `CGPADDR`
+cambia, y en uno aparece `PB DONE`). La radio estaba Online (CSQ 31). Un
+corte del broker, o un `CMQTTPUB` que no devolvía `+CMQTTPUB` en 20 s, ponía
+`cmqttBrokerUp` en false y el connect siguiente hacía `DISC`+`REL`+`STOP`.
+Eso suelta el PDP que abrió `CMQTTSTART` y en este módulo reinicia el módem.
+**0.2.96** vuelve a marcar con `CMQTTCONNECT` si el servicio y el cliente
+siguen adquiridos (el manual, ante `+CMQTTCONNLOST`, dice reconectar, no
+`STOP`). Un publish sin URC de corte no baja la sesión. El keepalive pasa
+de 30 s a 120 s porque el `pub_timeout` mínimo del módulo es 60 s. `AT+CSQ`
+de salud pasa de 30 s a 5 min para no pisar el ciclo de telemetría. Si igual
+hay que rearmar, el evento dice `after connlost|nonet|atready|pub|csq99|stop`.
 
 ### Caídas de ruta que no se pueden romper
 

@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.95"
+#define COF_FIRMWARE_VERSION "0.2.96"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -86,7 +86,10 @@ constexpr uint32_t kModemInitRetryMs = 15000;
 constexpr uint32_t kLteRetryIntervalMs = 10000;
 constexpr uint32_t kSmsPollIntervalMs = 5000;
 constexpr uint32_t kMqttReconnectIntervalMs = 5000;
-constexpr uint32_t kMqttKeepAliveSeconds = 30;
+// A76XX AT+CMQTTPUB pub_timeout minimum is 60s. A keepalive shorter than that
+// lets one slow publish outlive the broker's idle timer, which showed up as a
+// full CMQTT rebuild (new PDP IP, "LTE MQTT OK") about once a minute.
+constexpr uint32_t kMqttKeepAliveSeconds = 120;
 constexpr uint32_t kMqttSocketTimeoutSeconds = 3;
 constexpr uint8_t kLanMqttFailLimit = 2;
 constexpr uint32_t kWifiBackupDelayMs = 1500;
@@ -131,13 +134,13 @@ constexpr uint32_t kSilenceProbeIntervalMs = 45UL * 1000UL;
 constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 // Native LTE MQTT liveness. While MQTT rides the modem's CMQTT stack,
 // pollModem()/refreshCellularStatus() are gated off (their AT chatter would steal
-// inbound +CMQTTRX URC bytes), so the only designed loss signals are the
-// +CMQTTCONNLOST / +CMQTTNONET URCs. A radio that dies *silently* emits neither
-// and would leave the device "connected" over a dead bearer. One cheap AT+CSQ per
-// kLteHealthProbeMs catches +CSQ: 99,99 (no service); once it persists
-// kModemNoServiceGraceMs the PDP is torn down so pollModem()'s recovery ladder can
-// run. See serviceLteMqttHealth() in lte_mqtt_native.cpp.
-constexpr uint32_t kLteHealthProbeMs = 30UL * 1000UL;
+// inbound +CMQTTRX URC bytes). The designed loss signals are +CMQTTCONNLOST /
+// +CMQTTNONET. AT+CSQ is only a backstop for a radio that dies without either
+// URC. It used to run every 30s, in the same window as telemetry, and an AT
+// command on a live CMQTT client is enough to drop the network stack. Five
+// minutes keeps the backstop and stays out of the telemetry cycle.
+// See serviceLteMqttHealth() in lte_mqtt_native.cpp.
+constexpr uint32_t kLteHealthProbeMs = 5UL * 60UL * 1000UL;
 // Connect-failure escalation for the native path. A connect that fails even though
 // the radio still claims "registered + Online" is a wedged data plane, not a radio
 // outage: after this many full PDP rebuilds without a successful connect, force a

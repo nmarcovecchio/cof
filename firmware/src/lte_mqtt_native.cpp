@@ -160,9 +160,15 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
     cmqttDropAfterReboot();
     return false;
   }
-  cmqttTearDown();
-  if (modemRebootUrcSeen) {
-    return false;
+  // A dropped broker link (CONNLOST, or our flag cleared) still has the CMQTT
+  // service and client. The manual says to CMQTTCONNECT again. DISC+REL+STOP
+  // here releases the PDP CMQTTSTART dialed — new IP every time — and on this
+  // module that teardown is what rebooted it (*ATREADY) about once a minute.
+  if (!(cmqttServiceUp && cmqttClientAcquired)) {
+    cmqttTearDown();
+    if (modemRebootUrcSeen) {
+      return false;
+    }
   }
 
   if (!cmqttServiceUp) {
@@ -272,7 +278,11 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
   // Topic first, then payload, then the actual PUB. The modem clears topic and
   // payload after each PUB (per the app note), so both must be set every time.
   if (!cmqttPromptWrite(String("AT+CMQTTTOPIC=0,") + String(topic.length()), topic, 5000)) {
-    cmqttBrokerUp = false;
+    if (modemRebootUrcSeen || ltePdpDown) {
+      cmqttBrokerUp = false;
+    } else {
+      appendModemLogForced("PUB topic fail, session kept");
+    }
     return false;
   }
   String body;
@@ -281,20 +291,44 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     body += static_cast<char>(payload[i]);
   }
   if (!cmqttPromptWrite(String("AT+CMQTTPAYLOAD=0,") + String(len), body, 5000)) {
-    cmqttBrokerUp = false;
+    if (modemRebootUrcSeen || ltePdpDown) {
+      cmqttBrokerUp = false;
+    } else {
+      appendModemLogForced("PUB payload fail, session kept");
+    }
     return false;
   }
   String resp;
   // A76XX: AT+CMQTTPUB=<client>,<qos>,<pub_timeout>[,<retained>[,<dup>]]
+  // pub_timeout minimum is 60. sendAT gives up at 20s; a missing URC is not a
+  // dead session. Treating it as one made the next loop STOP the service.
   const String pubCmd = String("AT+CMQTTPUB=0,") + String(qos) + ",60," +
                         String(retained ? 1 : 0);
   if (!sendAT(pubCmd, "+CMQTTPUB:", 20000, &resp)) {
-    cmqttBrokerUp = false;
+    if (modemRebootUrcSeen) {
+      noteLteSessionDrop("atready");
+      cmqttBrokerUp = false;
+    } else if (resp.indexOf("+CMQTTNONET") >= 0) {
+      noteLteSessionDrop("nonet");
+      cmqttBrokerUp = false;
+      ltePdpDown = true;
+    } else if (resp.indexOf("+CMQTTCONNLOST") >= 0) {
+      noteLteSessionDrop("connlost");
+      cmqttBrokerUp = false;
+    } else {
+      appendModemLogForced("PUB no URC, session kept");
+    }
     return false;
   }
-  if (cmqttResult(resp, "+CMQTTPUB:") != 0) {
+  const int pubCode = cmqttResult(resp, "+CMQTTPUB:");
+  if (pubCode != 0) {
     Serial.printf("[cmqtt] CMQTTPUB err: %s\n", resp.c_str());
-    cmqttBrokerUp = false;
+    appendModemLogForced("PUB result " + String(pubCode));
+    // 9 network not opened, 11 no connection, 26 socket closed by server.
+    if (pubCode == 9 || pubCode == 11 || pubCode == 26) {
+      noteLteSessionDrop("pub");
+      cmqttBrokerUp = false;
+    }
     return false;
   }
   return true;
@@ -400,10 +434,12 @@ void cmqttLoop() {
       continue;
     }
     if (line.startsWith("+CMQTTCONNLOST")) {
+      noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
       continue;
     }
     if (line.startsWith("+CMQTTNONET")) {
+      noteLteSessionDrop("nonet");
       cmqttBrokerUp = false;
       ltePdpDown = true;   // the network library died: rebuild the PDP
       continue;
@@ -480,9 +516,9 @@ void cmqttLoop() {
 // refreshCellularStatus() are gated off: their AT chatter would steal inbound
 // +CMQTTRX URC bytes. The designed loss signals are +CMQTTCONNLOST / +CMQTTNONET,
 // but a radio that dies *silently* emits neither and leaves the device "connected"
-// over a dead bearer. One cheap AT+CSQ per kLteHealthProbeMs catches +CSQ: 99,99
-// (no service); once it persists kModemNoServiceGraceMs we tear the PDP down,
-// which drops lteMqttTransport so pollModem()'s radio-recovery ladder takes over.
+// over a dead bearer. AT+CSQ on kLteHealthProbeMs (minutes, not the telemetry
+// period) catches +CSQ: 99,99; once it persists kModemNoServiceGraceMs we tear
+// the PDP down, which drops lteMqttTransport so pollModem()'s ladder can run.
 //
 // URC safety: cmqttLoop() drains anything already buffered before we touch the
 // UART, and the probe is skipped while a message is mid-assembly. The residual
@@ -518,6 +554,7 @@ void serviceLteMqttHealth() {
       Serial.println("[lte] CSQ 99,99 sustained: releasing PDP for radio recovery");
       lteNoServiceSinceMs = 0;
       noServiceSinceMs = 1;   // arm pollModem()'s ladder to fire immediately
+      noteLteSessionDrop("csq99");
       stopLtePdp();           // drops lteMqttTransport so pollModem() runs
     }
     return;
