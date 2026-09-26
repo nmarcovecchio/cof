@@ -294,6 +294,44 @@ del broker y tiró la conexión. Fix: `sendTestSms()`/`transmitSms()` llaman
 reconecta (`connectMqttIfNeeded`) y `publishDeviceEvent` difiere el resultado
 (`deferDeviceEvent`) hasta que MQTT vuelve. Pendiente de re-validar solo-LTE.
 
+**Causa raíz del "anda por Ethernet, mudo por LTE" (0.2.86).** Confirmado en
+hardware con 0.2.85: el SMS por Ethernet funciona (`test_sms: SMS sent`), pero por
+LTE el comando **nunca entra**: el backend publica y no llega ni `command_ack`.
+No es el SMS (eso era 0.2.85) sino la **recepción de comandos entrantes por CMQTT
+nativo**, que nunca había funcionado. Tres defectos, todos en el camino RX:
+
+1. **El resultado de `AT+CMQTTSUB` se ignoraba.** `cmqttSubscribe()` mandaba la
+   forma "largo" (`AT+CMQTTSUB=0,<len>,<qos>` + prompt + bytes) y **descartaba la
+   respuesta**. Si el módem la rechazaba, el equipo publicaba telemetría igual
+   (parecía "conectado") pero quedaba **sordo**: sin suscripción al topic
+   `devices/<id>/command`, el broker no le entrega nada. Ahora `cmqttSubscribe()`
+   verifica `+CMQTTSUB:<n>,0` y, si falla, reintenta con la forma por parámetro
+   (`AT+CMQTTSUB=0,"<topic>",<qos>`); ambas están documentadas en el manual A76XX
+   §18.2.14 y cuál acepta cada firmware depende del `CMQTTCFG="argtopic"`.
+   Además cada SUB queda en el `modem_log` del evento.
+2. **Los bytes entrantes se tiraban a la basura.** `readModemUntil()` (toda
+   respuesta AT) y `flushModemInput()` (previo a cada comando) leen el mismo UART
+   y **descartaban** lo que no fuera su token. Un `+CMQTTRX*` que cayera ahí se
+   perdía para siempre — el broker ya había hecho ACK del PUBLISH, así que el QoS 1
+   no re-entrega. Ahora ambos copian el byte a `cmqttHoldByte()`, y
+   `cmqttNextByte()` lo reproduce antes del UART real, así `cmqttLoop()` ve un
+   stream contiguo.
+3. **El trace se capturaba antes de los SUB.** `connectMqttNativeIfNeeded()`
+   tomaba `lteTraceLog = modemCallLog` **antes** de suscribir, así que el log del
+   evento `LTE MQTT OK` terminaba en `CMQTTCONNECT` y la falla de SUB era
+   invisible. Ahora se captura **después**, y los URCs `+CMQTT*` se registran con
+   `appendModemLogForced()` (sin el gating de `reportLteProgress`) para que se vean
+   en estado estable.
+
+También se agregó el parser de la forma alternativa de entrega
+`+CMQTTRECV: <client>,"<topic>",<len>,"<payload>"` (firmware MQTT-EX), además de
+`+CMQTTRXSTART/TOPIC/PAYLOAD/END`. **A validar en hardware:** con 0.2.86 en
+solo-LTE, el evento `LTE MQTT OK` debe mostrar `SUBS config=ok command=ok` en el
+`modem_log`, y al tocar "Probar SMS" debe aparecer `command_ack test_sms: accepted`
+(prueba de que el comando entró). Si el log muestra `command=FAIL`, el fix está en
+la forma del SUB; si muestra `ok` pero igual no entra el comando, el URC de
+recepción es otro y `modem_log` ahora lo va a mostrar.
+
 **Endurecido en 0.2.83: el equipo solo-LTE nunca queda colgado.** El hueco que
 quedaba era el **monitoreo proactivo de radio mientras MQTT viaja por LTE**: con
 `lteMqttTransport == true`, `pollModem()`/`refreshCellularStatus()` están gateados

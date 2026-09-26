@@ -63,6 +63,8 @@ void stopLtePdp();
 
 // ---- owned by modem_at --------------------------------------
 void appendModemLog(char direction, const String& text);
+// Same ring buffer, but ignores the call/LTE gating (used for native CMQTT URCs).
+void appendModemLogForced(const String& text);
 void beginInternalWatchdog();
 void configureCellularApn();
 bool cpinResponseReady(const String& response);
@@ -102,6 +104,9 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
 bool cmqttSubscribe(const String& topic, uint8_t qos);
 void cmqttTearDown();
 void serviceLteMqttHealth();
+// Hand a byte back to the native CMQTT assembler when another UART reader
+// (readModemUntil / flushModemInput) consumed it. No-op outside LTE native.
+void cmqttHoldByte(char c);
 
 // ---- owned by mqtt_io ---------------------------------------
 void bounceMqttForRouteChange();

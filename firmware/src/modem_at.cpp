@@ -106,6 +106,35 @@ bool modemLineInteresting(const String& line) {
          upper.indexOf("COLP") >= 0 || upper.indexOf("CCMX") >= 0 ||
          upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("CHUP") >= 0;
 }
+void appendModemLogForced(const String& text) {
+  // Ring-buffer append that bypasses the call/LTE gating in appendModemLog().
+  // Used by the native CMQTT inbound path, whose URCs must be captured even at
+  // steady state (reportLteProgress is false then) so a lost inbound command is
+  // visible in the event's modem_log instead of vanishing silently.
+  String line = text;
+  line.replace("\r", " ");
+  line.replace("\n", " | ");
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+  String entry = "<< " + line;
+  if (entry.length() > 140) {
+    entry = entry.substring(0, 140);
+  }
+  while (modemCallLog.length() + entry.length() + 1 > kModemCallLogMax) {
+    const int cut = modemCallLog.indexOf('\n');
+    if (cut < 0) {
+      modemCallLog = "";
+      break;
+    }
+    modemCallLog = modemCallLog.substring(cut + 1);
+  }
+  if (modemCallLog.length() > 0) {
+    modemCallLog += '\n';
+  }
+  modemCallLog += entry;
+}
 void appendModemLog(char direction, const String& text) {
   if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress) {
     return;
@@ -197,6 +226,16 @@ void flushModemInput() {
   while (ModemSerial.available() && drained < 1024) {
     const char c = static_cast<char>(ModemSerial.read());
     drained++;
+#if COF_LTE_MQTT_NATIVE
+    // While MQTT rides LTE, a byte swept up here may be part of an inbound
+    // +CMQTTRX* URC. pendingModemUrcs is only mined for +CMTI, so holding a
+    // copy for the native assembler is what keeps an inbound command from being
+    // dropped on the floor before cmqttLoop() can read it.
+    if (state.lteMqttTransport) {
+      cmqttHoldByte(c);
+      continue;
+    }
+#endif
     if (state.callInProgress) {
       pendingCallUrcs += c;
     } else {
@@ -248,6 +287,18 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
       }
       const char c = static_cast<char>(ModemSerial.read());
       response += c;
+#if COF_LTE_MQTT_NATIVE
+      // Mirror to the native assembler: while MQTT rides LTE, a byte consumed
+      // here can belong to an inbound +CMQTTRX* URC (the broker has already
+      // acked the PUBLISH, so a dropped byte loses the command for good). The
+      // bytes are still appended to `response` above, so AT parsing is
+      // unaffected; cmqttLoop() later replays them in order. This is safe during
+      // assembly too: while readModemUntil() runs, cmqttLoop() is not, so the
+      // mirrored bytes form one contiguous chunk.
+      if (state.lteMqttTransport) {
+        cmqttHoldByte(c);
+      }
+#endif
       // A module reboot emits *ATREADY as a URC, possibly in the middle of the
       // command we are waiting on. Detect it cheaply at line boundaries.
       if (!rebootSeen && (c == '\n' || c == '\r') && response.indexOf("*ATREADY") >= 0) {

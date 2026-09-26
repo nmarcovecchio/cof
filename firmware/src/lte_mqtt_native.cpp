@@ -38,15 +38,45 @@ static int cmqttRxPayloadTotal = 0;
 static String cmqttRxTopic;
 static String cmqttRxPayload;
 
+// Bytes that arrived while another UART reader was draining the port (an AT
+// command response inside readModemUntil(), or flushModemInput() right before a
+// command). Those routines used to drop +CMQTTRX* bytes on the floor; by then
+// the broker had already acked the PUBLISH, so a lost URC is an inbound command
+// lost forever. They now hand the bytes here instead, and cmqttNextByte()
+// replays them ahead of the live UART so cmqttLoop() still sees one contiguous
+// stream.
+static String cmqttHeldInput;
+
+void cmqttHoldByte(char c) {
+  cmqttHeldInput += c;
+  if (cmqttHeldInput.length() > 4096) {
+    cmqttHeldInput.remove(0, cmqttHeldInput.length() - 2048);
+  }
+}
+
+// Next byte of the modem stream: held bytes first, then the live UART.
+static bool cmqttNextByte(char& c) {
+  if (cmqttHeldInput.length() > 0) {
+    c = cmqttHeldInput[0];
+    cmqttHeldInput.remove(0, 1);
+    return true;
+  }
+  if (!ModemSerial.available()) {
+    return false;
+  }
+  c = static_cast<char>(ModemSerial.read());
+  return true;
+}
+
 static bool cmqttReadLine(String& line) {
   // Non-blocking: returns true once a full '\n'-terminated line is assembled,
-  // false if the buffer ran dry mid-line. The partial line lives in cmqttLineBuf
+  // false if the stream ran dry mid-line. The partial line lives in cmqttLineBuf
   // so the next call resumes where it left off.
   while (true) {
-    if (!ModemSerial.available()) {
+    char c;
+    if (!cmqttNextByte(c)) {
       return false;
     }
-    const char c = static_cast<char>(ModemSerial.read());
     if (c == '\n') {
       line = cmqttLineBuf;
       cmqttLineBuf = "";
@@ -67,14 +97,15 @@ static bool cmqttReadLine(String& line) {
 }
 
 static bool cmqttReadExact(String& out, int n) {
-  // Blocking, bounded: the data follows the URC header as a contiguous burst
-  // already sitting in the UART FIFO, so this normally returns in ms. The 3 s
+  // Blocking, bounded: the payload follows the URC header as a contiguous burst
+  // already sitting in the buffer/FIFO, so this normally returns in ms. The 3 s
   // deadline is only a guard against a module that stalls mid-message.
   const uint32_t startedAt = millis();
   while (n > 0 && millis() - startedAt < 3000) {
     feedWatchdog();
-    if (ModemSerial.available()) {
-      out += static_cast<char>(ModemSerial.read());
+    char c;
+    if (cmqttNextByte(c)) {
+      out += c;
       n--;
     } else {
       delay(2);
@@ -202,11 +233,35 @@ bool cmqttSubscribe(const String& topic, uint8_t qos) {
   if (!cmqttBrokerUp) {
     return false;
   }
+  // Two documented subscribe forms. The A76XX AT manual (18.2.14) shows the
+  // length form (prompt, then raw topic bytes) and the parameter form
+  // (`AT+CMQTTSUB=0,"topic",qos`); which one a given A7672 firmware accepts
+  // depends on the CMQTTCFG "argtopic" setting. The old code sent only the
+  // length form and ignored the result, so a rejected SUB left the device
+  // publishing telemetry but deaf to inbound commands - exactly the LTE-only
+  // symptom. Try the length form, verify the +CMQTTSUB:<n>,0 result, and fall
+  // back to the parameter form.
   const String cmd = String("AT+CMQTTSUB=0,") + String(topic.length()) + "," + String(qos);
-  if (!cmqttPromptWrite(cmd, topic, 5000)) {
-    return false;
+  String resp;
+  bool ok = false;
+  if (sendAT(cmd, ">", 5000)) {
+    ModemSerial.write(reinterpret_cast<const uint8_t*>(topic.c_str()), topic.length());
+    resp = readModemUntil(5000, "OK");
+    appendModemLogForced("SUB " + topic + " (len form) -> " + resp);
+    ok = resp.indexOf("OK") >= 0;
   }
-  return true;
+  if (!ok) {
+    const String paramCmd = "AT+CMQTTSUB=0,\"" + topic + "\"," + String(qos);
+    ok = sendAT(paramCmd, "OK", 5000, &resp) && resp.indexOf("OK") >= 0;
+    appendModemLogForced("SUB " + topic + " (param form) -> " + resp);
+  }
+  // +CMQTTSUB: <client>,0 is success; anything else (or a missing tag) is a
+  // failure we must not paper over.
+  if (ok && resp.indexOf("+CMQTTSUB:") >= 0 && cmqttResult(resp, "+CMQTTSUB:") != 0) {
+    ok = false;
+  }
+  Serial.printf("[cmqtt] SUB %s ok=%s\n", topic.c_str(), ok ? "yes" : "no");
+  return ok;
 }
 
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos) {
@@ -303,6 +358,15 @@ void cmqttLoop() {
 
   String line;
   while (cmqttReadLine(line)) {
+    // Only CMQTT URCs are logged: an inbound command could vanish silently
+    // because the parser handled just RXSTART/TOPIC/PAYLOAD/END and discarded
+    // everything else. Surfacing any *other* +CMQTT* form (e.g. +CMQTTRECV)
+    // makes an unexpected delivery shape visible in the event's modem_log
+    // instead of dropping it. Filtering here also keeps the plain AT-response
+    // bytes that readModemUntil() mirrors in from becoming log noise.
+    if (line.startsWith("+CMQTT")) {
+      appendModemLogForced(line.substring(0, 120));
+    }
     // Passive loss of the connection / network. Both must force a reconnect.
     if (line.startsWith("+CMQTTCONNLOST")) {
       cmqttBrokerUp = false;
@@ -328,6 +392,30 @@ void cmqttLoop() {
       cmqttRxPayload = "";
       cmqttRxActive = true;
       cmqttRxInPayload = false;
+      continue;
+    }
+
+    // Alternate single-line delivery form used by the MQTT-EX firmware:
+    // +CMQTTRECV: <client>,"<topic>",<payload_len>,"<payload>"
+    // Parsed positionally, not with nthQuoted: the payload is JSON and contains
+    // its own quotes, so only the first topic-quote pair and the final quote are
+    // meaningful delimiters.
+    if (line.startsWith("+CMQTTRECV:")) {
+      const int topicStart = line.indexOf('"');
+      const int topicEnd = topicStart >= 0 ? line.indexOf('"', topicStart + 1) : -1;
+      if (topicStart >= 0 && topicEnd > topicStart) {
+        const int payloadStart = line.indexOf('"', topicEnd + 1);
+        const int payloadEnd = line.lastIndexOf('"');
+        cmqttRxTopic = line.substring(topicStart + 1, topicEnd);
+        if (payloadStart >= 0 && payloadEnd > payloadStart) {
+          cmqttRxPayload = line.substring(payloadStart + 1, payloadEnd);
+        } else {
+          cmqttRxPayload = "";
+        }
+        cmqttDispatchMessage();
+      }
+      cmqttRxTopic = "";
+      cmqttRxPayload = "";
       continue;
     }
 
