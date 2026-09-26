@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.77"
+#define COF_FIRMWARE_VERSION "0.2.78"
 
 // Raw GitHub manifest. After merging, keep this URL pointing at main.
 #define COF_MANIFEST_URL "https://raw.githubusercontent.com/nmarcovecchio/cof/main/ota/manifest.json"
@@ -128,6 +128,13 @@ constexpr uint32_t kMqttSilenceRestartMs = 6UL * 60UL * 1000UL;
 // about 12 min, instead of staying dead until someone drives to the site.
 constexpr uint32_t kModemRecoveryIntervalMs = 150UL * 1000UL;
 constexpr uint8_t kModemRecoveryMaxStage = 5;
+// The A7672's baseband reselects the network on its own in a couple of seconds.
+// pollModem() must NOT start the recovery ladder on a single CPSI "NO SERVICE"
+// read: a brief flap (or our own CGATT/teardown transiently showing NO SERVICE)
+// used to trigger stage 1 immediately, and stage 1 detached the modem (CGATT=0),
+// which re-flapped the registration and re-triggered the ladder in a loop. Only
+// escalate once NO SERVICE has persisted this long (see noServiceSinceMs).
+constexpr uint32_t kModemNoServiceGraceMs = 45UL * 1000UL;
 // Anti-flap hysteresis for the radio recovery ladder. On a marginal LTE signal
 // the modem flaps NO SERVICE <-> service; a single good read used to reset the
 // ladder, so step 1 (CGATT detach/attach) re-ran on every flap and turned a

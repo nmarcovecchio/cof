@@ -188,6 +188,7 @@ bool markLtePdpUp(const String& ip, uint8_t cid) {
   state.ltePdpCid = cid;
   state.lteDataUp = true;
   state.lteIpAddress = ip;
+  ltePdpDown = false;
   lastLteRetryDelayMs = kLteRetryIntervalMs;
   lteMqttConnectFails = 0;
   pendingNetworkStatusReport = true;
@@ -270,6 +271,7 @@ void stopLtePdp() {
   state.lteDataUp = false;
   state.lteMqttTransport = false;
   state.lteIpAddress = "-";
+  ltePdpDown = false;
   lastLteAttemptMs = 0;
   lastLteRetryDelayMs = kLteRetryIntervalMs;
   lteMqttConnectFails = 0;

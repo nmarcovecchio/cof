@@ -24,30 +24,30 @@ bool resetModemRadio(uint8_t stage) {
   setStatus("Modem reset");
   switch (stage) {
     case 1:
-      // Re-attach and re-select the operator, then drop the PDP so the next
-      // ensureLtePdp() rebuilds it from scratch.
-      Serial.println("[modem] recovery 1/5: detach/attach + operator auto");
-      stopLtePdp();
-      sendAT("AT+CGATT=0", "OK", 5000);
-      waitWithWatchdog(1000);
-      sendAT("AT+CGATT=1", "OK", 15000);
+      // Gentlest possible nudge: ask the modem to re-select the operator. No
+      // CGATT=0 detach and no PDP teardown here - detaching on a transient
+      // "NO SERVICE" read *caused* the next registration flap and re-triggered
+      // this ladder in a loop (8x "recovery started" on 2026-09-25). The
+      // baseband reselects on its own; COPS=0 only nudges it. The grace window
+      // in pollModem() already held off until NO SERVICE persisted.
+      Serial.println("[modem] recovery 1/5: operator reselect (COPS=0)");
       sendAT("AT+COPS=0", "OK", 20000);
       break;
     case 2:
-      // Force a full network scan instead of using the stored operator.
-      Serial.println("[modem] recovery 2/5: full network scan");
+      // Re-attach to the packet domain WITHOUT detaching first. CGATT=1 is
+      // idempotent when already attached and costs nothing; a plain re-attach
+      // fixes a stale attach state without the detach flap.
+      Serial.println("[modem] recovery 2/5: PS re-attach + operator auto");
+      sendAT("AT+CGATT=1", "OK", 15000);
+      sendAT("AT+COPS=0", "OK", 20000);
+      break;
+    case 3:
+      // Radio off/on. This is the first step that actually cycles the RF; the
+      // two gentler steps above cover the common transient reselection case.
+      Serial.println("[modem] recovery 3/5: radio cycle (CFUN=0/1)");
       stopLtePdp();
       sendAT("AT+CFUN=0", "OK", 10000);
       waitWithWatchdog(2000);
-      sendAT("AT+CFUN=1", "OK", 15000);
-      sendAT("AT+COPS=0", "OK", 30000);
-      break;
-    case 3:
-      // Reset the radio only (keeps the SIM context and the AT channel).
-      Serial.println("[modem] recovery 3/5: radio cycle (CFUN)");
-      stopLtePdp();
-      sendAT("AT+CFUN=4", "OK", 8000);
-      waitWithWatchdog(3000);
       sendAT("AT+CFUN=1", "OK", 15000);
       sendAT("AT+CEMODE=1", "OK", 3000);
       sendAT("AT+CEVDP=3", "OK", 3000);

@@ -137,6 +137,13 @@ uint32_t lastModemRecoveryEventMs = 0;
 // cleared by initModem() on success. See modem_at.cpp:noteModemRebootDetected().
 bool modemRebootUrcSeen = false;
 uint32_t lastModemInitAttemptMs = 0;
+// When pollModem() first saw the radio report NO SERVICE this episode. Gates the
+// recovery ladder so a transient flap does not trigger a disruptive reset.
+uint32_t noServiceSinceMs = 0;
+// The modem reported +CIPEVENT: NETWORK CLOSED UNEXPECTEDLY: the network library
+// died (out of service), so state.lteDataUp is stale. Cleared when the PDP is
+// torn down / brought back up. See lte_mqtt_client.h:noteUrc().
+bool ltePdpDown = false;
 uint32_t ltePreemptSinceMs = 0;
 uint32_t lastLteRetryDelayMs = kLteRetryIntervalMs;
 uint32_t lastLteDataEventMs = 0;
@@ -316,6 +323,8 @@ void pollModem() {
   // while Ethernet, WiFi and LTE all looked "available". Escalate a modem reset
   // from the cheapest step, spaced out so one attempt has time to take effect.
   if (state.networkRegistered && radioReportsService()) {
+    // Healthy: re-arm the no-service grace window for the next episode.
+    noServiceSinceMs = 0;
     // The footer "Modem reset" is cosmetic and can clear immediately.
     if (state.statusLine == "Modem reset" || state.statusLine == "Restart (modem)") {
       setStatus("Network OK");
@@ -346,6 +355,19 @@ void pollModem() {
   const uint32_t now = millis();
   if (modemRecoveryStage >= kModemRecoveryMaxStage) {
     // Already at the most aggressive step; it logs and restarts there.
+    return;
+  }
+  // Grace window: the A7672 baseband reselects the network on its own in ~2 s.
+  // A single CPSI "NO SERVICE" read (mid-reselection, or right after our own
+  // teardown / a voice-call CSFB bounce) must NOT start the ladder. The old code
+  // detached the modem (CGATT=0) on the very first bad read, which itself caused
+  // another registration flap and re-triggered the ladder (8x "recovery started"
+  // observed 2026-09-25). Only escalate after NO SERVICE has persisted for
+  // kModemNoServiceGraceMs.
+  if (noServiceSinceMs == 0) {
+    noServiceSinceMs = now == 0 ? 1 : now;
+  }
+  if (now - noServiceSinceMs < kModemNoServiceGraceMs) {
     return;
   }
   if (lastModemRecoveryMs != 0 && now - lastModemRecoveryMs < kModemRecoveryIntervalMs) {

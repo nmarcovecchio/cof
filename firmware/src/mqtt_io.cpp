@@ -461,12 +461,22 @@ void connectMqttIfNeeded() {
       state.mqttConnected = false;
       if (state.ethernetConnected && !state.lteMqttTransport) {
         markEthernetDown("mqtt loop");
-      } else if (state.lteMqttTransport && !lteMqttClient.sockOpen) {
-        // The AT socket died under us (radio loss / network PDP deactivation).
-        // Release the PDP now so pollModem() can run the radio recovery ladder
-        // instead of waiting out three failed reconnects first. See §6c.
-        Serial.println("[lte] socket dropped, releasing PDP for radio recovery");
-        stopLtePdp();
+      } else if (state.lteMqttTransport && (!lteMqttClient.sockOpen || ltePdpDown)) {
+        // The AT socket dropped. Distinguish the two cases (see noteUrc()):
+        //  - ltePdpDown (+CIPEVENT: NETWORK CLOSED UNEXPECTEDLY): the radio/network
+        //    library died, so the PDP is dead and state.lteDataUp is stale. Tear it
+        //    down now so ensureLtePdp() rebuilds it and pollModem() can run the
+        //    radio recovery ladder instead of dialing a dead context.
+        //  - plain socket close (+IPCLOSE/+CASTATE): the PDP is still alive; the
+        //    next connect just reopens the socket (CIPOPEN). Tearing the PDP down
+        //    here turned a ~5 s broker close into a ~45 s NETCLOSE/NETOPEN rebuild.
+        if (ltePdpDown) {
+          ltePdpDown = false;
+          Serial.println("[lte] network closed (out of service), releasing PDP");
+          stopLtePdp();
+        } else if (!lteMqttClient.sockOpen) {
+          Serial.println("[lte] socket closed, PDP kept alive");
+        }
         lteMqttConnectFails = 0;
       }
     } else {

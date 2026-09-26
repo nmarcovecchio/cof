@@ -108,9 +108,21 @@ class LteMqttClient : public Client {
     if (line.startsWith("+CADATAIND:") || line.startsWith("+CARECV:") ||
         line.startsWith("+CIPRXGET: 1")) {
       dataInd = true;
-    } else if ((line.startsWith("+CASTATE:") && line.indexOf(",0") > 0) ||
-               line.startsWith("+IPCLOSE:") ||
-               line.startsWith("+CIPEVENT:")) {
+    } else if (line.startsWith("+CIPEVENT:")) {
+      // +CIPEVENT: NETWORK CLOSED UNEXPECTEDLY = the network library died (out
+      // of service). That is a dead PDP, not just a closed socket: flag a PDP
+      // rebuild so connectMqttIfNeeded() tears it down instead of dialing a
+      // dead context. Any other +CIPEVENT is treated as a passive close.
+      sockOpen = false;
+      if (line.indexOf("NETWORK CLOSED") >= 0) {
+        ltePdpDown = true;
+      }
+    } else if (line.startsWith("+IPCLOSE:") ||
+               (line.startsWith("+CASTATE:") && line.indexOf(",0") > 0)) {
+      // Socket closed passively (remote close / send timeout). The PDP is still
+      // alive: the next connect just reopens the socket (CIPOPEN). Tearing the
+      // PDP down here turned a ~5 s broker close into a ~45 s NETCLOSE/NETOPEN
+      // rebuild and a visible MQTT "cut".
       sockOpen = false;
     }
     // The A7672 emits *ATREADY only on module (re)boot. A spontaneous reset or
