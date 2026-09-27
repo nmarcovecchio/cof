@@ -1164,7 +1164,11 @@ def create_app() -> Flask:
         except Exception:
             app.logger.exception("configured_rules_view failed device=%s", device.device_uid)
             rules = []
-        modem_dumps_total = modem_log_events_query(device.id).count()
+        try:
+            modem_dumps_total = modem_log_events_query(device.id).count()
+        except Exception:
+            app.logger.exception("modem_dumps_total failed device=%s", device.device_uid)
+            modem_dumps_total = 0
         alarm_state = None
         try:
             alarm_state = alarm_states_map([device]).get(device.id)
@@ -2351,16 +2355,13 @@ def serialize_event(event) -> dict:
 def modem_log_events_query(device_id: int):
     """Events that carry a modem_log dump for the Modem panel.
 
-    On Postgres we filter the JSON key. Elsewhere (sqlite local) fall back to
-    the event types that publish dumps.
+    Filter by type (not raw JSON SQL): ``lte_data`` and ``modem_uart_debug``
+    are the only publishers of ``modem_log``, and a ``payload->>'…'`` text()
+    filter blew up the device page on Postgres (500).
     """
-    q = Event.query.filter_by(device_id=device_id)
-    bind = db.session.get_bind()
-    dialect = bind.dialect.name if bind is not None else "postgresql"
-    if dialect == "sqlite":
-        return q.filter(Event.type.in_(("lte_data", "modem_uart_debug")))
-    return q.filter(
-        text("(payload->>'modem_log') IS NOT NULL AND length(payload->>'modem_log') > 0")
+    return Event.query.filter(
+        Event.device_id == device_id,
+        Event.type.in_(("lte_data", "modem_uart_debug")),
     )
 
 
