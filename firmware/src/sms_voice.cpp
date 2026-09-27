@@ -933,7 +933,11 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   state.callInProgress = true;
   pendingCallUrcs = "";
-  modemCallLog = "";
+  if (!modemUartDebug) {
+    modemCallLog = "";
+  } else {
+    appendModemLogForced("--- call start ---");
+  }
   refreshCellularStatus();
   bool preparedCs = false;
   if (!imsVoiceReady() && !radioIsGsm()) {

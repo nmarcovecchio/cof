@@ -224,7 +224,13 @@ bool ensureLtePdp() {
   }
 
   reportLteProgress = true;
-  modemCallLog = "";
+  // Keep the pre-crash AT trail when UART debug is on; wiping here is what made
+  // the web panel only ever show the reconnect handshake after *ATREADY.
+  if (!modemUartDebug) {
+    modemCallLog = "";
+  } else {
+    appendModemLogForced("--- lte pdp re-arm ---");
+  }
   setStatus("LTE data");
   refreshCellularStatus();
   if (!state.networkRegistered) {
@@ -285,6 +291,7 @@ void noteLteSessionDrop(const char* reason) {
   if (lteSessionDropReason == nullptr) {
     lteSessionDropReason = reason;
   }
+  snapshotModemUartDebug(reason);
 }
 
 const char* takeLteSessionDrop() {

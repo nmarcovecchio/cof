@@ -1163,19 +1163,17 @@ def create_app() -> Flask:
         except Exception:
             app.logger.exception("configured_rules_view failed device=%s", device.device_uid)
             rules = []
-        modem_trace_event = next(
-            (
-                event
-                for event in (
-                    Event.query.filter_by(device_id=device.id)
-                    .order_by(Event.started_at.desc())
-                    .limit(80)
-                    .all()
-                )
-                if isinstance(event.payload, dict) and event.payload.get("modem_log")
-            ),
-            None,
-        )
+        modem_trace_events = [
+            event
+            for event in (
+                Event.query.filter_by(device_id=device.id)
+                .order_by(Event.started_at.desc())
+                .limit(80)
+                .all()
+            )
+            if isinstance(event.payload, dict) and event.payload.get("modem_log")
+        ][:5]
+        modem_trace_event = modem_trace_events[0] if modem_trace_events else None
         alarm_state = None
         try:
             alarm_state = alarm_states_map([device]).get(device.id)
@@ -1193,6 +1191,7 @@ def create_app() -> Flask:
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
             modem_trace_event=modem_trace_event,
+            modem_trace_events=modem_trace_events,
             contacts=resolve_contacts(device, latest_config_payload(device)),
             modem_jobs=active_modem_jobs(device),
             alarm_state=alarm_state,
@@ -1551,6 +1550,19 @@ def create_app() -> Flask:
             device_uid,
             "modem_probe",
             "Modem probe command sent. Results arrive as modem_probe events.",
+        )
+
+    @app.post("/devices/<device_uid>/commands/modem-uart-debug")
+    @login_required
+    def device_command_modem_uart_debug(device_uid):
+        enabled = (request.form.get("enabled") or "").strip().lower() in {"1", "true", "on", "yes"}
+        return send_device_command(
+            device_uid,
+            "modem_uart_debug",
+            "UART debug ON: dumps every 30s to the Modem panel."
+            if enabled
+            else "UART debug OFF.",
+            extra={"enabled": enabled},
         )
 
     @app.post("/devices/<device_uid>/commands/set-wifi")

@@ -547,6 +547,20 @@
           <i class="bi bi-terminal"></i> Sondear modem
         </button>
       </form>
+      <form method="post" action="{{ url_for('device_command_modem_uart_debug', device_uid=device.device_uid) }}">
+        {{ csrf_field() }}
+        <input type="hidden" name="enabled" value="true">
+        <button class="btn btn-outline-warning" type="submit" title="Dump UART cada 30s al panel Modem (RAM; se apaga al reboot)">
+          <i class="bi bi-bug"></i> UART debug ON
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('device_command_modem_uart_debug', device_uid=device.device_uid) }}">
+        {{ csrf_field() }}
+        <input type="hidden" name="enabled" value="false">
+        <button class="btn btn-outline-secondary" type="submit">
+          UART debug OFF
+        </button>
+      </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
@@ -771,24 +785,32 @@
         <span class="small text-muted">{{ modem_trace_event.started_at|datetime_local }}</span>
         {% endif %}
       </div>
-      {% if modem_trace_event and modem_trace_event.payload.get('modem_log') %}
-      {% if modem_trace_event.payload.get('handshake') %}
-      <div class="px-3 pt-2 small text-muted">
-        Handshake MQTT sobre LTE (primer intento: el ring de abajo solo guarda el final):
-      </div>
-      <pre class="modem-log border-bottom mb-0">{{ modem_trace_event.payload.get('handshake') }}</pre>
-      {% endif %}
-      <pre class="modem-log">{% for line in modem_trace_event.payload.get('modem_log').splitlines() %}{% if line.startswith('>>') %}<span class="tx">{{ line }}</span>
-{% elif line.startswith('<<') %}<span class="rx">{{ line }}</span>
+      {% if modem_trace_events %}
+      {% for trace in modem_trace_events %}
+      <div class="{% if not loop.first %}border-top{% endif %}">
+        {% if trace.payload.get('handshake') %}
+        <div class="px-3 pt-2 small text-muted">
+          Handshake MQTT sobre LTE (primer intento: el ring de abajo solo guarda el final):
+        </div>
+        <pre class="modem-log border-bottom mb-0">{{ trace.payload.get('handshake') }}</pre>
+        {% endif %}
+        <div class="px-3 pt-2 small text-muted">{{ trace.message }} · {{ trace.started_at|datetime_local }}</div>
+        <pre class="modem-log mb-0">{% for line in trace.payload.get('modem_log').splitlines() %}{% if '>>' in line[:20] %}<span class="tx">{{ line }}</span>
+{% elif '<<' in line[:20] %}<span class="rx">{{ line }}</span>
 {% else %}{{ line }}
 {% endif %}{% endfor %}</pre>
-      <div class="px-3 py-2 small text-muted border-top">{{ modem_trace_event.message }}</div>
+      </div>
+      {% endfor %}
+      <div class="px-3 py-2 small text-muted border-top">
+        Ultimos {{ modem_trace_events|length }} dumps con modem_log.
+        Con <strong>UART debug ON</strong> el equipo publica cada 30s (y al drop/atready).
+      </div>
       {% else %}
       <div class="p-3 text-muted small">
         Traza AT de la ultima prueba de llamada o del intento LTE.
         Si MQTT estaba caido, el dump se publica cuando el broker vuelve (cable o LTE).
         En llamadas, el corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>.
-        No se publica en vivo: un dump al terminar, para no saturar MQTT.
+        Activa <strong>UART debug ON</strong> para dumps cada 30s de toda la UART.
       </div>
       {% endif %}
     </div>

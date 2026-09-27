@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.97** (en `ota/manifest.json`).
+Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.98** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -13,6 +13,13 @@ arregla.
 estable (0.2.96+), telemetria y OLED OK, `OTA needs LAN` en vez de Manifest fail,
 manifest servido desde el VPS (`/ota/manifest.json`), panel con live-update y
 graficos por unidad.
+
+**0.2.98 — UART debug:** comando MQTT `modem_uart_debug` (botones en device
+detail). Con ON, ring AT con timestamps, dump cada 30s + snapshot al drop
+(`modem_uart_debug` events en el panel Modem). Sirve para cazar el
+`*ATREADY` periodico en solo-LTE y el doble publish de telemetria en el mismo
+`loop()` (underflow `now` vs `lastTelemetryPublishMs` post-reconnect) — fixes
+de esos bugs todavia pendientes.
 
 ---
 

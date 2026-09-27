@@ -107,6 +107,10 @@ bool pendingMqttBounce = false;
 bool pendingNetworkStatusReport = false;
 uint32_t lastLteAttemptMs = 0;
 bool reportLteProgress = false;
+bool modemUartDebug = false;
+uint32_t lastModemUartDebugPublishMs = 0;
+bool pendingModemUartDebugPublish = false;
+String pendingModemUartDebugReason;
 bool lastLteFail = false;
 LteIpStack lteIpStack = kLteStackUnknown;
 String lteTraceLog;
@@ -755,6 +759,7 @@ void loop() {
   maintainWifiBackup();
   enforceMqttSilenceWatchdog();
   serviceLteMqttHealth();
+  serviceModemUartDebug();
 
   if (state.mqttConnected && pendingNetworkStatusReport) {
     pendingNetworkStatusReport = false;

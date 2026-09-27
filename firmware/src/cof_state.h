@@ -209,6 +209,11 @@ extern bool pendingMqttBounce;
 extern bool pendingNetworkStatusReport;
 extern uint32_t lastLteAttemptMs;
 extern bool reportLteProgress;
+// Opt-in UART dump to the web (MQTT command modem_uart_debug). RAM only.
+extern bool modemUartDebug;
+extern uint32_t lastModemUartDebugPublishMs;
+extern bool pendingModemUartDebugPublish;
+extern String pendingModemUartDebugReason;
 extern bool lastLteFail;
 extern LteIpStack lteIpStack;
 extern String lteTraceLog;

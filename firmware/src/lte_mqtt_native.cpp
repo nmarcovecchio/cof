@@ -117,6 +117,13 @@ static bool cmqttPromptWrite(const String& cmd, const String& data, uint32_t tim
     return false;
   }
   ModemSerial.write(reinterpret_cast<const uint8_t*>(data.c_str()), data.length());
+  if (modemUartDebug) {
+    if (data.length() > kModemUartDebugLineMax) {
+      appendModemLogForced(String(">> [raw ") + String(data.length()) + "b]");
+    } else {
+      appendModemLog('>', data);
+    }
+  }
   const String resp = readModemUntil(timeoutMs, "OK");
   appendModemLog('<', resp);
   const int subAt = resp.indexOf("+CMQTTSUB:");

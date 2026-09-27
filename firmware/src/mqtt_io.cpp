@@ -105,6 +105,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingStatusReportCommand = true;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Status report scheduled";
+      } else if (pendingCommandName == "modem_uart_debug") {
+        const bool enable = doc["enabled"] | false;
+        modemUartDebug = enable;
+        lastModemUartDebugPublishMs = 0;
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = enable ? "UART debug ON (dump every 30s)" : "UART debug OFF";
+        appendModemLogForced(enable ? "=== uart debug ON ===" : "=== uart debug OFF ===");
+        if (enable) {
+          snapshotModemUartDebug("enabled");
+        }
       } else if (pendingCommandName == "test_call") {
         pendingTestCallCommand = true;
         pendingTestCallPhone = doc["phone"] | "";
@@ -439,6 +449,80 @@ void publishLteDataTrace() {
     lastLteDataEventMs = now == 0 ? 1 : now;
     lteMqttClient.handshake = "";
   }
+}
+
+static String modemUartDebugTail() {
+  if (modemCallLog.length() <= kModemUartDebugPublishMax) {
+    return modemCallLog;
+  }
+  // Prefer a line boundary so the web panel does not start mid-line.
+  const int cut = modemCallLog.indexOf('\n', modemCallLog.length() - kModemUartDebugPublishMax);
+  if (cut < 0) {
+    return modemCallLog.substring(modemCallLog.length() - kModemUartDebugPublishMax);
+  }
+  return modemCallLog.substring(cut + 1);
+}
+
+void snapshotModemUartDebug(const char* reason) {
+  if (!modemUartDebug) {
+    return;
+  }
+  // Keep the first drop reason until the pending dump actually publishes, so a
+  // reconnect storm does not rewrite "atready" with a later "stop".
+  if (!pendingModemUartDebugPublish) {
+    pendingModemUartDebugReason = reason == nullptr ? "snapshot" : reason;
+  }
+  pendingModemUartDebugPublish = true;
+}
+
+static bool publishModemUartDebugNow(const char* reason) {
+  if (!state.mqttConnected || modemCallLog.length() == 0) {
+    return false;
+  }
+  JsonDocument doc;
+  doc["device_id"] = state.mqttDeviceId;
+  doc["firmware"] = COF_FIRMWARE_VERSION;
+  doc["type"] = "modem_uart_debug";
+  doc["severity"] = "info";
+  doc["message"] = withFirmware(String("UART debug ") + reason);
+  doc["modem_log"] = modemUartDebugTail();
+  doc["uart_debug"] = true;
+  if (!publishMqttJson("event", doc, false, 1)) {
+    return false;
+  }
+  lastModemUartDebugPublishMs = millis() == 0 ? 1 : millis();
+  return true;
+}
+
+void serviceModemUartDebug() {
+  if (!modemUartDebug) {
+    pendingModemUartDebugPublish = false;
+    return;
+  }
+  if (!state.mqttConnected) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (pendingModemUartDebugPublish) {
+    const String reason = pendingModemUartDebugReason.length() > 0
+                              ? pendingModemUartDebugReason
+                              : String("snapshot");
+    if (publishModemUartDebugNow(reason.c_str())) {
+      pendingModemUartDebugPublish = false;
+      pendingModemUartDebugReason = "";
+    }
+    return;
+  }
+
+  if (lastModemUartDebugPublishMs != 0 &&
+      now - lastModemUartDebugPublishMs < kModemUartDebugIntervalMs) {
+    return;
+  }
+  if (modemCallLog.length() == 0) {
+    return;
+  }
+  publishModemUartDebugNow("periodic");
 }
 void publishTelemetryNow() {
   if (!state.mqttConnected) {

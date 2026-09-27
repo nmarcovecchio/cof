@@ -113,8 +113,12 @@ static void appendModemLogLine(String entry) {
   if (entry.length() == 0) {
     return;
   }
-  if (entry.length() > 140) {
-    entry = entry.substring(0, 140);
+  const uint16_t lineMax = modemUartDebug ? kModemUartDebugLineMax : 140;
+  if (entry.length() > lineMax) {
+    entry = entry.substring(0, lineMax - 16) + "...(" + String(entry.length()) + "b)";
+  }
+  if (modemUartDebug) {
+    entry = "T+" + String(millis()) + " " + entry;
   }
   while (modemCallLog.length() + entry.length() + 1 > kModemCallLogMax) {
     const int cut = modemCallLog.indexOf('\n');
@@ -130,7 +134,8 @@ static void appendModemLogLine(String entry) {
   modemCallLog += entry;
 }
 void appendModemLog(char direction, const String& text) {
-  if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress) {
+  // Lab UART debug logs every AT line; call/LTE progress keep the old filter.
+  if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress && !modemUartDebug) {
     return;
   }
   String line = text;
@@ -140,7 +145,7 @@ void appendModemLog(char direction, const String& text) {
   if (line.length() == 0) {
     return;
   }
-  if (!reportLteProgress && !modemLineInteresting(line)) {
+  if (!modemUartDebug && !reportLteProgress && !modemLineInteresting(line)) {
     return;
   }
   appendModemLogLine(String(direction == '>' ? ">> " : "<< ") + line);

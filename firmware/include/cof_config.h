@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.97"
+#define COF_FIRMWARE_VERSION "0.2.98"
 
 // Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
 #define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
@@ -212,4 +212,11 @@ constexpr uint32_t kOtaConfirmTimeoutMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kBrokerResolveIntervalMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kBrokerResolveRetryMs = 15UL * 1000UL;
 
-constexpr uint16_t kModemCallLogMax = 1800;
+// UART debug ring (lab). Normal call/LTE traces still fit; with modem_uart_debug
+// on the ring holds ~30-60 s of AT so a 30 s dump and an atready snapshot both
+// still have the pre-crash tail. Published events only send the last ~3 KB so
+// the MQTT JSON stays under publishMqttJson's 4 KB payload cap.
+constexpr uint16_t kModemCallLogMax = 12000;
+constexpr uint16_t kModemUartDebugPublishMax = 3500;
+constexpr uint16_t kModemUartDebugLineMax = 180;
+constexpr uint32_t kModemUartDebugIntervalMs = 30UL * 1000UL;
