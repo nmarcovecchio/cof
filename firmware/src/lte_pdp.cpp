@@ -121,6 +121,16 @@ bool netopenIsActive() {
 }
 bool queryLteIp(String& ipOut) {
   String resp;
+#if COF_LTE_MQTT_NATIVE
+  // Native CMQTT: CMQTTSTART owns CID 1. AT+IPADDR is the NETOPEN/TCP stack and
+  // always answers "+IP ERROR: Network not opened" here, burning ~4 s per
+  // reconnect and mixing boot URCs (PB DONE) into the wait. CGPADDR is the real IP
+  // (OLED / status / telemetry).
+  if (sendAT("AT+CGPADDR=1", "OK", 4000, &resp) && parseLteIp(resp, ipOut)) {
+    return true;
+  }
+  return false;
+#else
   if (sendAT("AT+IPADDR", "OK", 4000, &resp) && parseLteIp(resp, ipOut)) {
     return true;
   }
@@ -131,6 +141,7 @@ bool queryLteIp(String& ipOut) {
     return true;
   }
   return false;
+#endif
 }
 bool netopenResultOk(const String& resp) {
   if (resp.indexOf("already opened") >= 0) {

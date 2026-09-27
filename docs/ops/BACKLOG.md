@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.98** (en `ota/manifest.json`).
+Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.99** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -16,10 +16,14 @@ graficos por unidad.
 
 **0.2.98 — UART debug:** comando MQTT `modem_uart_debug` (botones en device
 detail). Con ON, ring AT con timestamps, dump cada 30s + snapshot al drop
-(`modem_uart_debug` events en el panel Modem). Sirve para cazar el
-`*ATREADY` periodico en solo-LTE y el doble publish de telemetria en el mismo
-`loop()` (underflow `now` vs `lastTelemetryPublishMs` post-reconnect) — fixes
-de esos bugs todavia pendientes.
+(`modem_uart_debug` events en el panel Modem).
+
+**0.2.99 — telemetria gemela + IPADDR nativo:** el intervalo de telemetria usa
+`millis()` fresco (el `now` del inicio de `loop()` underflowaba tras un
+reconnect CMQTT largo y republicaba ~2 s despues). En path nativo
+`queryLteIp` ya no llama `AT+IPADDR` (siempre ERROR / 4 s); usa `CGPADDR=1`
+(OLED/IP intactos). Pendiente: causa raiz del `*ATREADY` ~cada minuto en
+solo-LTE.
 
 ---
 

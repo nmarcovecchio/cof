@@ -835,9 +835,17 @@ void loop() {
     publishTestCallResult(result, ok, callCommandId);
   }
 
-  if (state.mqttConnected && now - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
-    lastTelemetryPublishMs = now;
-    publishTelemetryNow();
+  // Use a fresh millis(): connectMqttIfNeeded() can spend seconds on CMQTT AT and
+  // then set lastTelemetryPublishMs = millis(). Comparing that against the stale
+  // `now` from the top of loop() underflows uint32_t and republishes telemetry
+  // ~2 s later (identical twin rows after every LTE reconnect / atready).
+  {
+    const uint32_t telemetryNow = millis();
+    if (state.mqttConnected &&
+        telemetryNow - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
+      lastTelemetryPublishMs = telemetryNow;
+      publishTelemetryNow();
+    }
   }
 
   if (state.mqttConnected && !state.callInProgress && !state.otaInProgress &&
