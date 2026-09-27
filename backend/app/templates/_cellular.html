@@ -29,7 +29,7 @@
 
 {% macro cellular_card(cell, device=none) %}
   {% set current = device|device_live %}
-  <div class="card mb-4">
+  <div class="card mb-4" id="cellular-card">
     <div class="card-header">Red celular</div>
     <div class="card-body">
       {% if not cell %}
@@ -39,68 +39,53 @@
         {% set lte_ok = cell|cellular_lte_ok %}
         {% set voice = cell.get('voice') or {} %}
         {% set voice_path = voice.get('path') or cell.get('voice_path') %}
-        {% if not current %}
-        <div class="alert alert-warning py-2 mb-3">
-          El dispositivo no esta conectado. Esto es el ultimo reporte, no el estado actual.
+        <div id="cell-stale-banner" class="alert alert-secondary py-2 mb-3{% if current %} d-none{% endif %}">
+          Sin reporte MQTT fresco. Abajo: ultimo estado celular conocido (no implica que la radio este caída).
         </div>
-        {% endif %}
-        <div class="row g-3{% if not current %} opacity-75{% endif %}">
+        <div id="cell-body" class="row g-3{% if not current %} is-stale{% endif %}">
           <div class="col-6 col-md-3">
             <div class="meta-label">LTE</div>
             <div class="meta-value">
-              {% if current %}
-              <span class="badge text-bg-{{ 'success' if lte_ok else 'warning' }}">
-                {{ 'Conectado' if lte_ok else 'No' }}
+              <span id="cell-lte-badge" class="badge text-bg-{{ 'success' if current and lte_ok else ('warning' if current else 'secondary') }}">
+                {% if current %}{{ 'Conectado' if lte_ok else 'No' }}{% else %}Ultimo{% endif %}
               </span>
-              <span class="small text-muted">{{ cell.get('radio') or '-' }}</span>
-              {% else %}
-              <span class="badge text-bg-secondary">Desconectado</span>
-              <div class="small text-muted">Ultimo: {{ cell.get('radio') or '-' }}</div>
-              {% endif %}
+              <span class="small text-muted" id="cell-radio">{{ cell.get('radio') or '-' }}</span>
             </div>
           </div>
           <div class="col-6 col-md-3">
             <div class="meta-label">Senal</div>
-            <div class="meta-value">
-              {% if current %}
+            <div class="meta-value" id="cell-signal">
               {{ signal_bars(cell.get('csq')) }}
               <span class="text-{{ sig.tone }}">{{ sig.label }}</span>
               <div class="small text-muted">CSQ {{ sig.csq if sig.csq is not none else '-' }}</div>
-              {% else %}
-              <span class="text-muted">Sin dato actual</span>
-              <div class="small text-muted">Ultimo CSQ {{ sig.csq if sig.csq is not none else '-' }}</div>
-              {% endif %}
             </div>
           </div>
           <div class="col-6 col-md-3">
             <div class="meta-label">Voz</div>
             <div class="meta-value">
               {% set voice_proven = voice.get('last_ok') %}
-              {% if current %}
-              <span class="badge text-bg-{{ 'success' if voice_proven else 'warning' }}">
+              <span id="cell-voice-badge" class="badge text-bg-{{ 'success' if current and voice_proven else ('warning' if current else 'secondary') }}">
                 {{ voice_proven or voice_path or '-' }}
               </span>
-              {% if voice_proven %}
-                <div class="small text-muted">Comprobada</div>
-              {% else %}
-                <div class="small text-muted">Estimada{{ ' · IMS no' if not (voice.get('ims') or cell.get('ims')) else '' }}</div>
-              {% endif %}
-              {% else %}
-              <span class="badge text-bg-secondary">{{ voice_proven or voice_path or '-' }}</span>
-              <div class="small text-muted">Ultimo reporte</div>
-              {% endif %}
+              <div class="small text-muted" id="cell-voice-note">
+                {% if current %}
+                  {% if voice_proven %}Comprobada{% else %}Estimada{{ ' · IMS no' if not (voice.get('ims') or cell.get('ims')) else '' }}{% endif %}
+                {% else %}
+                  Ultimo reporte
+                {% endif %}
+              </div>
             </div>
           </div>
           <div class="col-6 col-md-3">
             <div class="meta-label">Operador</div>
-            <div class="meta-value">{{ cell.get('operator') or '-' }}</div>
+            <div class="meta-value" id="cell-operator">{{ cell.get('operator') or '-' }}</div>
           </div>
         </div>
-        <div class="small text-muted mt-3">
+        <div class="small text-muted mt-3" id="cell-updated">
           {% if current %}
             Actualizado {{ cell.get('received_at')|datetime_local }}
           {% else %}
-            Ultimo reporte {{ cell.get('received_at')|datetime_local }} · desactualizado
+            Ultimo reporte {{ cell.get('received_at')|datetime_local }}
           {% endif %}
         </div>
       {% endif %}

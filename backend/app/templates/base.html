@@ -8,23 +8,29 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
       :root {
-        --cof-surface: #ffffff;
-        --cof-border: #e6eaf0;
-        --cof-muted: #6b7280;
+        --cof-surface: #faf9f7;
+        --cof-card: #ffffff;
+        --cof-border: #e4e0d8;
+        --cof-muted: #5c6570;
+        --cof-ink: #1a1f26;
+        --cof-accent: #2f5d50;
       }
 
       body {
-        background: #f4f6f9;
-        color: #1f2937;
+        background:
+          radial-gradient(1200px 480px at 10% -10%, #ebe6dc 0%, transparent 55%),
+          var(--cof-surface);
+        color: var(--cof-ink);
       }
 
       .navbar {
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: #1a1f26 !important;
       }
 
       .navbar-brand {
         font-weight: 650;
-        letter-spacing: 0.01em;
+        letter-spacing: 0.02em;
       }
 
       main.container,
@@ -34,26 +40,87 @@
 
       .card {
         border: 1px solid var(--cof-border);
-        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        background: var(--cof-card);
+        box-shadow: none;
+        border-radius: 0.65rem;
       }
 
       .card-header {
-        background: #fff;
+        background: transparent;
         border-bottom: 1px solid var(--cof-border);
         font-weight: 600;
+        font-size: 0.95rem;
       }
+
+      .cof-section-title {
+        font-size: 1.05rem;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        margin: 0;
+      }
+
+      .cof-details-summary {
+        cursor: pointer;
+        font-weight: 600;
+        list-style: none;
+      }
+      .cof-details-summary::-webkit-details-marker { display: none; }
+      .cof-details-summary::before {
+        content: '▸';
+        display: inline-block;
+        margin-right: 0.4rem;
+        color: var(--cof-muted);
+      }
+      details[open] > .cof-details-summary::before { content: '▾'; }
 
       .meta-label {
         color: var(--cof-muted);
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-bottom: 0.2rem;
+        font-size: 0.72rem;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.15rem;
+        font-weight: 500;
       }
 
       .meta-value {
         font-weight: 600;
         word-break: break-word;
+      }
+
+      #cell-body.is-stale {
+        opacity: 0.72;
+      }
+
+      .cof-pager-inner {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+      }
+      .cof-page-btn {
+        min-width: 2rem;
+        height: 2rem;
+        padding: 0 0.45rem;
+        border: 1px solid var(--cof-border);
+        background: #fff;
+        border-radius: 0.4rem;
+        font-size: 0.85rem;
+        color: var(--cof-ink);
+      }
+      .cof-page-btn:hover:not(:disabled):not(.is-current) {
+        border-color: #c9c2b6;
+        background: #f3f0ea;
+      }
+      .cof-page-btn.is-current {
+        background: var(--cof-accent);
+        border-color: var(--cof-accent);
+        color: #fff;
+      }
+      .cof-page-btn:disabled {
+        opacity: 0.45;
+      }
+      .cof-page-ellipsis {
+        color: var(--cof-muted);
+        padding: 0 0.15rem;
       }
 
       /* Last-reading tiles. Deliberately not "big": the value has to be
@@ -72,8 +139,7 @@
       .reading-label {
         color: var(--cof-muted);
         font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.01em;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;

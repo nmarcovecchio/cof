@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-26**. Ultimo firmware publicado: **0.2.97** (en `ota/manifest.json`).
+Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.97** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -8,6 +8,11 @@ todavia no existen y no se pueden vender viven en `docs/ROADMAP.md`.
 
 Regla: cuando un item se cierra, se borra de aca en el mismo commit que lo
 arregla.
+
+**Validado en campo (cof-test, 2026-09-26/27):** MQTT nativo CMQTT solo-LTE
+estable (0.2.96+), telemetria y OLED OK, `OTA needs LAN` en vez de Manifest fail,
+manifest servido desde el VPS (`/ota/manifest.json`), panel con live-update y
+graficos por unidad.
 
 ---
 
@@ -260,8 +265,9 @@ endurece `cmqttTearDown()` (DISC incondicional antes de REL/STOP) y además lee 
 real del PDP (`queryLteIp()` tras CONNECT) para que el OLED muestre `L <ip>` en vez
 de `L --` (el camino nativo nunca corre `NETOPEN`, así que `lteIpAddress` quedaba "-").
 
-**Pendiente:** re-probar solo-LTE en 0.2.82 y confirmar (a) una sola secuencia de
-CONNECT, (b) `L <ip>` en el OLED, (c) `+CMQTTNONET` en la caída de red.
+**Cerrado en campo (2026-09-26/27, >=0.2.96):** solo-LTE con CONNECT estable,
+`L <ip>` en OLED y telemetria OK. Queda la checklist de caídas de ruta abajo
+como regresion, no como bug abierto.
 
 **OLED `L --` arreglado en 0.2.84.** El `queryLteIp()` de 0.2.82 seguía devolviendo
 false en el camino nativo porque `parseLteIp()` tomaba el **primer** campo tras el
@@ -425,6 +431,11 @@ siguen adquiridos (el manual, ante `+CMQTTCONNLOST`, dice reconectar, no
 de 30 s a 120 s porque el `pub_timeout` mínimo del módulo es 60 s. `AT+CSQ`
 de salud pasa de 30 s a 5 min para no pisar el ciclo de telemetría. Si igual
 hay que rearmar, el evento dice `after connlost|nonet|atready|pub|csq99|stop`.
+
+**Validado en campo 2026-09-26/27 (cof-test, solo-LTE):** MQTT L estable,
+telemetria llegando, IP L en OLED, sin redial cada minuto. Caídas de ruta de
+la tabla de abajo siguen siendo la checklist de regresion; no reabrir el
+hilo de CMQTT salvo un fallo nuevo.
 
 ### Caídas de ruta que no se pueden romper
 

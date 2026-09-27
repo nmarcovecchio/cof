@@ -92,6 +92,7 @@ TELEMETRY_MAX_RANGE_DAYS = 30
 TELEMETRY_CHART_MAX_ROWS = 50000
 TELEMETRY_CSV_MAX_ROWS = 200000
 TELEMETRY_TABLE_PER_PAGE = 10
+EVENTS_PER_PAGE = 10
 
 
 def login_required(view):
@@ -369,12 +370,18 @@ def validate_config_payload(payload):
 def device_is_live(device) -> bool:
     if device is None or getattr(device, "archived_at", None) is not None:
         return False
-    # An explicit "offline" wins over the timestamp. The firmware publishes it as
-    # a retained Last Will, and it is the only authoritative statement that the
-    # device went away; trust it rather than waiting for last_seen_at to age out.
+    # last_seen_at is stamped on every non-offline MQTT message (telemetry,
+    # status online, events, …). The retained Last Will sets status=offline
+    # without touching last_seen_at, so a dead device ages out naturally.
+    #
+    # A stuck "offline" status must not win over fresh traffic: after an LTE
+    # reconnect the LWT can linger while telemetry is already flowing, and the
+    # page used to scream "Sin MQTT" / "no conectado" on a healthy path.
+    # Give the LWT a short grace only when there is no recent traffic.
+    seen = getattr(device, "last_seen_at", None)
     if str(getattr(device, "status", "") or "").strip().lower() == "offline":
-        return False
-    return is_fresh(getattr(device, "last_seen_at", None))
+        return is_fresh(seen, max_age_seconds=90)
+    return is_fresh(seen)
 
 
 def compare_firmware_versions(left: str | None, right: str | None) -> int:
@@ -506,6 +513,13 @@ def device_live_payload(device) -> dict:
     current = str(getattr(device, "firmware_version", None) or "").strip() or None
     network = device_network_summary(device)
     live = device_is_live(device)
+    discovered = getattr(device, "discovered", None) or {}
+    cell = discovered.get("cellular") if isinstance(discovered, dict) else None
+    net = discovered.get("network") if isinstance(discovered, dict) else None
+    cell_payload = None
+    if isinstance(cell, dict):
+        cell_payload = dict(cell)
+        cell_payload["lte_ok"] = cellular_lte_ok(cell)
     revision = "|".join(
         [
             current or "",
@@ -516,6 +530,7 @@ def device_live_payload(device) -> dict:
             "1" if live else "0",
             network.get("badge_text") or "",
             str(getattr(device, "status", "") or ""),
+            str((net or {}).get("active") if isinstance(net, dict) else ""),
         ]
     )
     return {
@@ -531,6 +546,8 @@ def device_live_payload(device) -> dict:
         "ip_address": getattr(device, "ip_address", None),
         "last_seen_at": _iso_utc(getattr(device, "last_seen_at", None)),
         "network": network,
+        "network_detail": net if isinstance(net, dict) else {},
+        "cellular": cell_payload,
         "last_readings": readings,
         "latest_telemetry_at": latest_at,
     }
@@ -686,6 +703,10 @@ def create_app() -> Flask:
             getattr(event, "message", ""),
             getattr(event, "severity", "info"),
         )
+
+    @app.template_filter("event_badge")
+    def event_badge_filter(event):
+        return event_badge_meta(event)
 
     @app.template_filter("cellular_signal")
     def cellular_signal_filter(csq):
@@ -1118,7 +1139,13 @@ def create_app() -> Flask:
     @login_required
     def device_detail(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
-        recent_events = Event.query.filter_by(device_id=device.id).order_by(Event.started_at.desc()).limit(15).all()
+        recent_events = (
+            Event.query.filter_by(device_id=device.id)
+            .order_by(Event.started_at.desc())
+            .limit(EVENTS_PER_PAGE)
+            .all()
+        )
+        events_total = Event.query.filter_by(device_id=device.id).count()
         configs = DeviceConfig.query.filter_by(device_id=device.id).order_by(DeviceConfig.version.desc()).limit(5).all()
         recent_alarms = []
         for event in (
@@ -1159,6 +1186,8 @@ def create_app() -> Flask:
             "device_detail.html",
             device=device,
             recent_events=recent_events,
+            events_total=events_total,
+            events_per_page=EVENTS_PER_PAGE,
             recent_alarms=recent_alarms,
             configured_rules=rules,
             configs=configs,
@@ -1191,6 +1220,37 @@ def create_app() -> Flask:
     def device_live_json(device_uid):
         device = Device.query.filter_by(device_uid=device_uid).first_or_404()
         return jsonify(device_live_payload(device))
+
+    @app.get("/devices/<device_uid>/events.json")
+    @login_required
+    def device_events_json(device_uid):
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        try:
+            page = int(request.args.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        per_page = EVENTS_PER_PAGE
+        page = max(page, 1)
+        base = Event.query.filter_by(device_id=device.id)
+        total = base.count()
+        pages = max((total + per_page - 1) // per_page, 1) if total else 1
+        if page > pages:
+            page = pages
+        rows = (
+            base.order_by(Event.started_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify(
+            {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "pages": pages,
+                "events": [serialize_event(event) for event in rows],
+            }
+        )
 
     @app.get("/devices/<device_uid>/telemetry.json")
     @login_required
@@ -2201,6 +2261,56 @@ def redact_command_secrets(payload: dict) -> dict:
     if "password" in stored:
         stored["password"] = bool(stored.get("password"))
     return stored
+
+
+def event_badge_meta(event) -> dict:
+    """Badge class/label for an event row (shared by SSR and events.json)."""
+    sev = event_display_severity(
+        getattr(event, "type", ""),
+        getattr(event, "message", ""),
+        getattr(event, "severity", "info"),
+    )
+    message = str(getattr(event, "message", "") or "")
+    etype = str(getattr(event, "type", "") or "")
+    if sev == "warning":
+        return {"class": "text-bg-warning text-dark", "label": sev}
+    if sev == "error":
+        return {"class": "text-bg-danger", "label": sev}
+    if etype == "test_call" and message.startswith("Remote hangup"):
+        return {"class": "text-bg-success", "label": "corte"}
+    if etype == "test_call" and message.startswith("Call done"):
+        return {"class": "text-bg-success", "label": "ok"}
+    if etype == "test_sms" and message.startswith("SMS sent"):
+        return {"class": "text-bg-success", "label": "ok"}
+    if etype == "modem_probe" and message.startswith("modem_probe: end"):
+        return {"class": "text-bg-success", "label": "fin"}
+    if etype == "modem_probe" and "SUPPORTED" in message:
+        return {"class": "text-bg-success", "label": "soportado"}
+    if etype == "modem_probe":
+        return {"class": "text-bg-light border", "label": "sonda"}
+    if etype == "call_audio" and "failed" in message:
+        return {"class": "text-bg-warning", "label": "audio con fallas"}
+    if etype == "call_audio" and "pruned" in message:
+        return {"class": "text-bg-info", "label": "audio podado"}
+    if etype == "call_audio":
+        return {"class": "text-bg-success", "label": "audio ok"}
+    if etype in {"test_call", "test_sms"} and sev == "info":
+        return {"class": "text-bg-light border", "label": "progreso"}
+    return {"class": "text-bg-light border", "label": sev}
+
+
+def serialize_event(event) -> dict:
+    badge = event_badge_meta(event)
+    return {
+        "id": event.id,
+        "type": event.type,
+        "severity": event.severity,
+        "message": event.message,
+        "started_at": _iso_utc(event.started_at),
+        "payload": event.payload if isinstance(event.payload, dict) else {},
+        "badge_class": badge["class"],
+        "badge_label": badge["label"],
+    }
 
 
 def serialize_device(device: Device) -> dict:

@@ -182,11 +182,7 @@
               <tbody></tbody>
             </table>
           </div>
-          <div class="d-flex flex-wrap align-items-center gap-2">
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="telemetry-table-prev" disabled>Anterior</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="telemetry-table-next" disabled>Siguiente</button>
-            <span class="small text-muted" id="telemetry-table-page">&nbsp;</span>
-          </div>
+          <nav class="cof-pager" id="telemetry-table-pager" aria-label="Paginas de telemetria"></nav>
         </div>
         {% else %}
         <p class="text-muted small mb-0">
@@ -369,19 +365,19 @@
 {% set net_eth = (net.get('ethernet') if net else none) or {} %}
 {% set net_wifi = (net.get('wifi') if net else none) or {} %}
 {% set net_lte = (net.get('lte') if net else none) or {} %}
-<div class="card mb-4">
+<div class="card mb-4" id="connectivity-card">
   <div class="card-body">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
-        <h2 class="h5 mb-1">Internet (Ethernet / WiFi)</h2>
-        <div class="text-muted small">El cliente puede usar cable, WiFi o ambos. Si no hay Ethernet ni WiFi, el MQTT sale por LTE del modem. Si hay cable y WiFi, prefiere Ethernet. La clave WiFi no queda en la config retenida.</div>
-        {% if not device|device_live %}
-        <div class="text-warning small mt-1">Sin MQTT ahora. Lo de abajo es el ultimo reporte, no el camino actual.</div>
-        {% endif %}
+        <h2 class="cof-section-title mb-1">Conectividad</h2>
+        <div class="text-muted small">Ethernet, WiFi o LTE. El MQTT sale por la mejor ruta disponible; LTE es un camino valido, no un fallo.</div>
+        <div id="net-stale-banner" class="text-secondary small mt-1{% if device|device_live %} d-none{% endif %}">
+          Sin reporte MQTT fresco. Abajo: ultimo estado conocido (no el camino actual).
+        </div>
       </div>
       <div class="text-end">
-        {{ network_path(device) }}
-        <div class="fw-semibold mt-1">{{ network_path_label(device) }}</div>
+        <span id="device-network-badge-section">{{ network_path(device) }}</span>
+        <div class="fw-semibold mt-1" id="device-path-label-section">{{ network_path_label(device) }}</div>
       </div>
     </div>
     <div class="row g-3 mb-3">
@@ -588,61 +584,66 @@
     {% endif %}
   </div>
     <div class="border-top mt-3 pt-3">
-      <div class="fw-semibold mb-2">Historial de configs</div>
-      {% if configs %}
-      <ul class="config-list">
-        {% for config in configs %}
-        <li class="config-item">
-          <div class="config-main">
-            <div class="config-body">
-              <div class="config-title">
-                <strong>v{{ config.version }}</strong>
-                {% if config.status == 'applied' %}
-                  <span class="badge text-bg-success">{{ config.status }}</span>
-                {% elif config.status == 'rejected' %}
-                  <span class="badge text-bg-danger">{{ config.status }}</span>
-                {% else %}
-                  <span class="badge text-bg-secondary">{{ config.status }}</span>
-                {% endif %}
+      <details class="config-history">
+        <summary class="cof-details-summary">
+          Historial de configs
+          <span class="text-muted fw-normal">({{ configs|length }} recientes)</span>
+        </summary>
+        {% if configs %}
+        <ul class="config-list mt-2">
+          {% for config in configs %}
+          <li class="config-item">
+            <div class="config-main">
+              <div class="config-body">
+                <div class="config-title">
+                  <strong>v{{ config.version }}</strong>
+                  {% if config.status == 'applied' %}
+                    <span class="badge text-bg-success">{{ config.status }}</span>
+                  {% elif config.status == 'rejected' %}
+                    <span class="badge text-bg-danger">{{ config.status }}</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">{{ config.status }}</span>
+                  {% endif %}
+                </div>
+                <div class="config-meta">
+                  Aplicada: {{ config.applied_at|datetime_local }}
+                </div>
               </div>
-              <div class="config-meta">
-                Aplicada: {{ config.applied_at|datetime_local }}
+              <button
+                class="icon-btn"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#config-payload-{{ config.id }}"
+                aria-expanded="false"
+                aria-controls="config-payload-{{ config.id }}"
+                title="Ver desired / reported"
+              >
+                <i class="bi bi-eye"></i>
+              </button>
+            </div>
+            <div class="collapse" id="config-payload-{{ config.id }}">
+              <div class="payload-panel">
+                <div class="mb-3">
+                  <div class="meta-label">Enviado (desired)</div>
+                  <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.desired_payload|json_pretty }}</code></pre>
+                </div>
+                <div>
+                  <div class="meta-label">Recibido (reported)</div>
+                  {% if config.reported_payload %}
+                  <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.reported_payload|json_pretty }}</code></pre>
+                  {% else %}
+                  <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
+                  {% endif %}
+                </div>
               </div>
             </div>
-            <button
-              class="icon-btn"
-              type="button"
-              data-bs-toggle="collapse"
-              data-bs-target="#config-payload-{{ config.id }}"
-              aria-expanded="false"
-              aria-controls="config-payload-{{ config.id }}"
-              title="Ver desired / reported"
-            >
-              <i class="bi bi-eye"></i>
-            </button>
-          </div>
-          <div class="collapse" id="config-payload-{{ config.id }}">
-            <div class="payload-panel">
-              <div class="mb-3">
-                <div class="meta-label">Enviado (desired)</div>
-                <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.desired_payload|json_pretty }}</code></pre>
-              </div>
-              <div>
-                <div class="meta-label">Recibido (reported)</div>
-                {% if config.reported_payload %}
-                <pre class="json-box mb-0 small bg-white border rounded p-2"><code>{{ config.reported_payload|json_pretty }}</code></pre>
-                {% else %}
-                <p class="text-muted small mb-0">Sin respuesta del dispositivo.</p>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <div class="p-3 text-muted">Sin configs.</div>
-      {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="text-muted small mt-2">Sin configs.</div>
+        {% endif %}
+      </details>
     </div>
 </div>
 <details class="mb-4">
@@ -716,43 +717,19 @@
 </details>
 <div class="row g-4">
   <div class="col-xl-7">
-    <div class="card">
-      <div class="card-header">Eventos</div>
-      {% if recent_events %}
-      <ul class="event-list">
+    <div class="card" id="events-card">
+      <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>Eventos</span>
+        <span class="small text-muted" id="events-summary">{{ events_total }} en total</span>
+      </div>
+      <ul class="event-list" id="events-list">
         {% for event in recent_events %}
-        <li class="event-item">
+        <li class="event-item" data-event-id="{{ event.id }}">
           <div class="event-main">
             <div class="event-body">
               <div class="event-title">
-                {% set sev = event|event_severity %}
-                {% if sev == 'warning' %}
-                  <span class="badge text-bg-warning text-dark">{{ sev }}</span>
-                {% elif sev == 'error' %}
-                  <span class="badge text-bg-danger">{{ sev }}</span>
-                {% elif event.type == 'test_call' and (event.message or '').startswith('Remote hangup') %}
-                  <span class="badge text-bg-success">corte</span>
-                {% elif event.type == 'test_call' and (event.message or '').startswith('Call done') %}
-                  <span class="badge text-bg-success">ok</span>
-                {% elif event.type == 'test_sms' and (event.message or '').startswith('SMS sent') %}
-                  <span class="badge text-bg-success">ok</span>
-                {% elif event.type == 'modem_probe' and (event.message or '').startswith('modem_probe: end') %}
-                  <span class="badge text-bg-success">fin</span>
-                {% elif event.type == 'modem_probe' and 'SUPPORTED' in (event.message or '') %}
-                  <span class="badge text-bg-success">soportado</span>
-                {% elif event.type == 'modem_probe' %}
-                  <span class="badge text-bg-light border">sonda</span>
-                {% elif event.type == 'call_audio' and 'failed' in (event.message or '') %}
-                  <span class="badge text-bg-warning">audio con fallas</span>
-                {% elif event.type == 'call_audio' and 'pruned' in (event.message or '') %}
-                  <span class="badge text-bg-info">audio podado</span>
-                {% elif event.type == 'call_audio' %}
-                  <span class="badge text-bg-success">audio ok</span>
-                {% elif event.type in ['test_call', 'test_sms'] and sev == 'info' %}
-                  <span class="badge text-bg-light border">progreso</span>
-                {% else %}
-                  <span class="badge text-bg-light border">{{ sev }}</span>
-                {% endif %}
+                {% set badge = event|event_badge %}
+                <span class="badge {{ badge.class }}">{{ badge.label }}</span>
                 <code class="small">{{ event.type }}</code>
               </div>
               <div class="event-message" title="{{ event.message or 'Sin mensaje' }}">{{ event.message or 'Sin mensaje' }}</div>
@@ -776,11 +753,13 @@
             </div>
           </div>
         </li>
+        {% else %}
+        <li class="event-item text-muted" id="events-empty">Sin eventos.</li>
         {% endfor %}
       </ul>
-      {% else %}
-      <div class="p-3 text-muted">Sin eventos.</div>
-      {% endif %}
+      <div class="card-footer bg-white border-top-0 pt-0">
+        <nav class="cof-pager" id="events-pager" aria-label="Paginas de eventos"></nav>
+      </div>
     </div>
   </div>
 
@@ -818,6 +797,54 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+window.cofBuildPager = function (host, page, pages, onSelect) {
+  if (!host) return;
+  host.innerHTML = '';
+  if (!pages || pages < 1) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'cof-pager-inner';
+  const maxButtons = 7;
+  let start = Math.max(1, page - Math.floor(maxButtons / 2));
+  let end = Math.min(pages, start + maxButtons - 1);
+  start = Math.max(1, end - maxButtons + 1);
+  function addBtn(label, target, disabled, current) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cof-page-btn' + (current ? ' is-current' : '');
+    btn.textContent = label;
+    btn.disabled = !!disabled;
+    if (!disabled && !current) {
+      btn.addEventListener('click', function () { onSelect(target); });
+    }
+    wrap.appendChild(btn);
+  }
+  addBtn('«', page - 1, page <= 1, false);
+  if (start > 1) {
+    addBtn('1', 1, false, page === 1);
+    if (start > 2) {
+      const dots = document.createElement('span');
+      dots.className = 'cof-page-ellipsis';
+      dots.textContent = '…';
+      wrap.appendChild(dots);
+    }
+  }
+  for (let i = start; i <= end; i++) {
+    addBtn(String(i), i, false, i === page);
+  }
+  if (end < pages) {
+    if (end < pages - 1) {
+      const dots = document.createElement('span');
+      dots.className = 'cof-page-ellipsis';
+      dots.textContent = '…';
+      wrap.appendChild(dots);
+    }
+    addBtn(String(pages), pages, false, page === pages);
+  }
+  addBtn('»', page + 1, page >= pages, false);
+  host.appendChild(wrap);
+};
+</script>
 {% if telemetry_series %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -847,9 +874,7 @@
   const tableHead = tableEl.querySelector('thead');
   const tableBody = tableEl.querySelector('tbody');
   const tableSummary = document.getElementById('telemetry-table-summary');
-  const tablePageLabel = document.getElementById('telemetry-table-page');
-  const prevBtn = document.getElementById('telemetry-table-prev');
-  const nextBtn = document.getElementById('telemetry-table-next');
+  const tablePager = document.getElementById('telemetry-table-pager');
 
   // One Chart.js instance per unit group, keyed by unit string.
   const charts = {};
@@ -1183,10 +1208,11 @@
     tablePage = data.page || 1;
     tablePages = data.pages || 1;
     const total = data.total || 0;
-    tableSummary.textContent = total + ' filas en el rango';
-    tablePageLabel.textContent = 'Pagina ' + tablePage + ' de ' + tablePages;
-    prevBtn.disabled = tablePage <= 1;
-    nextBtn.disabled = tablePage >= tablePages;
+    tableSummary.textContent = total + ' filas · pagina ' + tablePage + ' / ' + tablePages;
+    window.cofBuildPager(tablePager, tablePage, tablePages, function (next) {
+      tablePage = next;
+      loadTable();
+    });
   }
 
   function loadTable() {
@@ -1246,16 +1272,6 @@
     // Follow live data only when the selected end is near "now".
     liveFollow = !!(to && !isNaN(to.getTime()) && (Date.now() - to.getTime()) < 3 * 60 * 1000);
     load();
-  });
-  prevBtn.addEventListener('click', function () {
-    if (tablePage <= 1) return;
-    tablePage -= 1;
-    loadTable();
-  });
-  nextBtn.addEventListener('click', function () {
-    if (tablePage >= tablePages) return;
-    tablePage += 1;
-    loadTable();
   });
 
   setRange(24);
@@ -1411,9 +1427,15 @@
       netHost.innerHTML = '<span class="badge ' + (net.badge_class || 'text-bg-secondary') + '">'
         + (net.badge_text || 'sin ruta') + '</span>';
     }
+    const netHostSection = document.getElementById('device-network-badge-section');
+    if (netHostSection) {
+      netHostSection.innerHTML = '<span class="badge ' + (net.badge_class || 'text-bg-secondary') + '">'
+        + (net.badge_text || 'sin ruta') + '</span>';
+    }
+    setText('device-path-label', net.path_label || '-');
+    setText('device-path-label-section', net.path_label || '-');
 
     setText('device-firmware', data.firmware_version || '-');
-    setText('device-path-label', net.path_label || '-');
     setText('device-ip', data.ip_address || '-');
 
     const lastSeen = document.getElementById('device-last-seen');
@@ -1427,6 +1449,35 @@
     if (updateBox && published) {
       published.textContent = data.published_firmware_version || '';
       updateBox.classList.toggle('d-none', !data.firmware_update_available);
+    }
+
+    const netStale = document.getElementById('net-stale-banner');
+    if (netStale) netStale.classList.toggle('d-none', !!data.live);
+    const cellStale = document.getElementById('cell-stale-banner');
+    if (cellStale) cellStale.classList.toggle('d-none', !!data.live);
+    const cellBody = document.getElementById('cell-body');
+    if (cellBody) cellBody.classList.toggle('is-stale', !data.live);
+
+    const cell = data.cellular || null;
+    if (cell) {
+      const lteOk = !!cell.lte_ok;
+      const lteBadge = document.getElementById('cell-lte-badge');
+      if (lteBadge) {
+        if (data.live) {
+          lteBadge.className = 'badge text-bg-' + (lteOk ? 'success' : 'warning');
+          lteBadge.textContent = lteOk ? 'Conectado' : 'No';
+        } else {
+          lteBadge.className = 'badge text-bg-secondary';
+          lteBadge.textContent = 'Ultimo';
+        }
+      }
+      setText('cell-radio', cell.radio || '-');
+      setText('cell-operator', cell.operator || '-');
+      const cellUpdated = document.getElementById('cell-updated');
+      if (cellUpdated) {
+        cellUpdated.textContent = (data.live ? 'Actualizado ' : 'Ultimo reporte ')
+          + formatWhen(cell.received_at);
+      }
     }
 
     renderReadings(data.last_readings || []);
@@ -1465,4 +1516,85 @@
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+  const EVENTS_URL = "{{ url_for('device_events_json', device_uid=device.device_uid) }}";
+  const list = document.getElementById('events-list');
+  const pager = document.getElementById('events-pager');
+  const summary = document.getElementById('events-summary');
+  if (!list || !pager) return;
+
+  let page = 1;
+  let pages = Math.max(1, Math.ceil({{ events_total|default(0) }} / {{ events_per_page|default(10) }}));
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function renderEvents(data) {
+    page = data.page || 1;
+    pages = data.pages || 1;
+    summary.textContent = (data.total || 0) + ' en total · pagina ' + page + ' / ' + pages;
+    list.innerHTML = '';
+    const events = data.events || [];
+    if (!events.length) {
+      list.innerHTML = '<li class="event-item text-muted">Sin eventos.</li>';
+    } else {
+      events.forEach(function (event) {
+        const li = document.createElement('li');
+        li.className = 'event-item';
+        li.dataset.eventId = event.id;
+        const payloadId = 'event-payload-' + event.id;
+        const payloadJson = escapeHtml(JSON.stringify(event.payload || {}, null, 2));
+        li.innerHTML =
+          '<div class="event-main">'
+          + '<div class="event-body">'
+          + '<div class="event-title">'
+          + '<span class="badge ' + escapeHtml(event.badge_class || 'text-bg-light border') + '">'
+          + escapeHtml(event.badge_label || 'info') + '</span> '
+          + '<code class="small">' + escapeHtml(event.type || '') + '</code>'
+          + '</div>'
+          + '<div class="event-message" title="' + escapeHtml(event.message || 'Sin mensaje') + '">'
+          + escapeHtml(event.message || 'Sin mensaje') + '</div>'
+          + '<div class="event-time mt-1">' + (event.started_at ? new Date(event.started_at).toLocaleString() : '-') + '</div>'
+          + '</div>'
+          + '<button class="icon-btn" type="button" data-bs-toggle="collapse" data-bs-target="#' + payloadId + '" aria-expanded="false" title="Ver payload">'
+          + '<i class="bi bi-eye"></i></button>'
+          + '</div>'
+          + '<div class="collapse" id="' + payloadId + '"><div class="payload-panel">'
+          + '<pre class="json-box mb-0 small bg-white border rounded p-2"><code>' + payloadJson + '</code></pre>'
+          + '</div></div>';
+        list.appendChild(li);
+      });
+    }
+    window.cofBuildPager(pager, page, pages, function (next) {
+      page = next;
+      loadEvents();
+    });
+  }
+
+  function loadEvents() {
+    fetch(EVENTS_URL + '?page=' + page, { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'No se pudieron cargar los eventos.');
+          return body;
+        });
+      })
+      .then(renderEvents)
+      .catch(function (error) {
+        summary.textContent = error.message;
+      });
+  }
+
+  window.cofBuildPager(pager, page, pages, function (next) {
+    page = next;
+    loadEvents();
+  });
+})();
+</script>
 {% endblock %}
