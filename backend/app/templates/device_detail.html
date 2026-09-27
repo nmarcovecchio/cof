@@ -779,40 +779,21 @@
 
   <div class="col-xl-5">
     <div class="card mb-4">
-      <div class="card-header d-flex justify-content-between align-items-center">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span>Modem</span>
-        {% if modem_trace_event %}
-        <span class="small text-muted">{{ modem_trace_event.started_at|datetime_local }}</span>
-        {% endif %}
+        <span class="small text-muted" id="modem-dumps-summary">
+          {{ modem_dumps_total|default(0) }} dump{{ 's' if modem_dumps_total != 1 else '' }}
+        </span>
       </div>
-      {% if modem_trace_events %}
-      {% for trace in modem_trace_events %}
-      <div class="{% if not loop.first %}border-top{% endif %}">
-        {% if trace.payload.get('handshake') %}
-        <div class="px-3 pt-2 small text-muted">
-          Handshake MQTT sobre LTE (primer intento: el ring de abajo solo guarda el final):
+      <div id="modem-dumps-body">
+        <div class="p-3 text-muted small">Cargando dumps UART…</div>
+      </div>
+      <div class="card-footer bg-white border-top pt-2">
+        <nav class="cof-pager" id="modem-dumps-pager" aria-label="Paginas de dumps modem"></nav>
+        <div class="small text-muted mt-2 mb-0">
+          Dumps con fecha (mas recientes primero). Con <strong>UART debug ON</strong> llegan cada 30s y al drop.
         </div>
-        <pre class="modem-log border-bottom mb-0">{{ trace.payload.get('handshake') }}</pre>
-        {% endif %}
-        <div class="px-3 pt-2 small text-muted">{{ trace.message }} · {{ trace.started_at|datetime_local }}</div>
-        <pre class="modem-log mb-0">{% for line in trace.payload.get('modem_log').splitlines() %}{% if '>>' in line[:20] %}<span class="tx">{{ line }}</span>
-{% elif '<<' in line[:20] %}<span class="rx">{{ line }}</span>
-{% else %}{{ line }}
-{% endif %}{% endfor %}</pre>
       </div>
-      {% endfor %}
-      <div class="px-3 py-2 small text-muted border-top">
-        Ultimos {{ modem_trace_events|length }} dumps con modem_log.
-        Con <strong>UART debug ON</strong> el equipo publica cada 30s (y al drop/atready).
-      </div>
-      {% else %}
-      <div class="p-3 text-muted small">
-        Traza AT de la ultima prueba de llamada o del intento LTE.
-        Si MQTT estaba caido, el dump se publica cuando el broker vuelve (cable o LTE).
-        En llamadas, el corte remoto aparece como <code>+CLCC</code> 6 / <code>NO CARRIER</code> / <code>VOICE CALL: END</code>.
-        Activa <strong>UART debug ON</strong> para dumps cada 30s de toda la UART.
-      </div>
-      {% endif %}
     </div>
   </div>
 </div>
@@ -1617,6 +1598,96 @@ window.cofBuildPager = function (host, page, pages, onSelect) {
     page = next;
     loadEvents();
   });
+})();
+</script>
+<script>
+(function () {
+  const DUMPS_URL = "{{ url_for('device_modem_dumps_json', device_uid=device.device_uid) }}";
+  const body = document.getElementById('modem-dumps-body');
+  const pager = document.getElementById('modem-dumps-pager');
+  const summary = document.getElementById('modem-dumps-summary');
+  if (!body || !pager) return;
+
+  let page = 1;
+  let pages = Math.max(1, Math.ceil({{ modem_dumps_total|default(0) }} / {{ modem_dumps_per_page|default(5) }}));
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function formatWhen(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  function colorizeLog(text) {
+    return String(text || '').split('\n').map(function (line) {
+      const esc = escapeHtml(line);
+      const head = line.slice(0, 24);
+      if (head.indexOf('>>') >= 0) return '<span class="tx">' + esc + '</span>';
+      if (head.indexOf('<<') >= 0) return '<span class="rx">' + esc + '</span>';
+      return esc;
+    }).join('\n');
+  }
+
+  function renderDumps(data) {
+    page = data.page || 1;
+    pages = data.pages || 1;
+    const total = data.total || 0;
+    summary.textContent = total + ' dump' + (total === 1 ? '' : 's') + ' · pagina ' + page + ' / ' + pages;
+    const dumps = data.dumps || [];
+    if (!dumps.length) {
+      body.innerHTML = '<div class="p-3 text-muted small">'
+        + 'Sin dumps todavia. Activa <strong>UART debug ON</strong> para ver la UART cada 30s, '
+        + 'o espera un intento LTE / llamada / SMS.</div>';
+    } else {
+      let html = '<div class="modem-dumps-scroll">';
+      dumps.forEach(function (dump) {
+        html += '<div class="modem-dump-block" data-dump-id="' + escapeHtml(dump.id) + '">';
+        html += '<div class="modem-dump-head">'
+          + '<strong>' + escapeHtml(formatWhen(dump.started_at)) + '</strong>'
+          + ' <span class="modem-dump-msg">· ' + escapeHtml(dump.message || dump.type || 'dump') + '</span>'
+          + '</div>';
+        if (dump.handshake) {
+          html += '<pre class="modem-log border-0 mb-0" style="border-bottom:1px solid #374151!important">'
+            + colorizeLog(dump.handshake) + '</pre>';
+        }
+        html += '<pre class="modem-log">' + colorizeLog(dump.modem_log) + '</pre>';
+        html += '</div>';
+      });
+      html += '</div>';
+      body.innerHTML = html;
+    }
+    window.cofBuildPager(pager, page, pages, function (next) {
+      page = next;
+      loadDumps();
+    });
+  }
+
+  function loadDumps() {
+    fetch(DUMPS_URL + '?page=' + page, { headers: { 'Accept': 'application/json' } })
+      .then(function (response) {
+        return response.json().then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || 'No se pudieron cargar los dumps.');
+          return payload;
+        });
+      })
+      .then(renderDumps)
+      .catch(function (error) {
+        summary.textContent = error.message;
+        body.innerHTML = '<div class="p-3 text-danger small">' + escapeHtml(error.message) + '</div>';
+      });
+  }
+
+  loadDumps();
 })();
 </script>
 {% endblock %}

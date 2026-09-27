@@ -341,8 +341,8 @@
 
       .modem-log {
         margin: 0;
-        max-height: 22rem;
-        overflow: auto;
+        max-height: none;
+        overflow: visible;
         padding: 0.75rem 0.9rem;
         background: #111827;
         color: #e5e7eb;
@@ -351,6 +351,34 @@
         line-height: 1.45;
         white-space: pre-wrap;
         word-break: break-word;
+      }
+
+      .modem-dumps-scroll {
+        max-height: 36rem;
+        overflow: auto;
+        background: #111827;
+      }
+
+      .modem-dump-block + .modem-dump-block {
+        border-top: 1px solid #374151;
+      }
+
+      .modem-dump-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 0.45rem 0.9rem;
+        background: #1f2937;
+        color: #fbbf24;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.75rem;
+        line-height: 1.35;
+        border-bottom: 1px solid #374151;
+      }
+
+      .modem-dump-head .modem-dump-msg {
+        color: #d1d5db;
+        font-weight: normal;
       }
 
       .modem-log .tx { color: #93c5fd; }

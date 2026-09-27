@@ -93,6 +93,7 @@ TELEMETRY_CHART_MAX_ROWS = 50000
 TELEMETRY_CSV_MAX_ROWS = 200000
 TELEMETRY_TABLE_PER_PAGE = 10
 EVENTS_PER_PAGE = 10
+MODEM_DUMPS_PER_PAGE = 5
 
 
 def login_required(view):
@@ -1163,17 +1164,7 @@ def create_app() -> Flask:
         except Exception:
             app.logger.exception("configured_rules_view failed device=%s", device.device_uid)
             rules = []
-        modem_trace_events = [
-            event
-            for event in (
-                Event.query.filter_by(device_id=device.id)
-                .order_by(Event.started_at.desc())
-                .limit(80)
-                .all()
-            )
-            if isinstance(event.payload, dict) and event.payload.get("modem_log")
-        ][:5]
-        modem_trace_event = modem_trace_events[0] if modem_trace_events else None
+        modem_dumps_total = modem_log_events_query(device.id).count()
         alarm_state = None
         try:
             alarm_state = alarm_states_map([device]).get(device.id)
@@ -1190,8 +1181,8 @@ def create_app() -> Flask:
             configured_rules=rules,
             configs=configs,
             test_phone=last_used_test_phone(device, configs),
-            modem_trace_event=modem_trace_event,
-            modem_trace_events=modem_trace_events,
+            modem_dumps_total=modem_dumps_total,
+            modem_dumps_per_page=MODEM_DUMPS_PER_PAGE,
             contacts=resolve_contacts(device, latest_config_payload(device)),
             modem_jobs=active_modem_jobs(device),
             alarm_state=alarm_state,
@@ -1248,6 +1239,38 @@ def create_app() -> Flask:
                 "total": total,
                 "pages": pages,
                 "events": [serialize_event(event) for event in rows],
+            }
+        )
+
+    @app.get("/devices/<device_uid>/modem-dumps.json")
+    @login_required
+    def device_modem_dumps_json(device_uid):
+        """Paginated UART / LTE modem_log dumps (newest first)."""
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        try:
+            page = int(request.args.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        per_page = MODEM_DUMPS_PER_PAGE
+        page = max(page, 1)
+        base = modem_log_events_query(device.id)
+        total = base.count()
+        pages = max((total + per_page - 1) // per_page, 1) if total else 1
+        if page > pages:
+            page = pages
+        rows = (
+            base.order_by(Event.started_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify(
+            {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "pages": pages,
+                "dumps": [serialize_modem_dump(event) for event in rows],
             }
         )
 
@@ -2322,6 +2345,34 @@ def serialize_event(event) -> dict:
         "payload": event.payload if isinstance(event.payload, dict) else {},
         "badge_class": badge["class"],
         "badge_label": badge["label"],
+    }
+
+
+def modem_log_events_query(device_id: int):
+    """Events that carry a modem_log dump for the Modem panel.
+
+    On Postgres we filter the JSON key. Elsewhere (sqlite local) fall back to
+    the event types that publish dumps.
+    """
+    q = Event.query.filter_by(device_id=device_id)
+    bind = db.session.get_bind()
+    dialect = bind.dialect.name if bind is not None else "postgresql"
+    if dialect == "sqlite":
+        return q.filter(Event.type.in_(("lte_data", "modem_uart_debug")))
+    return q.filter(
+        text("(payload->>'modem_log') IS NOT NULL AND length(payload->>'modem_log') > 0")
+    )
+
+
+def serialize_modem_dump(event) -> dict:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    return {
+        "id": event.id,
+        "type": event.type,
+        "message": event.message or "",
+        "started_at": _iso_utc(event.started_at),
+        "modem_log": str(payload.get("modem_log") or ""),
+        "handshake": str(payload.get("handshake") or ""),
     }
 
 
