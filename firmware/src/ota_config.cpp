@@ -77,7 +77,14 @@ void initOtaRollbackGuard() {
   }
   if (otaState == ESP_OTA_IMG_PENDING_VERIFY) {
     otaConfirmPending = true;
+    // Lab dumps after every OTA: this flag is RAM-only and normally off, so
+    // without this the first boot of a new image has no UART trail for SMS/MQTT
+    // debug. Manual modem_uart_debug OFF still works for the rest of the boot.
+    modemUartDebug = true;
+    lastModemUartDebugPublishMs = 0;
+    appendModemLogForced("=== uart debug ON (post-OTA) ===");
     Serial.println("[ota] new image pending verify; will confirm once healthy");
+    Serial.println("[ota] modem UART debug ON for this boot");
   }
 }
 // Confirm the slot when the device proves it works. Never confirm early: doing
