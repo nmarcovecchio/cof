@@ -57,6 +57,11 @@ bool netopenResultOk(const String& resp);
 bool parseLteIp(const String& resp, String& ipOut);
 bool queryLteIp(String& ipOut);
 void releaseLteMqttForModem();
+// Logical UART mutex: take before voice/SMS AT, release after (tears down LTE
+// CMQTT cleanly when wasOnLte so reconnect starts from CMQTTSTART).
+void takeModemForVoiceSms(ModemUartOwner owner);
+void releaseModemToMqtt(bool wasOnLte);
+bool modemUartOwnedByMqtt();
 String resolveLteMqttPeer(const char* host);
 void restorePacketServices();
 void stopLtePdp();

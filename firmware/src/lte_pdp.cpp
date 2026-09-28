@@ -363,6 +363,43 @@ void releaseLteMqttForModem() {
   state.mqttConnected = false;
   lastMqttReconnectMs = 0;
 }
+
+bool modemUartOwnedByMqtt() {
+  return state.modemUartOwner == kModemUartMqtt;
+}
+
+void takeModemForVoiceSms(ModemUartOwner owner) {
+  // Voice and SMS own the UART until releaseModemToMqtt(). MQTT must not
+  // cmqttLoop / CONNECT / PUB on LTE while this is set.
+  if (owner != kModemUartVoice && owner != kModemUartSms) {
+    owner = kModemUartSms;
+  }
+  state.modemUartOwner = owner;
+  if (!state.lteMqttTransport) {
+    return;
+  }
+  // DISC only: STOP/TearDown happens on release. Stopping here can reboot the
+  // module mid-CMGS/ATD (observed with aggressive CMQTTSTOP).
+#if COF_LTE_MQTT_NATIVE
+  cmqttDisconnect();
+#else
+  mqttClient.disconnect();
+  lteMqttClient.stop();
+#endif
+  state.mqttConnected = false;
+}
+
+void releaseModemToMqtt(bool wasOnLte) {
+  // Full teardown when we had been riding LTE so the next connectMqttIfNeeded()
+  // rebuilds CMQTT from START. DISC-only left the service half-up and SMS
+  // reconnect wedged (CONNECT over a stale CMQTT session).
+  if (wasOnLte) {
+    stopLtePdp();
+  }
+  state.modemUartOwner = kModemUartMqtt;
+  lastMqttReconnectMs = 0;
+}
+
 void restorePacketServices() {
   setStatus("Restore data");
   sendAT("ATH", "OK", 2000);

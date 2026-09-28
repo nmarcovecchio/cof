@@ -229,7 +229,8 @@ void publishTestCallResult(const String& result, bool ok, const String& commandI
 }
 LteMqttClient lteMqttClient;
 void maintainLteFallback() {
-  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress ||
+      !modemUartOwnedByMqtt()) {
     return;
   }
   if (static_cast<int32_t>(millis()) < static_cast<int32_t>(kLteBootGraceMs)) {
@@ -364,7 +365,8 @@ void pollModem() {
     return;
   }
   modemHealthySinceMs = 0;
-  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress ||
+      !modemUartOwnedByMqtt()) {
     return;
   }
   const uint32_t now = millis();
@@ -792,14 +794,15 @@ void loop() {
   // Gated off a live call so the probe's AT traffic cannot abort an active CSFB
   // call; it just stays pending until the call finishes.
   if (pendingModemProbeCommand && !state.callInProgress && !state.otaInProgress &&
-      !state.audioSyncInProgress) {
+      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
     const String probeCommandId = pendingModemProbeCommandId;
     pendingModemProbeCommand = false;
     pendingModemProbeCommandId = "";
     runModemProbe(probeCommandId);
   }
 
-  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress &&
+      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
     const String smsPhone = pendingTestSmsPhone;
     const String smsText = pendingTestSmsText;
     const String smsCommandId = pendingTestSmsCommandId;
@@ -819,7 +822,8 @@ void loop() {
     publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId);
   }
 
-  if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress && !state.audioSyncInProgress) {
+  if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress &&
+      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
     const String callPhone = pendingTestCallPhone;
     const String callAudioSha = pendingTestCallAudioSha;
     const String callCommandId = pendingTestCallCommandId;
@@ -849,7 +853,7 @@ void loop() {
   }
 
   if (state.mqttConnected && !state.callInProgress && !state.otaInProgress &&
-      !state.lteMqttTransport &&
+      !state.lteMqttTransport && modemUartOwnedByMqtt() &&
       now - lastCellularStatusMs >= kCellularStatusIntervalMs) {
     lastCellularStatusMs = now;
     refreshCellularStatus();
@@ -858,13 +862,13 @@ void loop() {
 
   const uint32_t modemEvery = lanConnected() ? kModemIntervalMs : kModemRetryNoLanMs;
   if (now - lastModemMs >= modemEvery && !state.callInProgress && !state.audioSyncInProgress &&
-      !state.lteMqttTransport) {
+      !state.lteMqttTransport && modemUartOwnedByMqtt()) {
     lastModemMs = now;
     pollModem();
   }
 
   if (now - lastSmsPollMs >= kSmsPollIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
-      !state.lteMqttTransport &&
+      !state.lteMqttTransport && modemUartOwnedByMqtt() &&
       !pendingTestSmsCommand && !pendingTestCallCommand) {
     lastSmsPollMs = now;
     pollIncomingSms();

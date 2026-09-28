@@ -161,7 +161,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   }
 }
 bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained, uint8_t qos) {
-  if (!state.mqttConnected) {
+  if (!state.mqttConnected || !modemUartOwnedByMqtt()) {
     return false;
   }
 
@@ -378,7 +378,7 @@ bool publishDeviceEvent(const char* type, const char* severity, const String& me
   }
   if (!publishMqttJson("event", doc, false, 1)) {
     // Queue instead of dropping: this used to silently discard the result of an
-    // SMS test (transmitSms() takes MQTT down first via releaseLteMqttForModem)
+    // SMS test (sendTestSms takes the UART mutex; result is deferred until MQTT is back)
     // and the backend would then time the command out with no explanation.
     deferDeviceEvent(type, severity, message, commandId);
     return false;
@@ -575,6 +575,10 @@ void publishTelemetryNow() {
 // drains inbound URCs and folds +CMQTTCONNLOST / +CMQTTNONET into the connection
 // state (no separate watchdog ping is needed - the modem keepalives by itself).
 static void connectMqttNativeIfNeeded() {
+  // Voice/SMS hold the UART; do not drain CMQTT or attempt CONNECT mid-CMGS/ATD.
+  if (!modemUartOwnedByMqtt()) {
+    return;
+  }
   if (cmqttIsConnected()) {
     cmqttLoop();
     if (!cmqttIsConnected()) {
@@ -743,6 +747,10 @@ void connectMqttIfNeeded() {
     return;
   }
 
+  // SMS/voice own the modem UART: skip LTE CMQTT work. LAN PubSubClient below
+  // does not need the modem UART and may still run when Ethernet/WiFi is up.
+  const bool modemHeld = !modemUartOwnedByMqtt();
+
 #if COF_LTE_MQTT_NATIVE
   // Native CMQTT path. The decision is cheap and side-effect free; the full
   // PubSubClient setup (configureMqttClientTransport) still runs only on the LAN
@@ -750,6 +758,9 @@ void connectMqttIfNeeded() {
   {
     const bool lanLooksUsable = lanConnected() && !ethernetHoldoffActive() && lanHasInternet();
     if (state.lteDataUp && !lanLooksUsable) {
+      if (modemHeld) {
+        return;
+      }
       state.lteMqttTransport = true;
       connectMqttNativeIfNeeded();
       return;
@@ -758,6 +769,9 @@ void connectMqttIfNeeded() {
   }
 #endif
 
+  if (modemHeld && state.lteMqttTransport) {
+    return;
+  }
   if (mqttClient.connected()) {
     if (!mqttClient.loop()) {
       state.mqttConnected = false;
@@ -899,7 +913,8 @@ void connectMqttIfNeeded() {
   setStatus("MQTT OK");
 }
 void enforceMqttSilenceWatchdog() {
-  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress ||
+      !modemUartOwnedByMqtt()) {
     return;
   }
   if (!state.mqttConfigured) {

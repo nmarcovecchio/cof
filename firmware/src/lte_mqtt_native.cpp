@@ -532,7 +532,7 @@ void cmqttLoop() {
 // risk of a command arriving inside the ~200 ms probe window is accepted - the
 // backend publishes commands at QoS 1 and re-delivers.
 void serviceLteMqttHealth() {
-  if (!state.lteMqttTransport || !cmqttIsConnected()) {
+  if (!modemUartOwnedByMqtt() || !state.lteMqttTransport || !cmqttIsConnected()) {
     lteNoServiceSinceMs = 0;
     return;
   }

@@ -31,6 +31,14 @@ enum LteIpStack : uint8_t { kLteStackUnknown = 0, kLteStackNetopen, kLteStackCna
 
 enum class PathPreference : uint8_t { Auto, Ethernet, Wifi };
 
+// Cooperative UART owner for the single modem serial line. MQTT (CMQTT), voice
+// and SMS cannot share AT traffic; the main loop yields while owner != mqtt.
+enum ModemUartOwner : uint8_t {
+  kModemUartMqtt = 0,
+  kModemUartVoice,
+  kModemUartSms,
+};
+
 struct RuntimeState {
   bool ethernetStarted = false;
   bool ethernetConnected = false;
@@ -41,6 +49,7 @@ struct RuntimeState {
   uint8_t ltePdpCid = 0;
   bool mqttConfigured = false;
   bool mqttConnected = false;
+  ModemUartOwner modemUartOwner = kModemUartMqtt;
   bool oledReady = false;
   bool sht31Ready = false;
   bool ds18b20Ready = false;

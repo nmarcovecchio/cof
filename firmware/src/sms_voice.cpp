@@ -862,14 +862,8 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   return "Call not connected";
 }
 String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha) {
-  // Remember whether we were riding LTE before the call. A CSFB bounce
-  // (CFUN=4/1 in bounceRadioForCsfb) and the voice path both tear down the
-  // NETOPEN PDP, but releaseLteMqttForModem() only closes the socket and leaves
-  // `lteDataUp` set. Rebuilding the PDP right here - instead of after three
-  // failed MQTT connects (~15 s) - keeps an alarm call's result reachable the
-  // moment the call ends, even if Ethernet/WiFi did not come back.
-  const bool wasOnLte = state.lteDataUp;
-  releaseLteMqttForModem();
+  // Validate first; only then take the UART mutex. Early exits used to DISC
+  // MQTT and leave reclaim to the caller, and could break LAN checkManifest.
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
@@ -931,6 +925,10 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
     }
   }
 
+  // Remember LTE before take: CSFB / voice tear down the data plane; release
+  // does stopLtePdp so reconnect rebuilds CMQTT from START (same as SMS).
+  const bool wasOnLte = state.lteDataUp || state.lteMqttTransport;
+  takeModemForVoiceSms(kModemUartVoice);
   state.callInProgress = true;
   pendingCallUrcs = "";
   if (!modemUartDebug) {
@@ -971,13 +969,7 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   restoreAutoRadio();
   restorePacketServices();
-  if (wasOnLte) {
-    // Tear the now-dead PDP down so ensureLtePdp() rebuilds it cleanly on the
-    // next connectMqttIfNeeded(). If Ethernet/WiFi came back during the call,
-    // this is still correct: maintainLteFallback() will see the LAN path and
-    // never re-engage LTE.
-    stopLtePdp();
-  }
+  releaseModemToMqtt(wasOnLte);
   state.callInProgress = false;
   state.modemAudioPath = previousAudioPath;
   return result;
@@ -992,19 +984,8 @@ String resolveTestPhone(const String& phoneOverride) {
   return phone;
 }
 String transmitSms(const String& phone, const String& body) {
-  if (!lanHasInternet()) {
-    // MQTT is riding the modem. Free the modem for the SMS dialog: the native
-    // CMQTT session and AT+CMGS both need the single UART, and the SMS read can
-    // block past the 30 s broker keepalive, dropping the connection mid-send.
-    // The caller reconnects (connectMqttIfNeeded) and publishDeviceEvent defers
-    // the result until MQTT is back, so releasing the socket no longer loses it.
-#if COF_LTE_MQTT_NATIVE
-    releaseLteMqttForModem();
-#else
-    mqttClient.loop();
-    state.mqttConnected = mqttClient.connected();
-#endif
-  }
+  // Caller must hold the UART (takeModemForVoiceSms) when MQTT rides LTE.
+  // Do not DISC/reconnect here: a half teardown + CONNECT was what wedged SMS.
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
     appendModemLogForced("SMS CMGF fail");
     setStatus("SMS mode fail");
@@ -1078,16 +1059,15 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     body = body.substring(0, 160);
   }
 
-  // Free the modem before the SMS exchange. When MQTT rides LTE (native CMQTT)
-  // the single UART is shared with the broker session; an AT+CMGS dialog over a
-  // live CMQTT connection can collide with it, and the SMS read can block past
-  // the 30 s broker keepalive, dropping the connection and losing the result.
-  // Release first, send on a quiet modem, reconnect on the way out.
-  releaseLteMqttForModem();
+  // Same UART mutex as voice: DISC, send on a quiet modem, then TearDown +
+  // reconnect (not CONNECT over a live CMQTT service).
+  const bool wasOnLte = state.lteDataUp || state.lteMqttTransport;
+  takeModemForVoiceSms(kModemUartSms);
 
   if (!waitUntilModemReady(false, 25000)) {
     restorePacketServices();
     if (!waitUntilModemReady(false, 20000)) {
+      releaseModemToMqtt(wasOnLte);
       setStatus("SMS not ready");
       return "SMS not ready";
     }
@@ -1095,10 +1075,10 @@ String sendTestSms(const String& phoneOverride, const String& text) {
 
   String result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
-    // First attempt failed on a quiet modem: the radio/PDP may have been
-    // disturbed, so restore packet services and try once more before giving up.
+    // Still holding the UART: restore radio/packet, retry, then reclaim MQTT.
     restorePacketServices();
     result = transmitSms(phone, body);
   }
+  releaseModemToMqtt(wasOnLte);
   return result;
 }
