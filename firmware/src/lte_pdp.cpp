@@ -235,8 +235,8 @@ bool ensureLtePdp() {
   }
 
   reportLteProgress = true;
-  // Keep the pre-crash AT trail when UART debug is on; wiping here is what made
-  // the web panel only ever show the reconnect handshake after *ATREADY.
+  // With UART debug ON the live log is append-only (chunks flush over MQTT).
+  // Never clear it on PDP re-arm — that destroyed the pre-*ATREADY trail.
   if (!modemUartDebug) {
     modemCallLog = "";
   } else {

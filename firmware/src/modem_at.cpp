@@ -120,13 +120,28 @@ static void appendModemLogLine(String entry) {
   if (modemUartDebug) {
     entry = "T+" + String(millis()) + " " + entry;
   }
+  // Debug ON: never drop lines from the live buffer — seal a chunk for later
+  // MQTT publish, then keep appending. Debug OFF: old ring-tail behaviour.
   while (modemCallLog.length() + entry.length() + 1 > kModemCallLogMax) {
-    const int cut = modemCallLog.indexOf('\n');
-    if (cut < 0) {
-      modemCallLog = "";
-      break;
+    if (modemUartDebug) {
+      sealModemUartDebugChunk("overflow");
+      if (modemCallLog.length() + entry.length() + 1 > kModemCallLogMax) {
+        // Queue full and still no room: last resort drop oldest live line.
+        const int cut = modemCallLog.indexOf('\n');
+        if (cut < 0) {
+          modemCallLog = "";
+          break;
+        }
+        modemCallLog = modemCallLog.substring(cut + 1);
+      }
+    } else {
+      const int cut = modemCallLog.indexOf('\n');
+      if (cut < 0) {
+        modemCallLog = "";
+        break;
+      }
+      modemCallLog = modemCallLog.substring(cut + 1);
     }
-    modemCallLog = modemCallLog.substring(cut + 1);
   }
   if (modemCallLog.length() > 0) {
     modemCallLog += '\n';

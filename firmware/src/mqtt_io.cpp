@@ -462,44 +462,116 @@ void publishLteDataTrace() {
   }
 }
 
-static String modemUartDebugTail() {
-  if (modemCallLog.length() <= kModemUartDebugPublishMax) {
-    return modemCallLog;
+// Outbound UART debug: sealed chunks wait for MQTT and are sent verbatim.
+static String uartDebugChunks[kModemUartDebugChunkQueue];
+static String uartDebugChunkReasons[kModemUartDebugChunkQueue];
+static uint8_t uartDebugChunkCount = 0;
+
+static void uartDebugEnqueueChunk(const String& chunk, const char* reason) {
+  if (chunk.length() == 0) {
+    return;
   }
-  // Prefer a line boundary so the web panel does not start mid-line.
-  const int cut = modemCallLog.indexOf('\n', modemCallLog.length() - kModemUartDebugPublishMax);
-  if (cut < 0) {
-    return modemCallLog.substring(modemCallLog.length() - kModemUartDebugPublishMax);
+  if (uartDebugChunkCount >= kModemUartDebugChunkQueue) {
+    Serial.println("[uart-debug] chunk queue full, dropping oldest");
+    for (uint8_t i = 1; i < kModemUartDebugChunkQueue; i++) {
+      uartDebugChunks[i - 1] = uartDebugChunks[i];
+      uartDebugChunkReasons[i - 1] = uartDebugChunkReasons[i];
+    }
+    uartDebugChunkCount = kModemUartDebugChunkQueue - 1;
   }
-  return modemCallLog.substring(cut + 1);
+  uartDebugChunks[uartDebugChunkCount] = chunk;
+  uartDebugChunkReasons[uartDebugChunkCount] = reason != nullptr ? reason : "chunk";
+  uartDebugChunkCount++;
+}
+
+// Move one publish-sized prefix of modemCallLog into the queue (exact text).
+static bool uartDebugSealOneFromLive(const char* reason) {
+  if (modemCallLog.length() == 0) {
+    return false;
+  }
+  size_t take = modemCallLog.length();
+  if (take > kModemUartDebugPublishMax) {
+    take = kModemUartDebugPublishMax;
+    int cut = -1;
+    for (int i = static_cast<int>(take); i >= static_cast<int>(take / 4); i--) {
+      if (modemCallLog.charAt(i) == '\n') {
+        cut = i;
+        break;
+      }
+    }
+    if (cut > 0) {
+      take = static_cast<size_t>(cut);
+    }
+  }
+  const String piece = modemCallLog.substring(0, take);
+  if (take < modemCallLog.length() && modemCallLog.charAt(take) == '\n') {
+    modemCallLog = modemCallLog.substring(take + 1);
+  } else {
+    modemCallLog = modemCallLog.substring(take);
+  }
+  uartDebugEnqueueChunk(piece, reason);
+  return true;
+}
+
+void sealModemUartDebugChunk(const char* reason) {
+  if (!modemUartDebug) {
+    return;
+  }
+  const char* tag = reason != nullptr ? reason : "seal";
+  // Seal enough that the live buffer can accept more lines, or everything on flush.
+  if (modemCallLog.length() == 0) {
+    return;
+  }
+  // Always seal at least one chunk; if still over max, keep sealing.
+  do {
+    if (!uartDebugSealOneFromLive(tag)) {
+      break;
+    }
+  } while (modemCallLog.length() > kModemUartDebugPublishMax);
 }
 
 void snapshotModemUartDebug(const char* reason) {
   if (!modemUartDebug) {
     return;
   }
-  // Keep the first drop reason until the pending dump actually publishes, so a
-  // reconnect storm does not rewrite "atready" with a later "stop".
-  if (!pendingModemUartDebugPublish) {
-    pendingModemUartDebugReason = reason == nullptr ? "snapshot" : reason;
+  const char* tag = reason != nullptr ? reason : "snapshot";
+  // Freeze everything currently buffered so a later reconnect cannot replace it.
+  while (modemCallLog.length() > 0) {
+    if (!uartDebugSealOneFromLive(tag)) {
+      break;
+    }
   }
   pendingModemUartDebugPublish = true;
+  if (pendingModemUartDebugReason.length() == 0) {
+    pendingModemUartDebugReason = tag;
+  }
 }
 
-static bool publishModemUartDebugNow(const char* reason) {
-  if (!state.mqttConnected || modemCallLog.length() == 0) {
+static bool publishOneUartDebugChunk() {
+  if (!state.mqttConnected || uartDebugChunkCount == 0) {
     return false;
   }
+  const String& body = uartDebugChunks[0];
+  const String reason = uartDebugChunkReasons[0].length() > 0 ? uartDebugChunkReasons[0] : String("chunk");
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
   doc["type"] = "modem_uart_debug";
   doc["severity"] = "info";
   doc["message"] = withFirmware(String("UART debug ") + reason);
-  doc["modem_log"] = modemUartDebugTail();
+  doc["modem_log"] = body;  // verbatim sealed text
   doc["uart_debug"] = true;
   if (!publishMqttJson("event", doc, false, 1)) {
     return false;
+  }
+  for (uint8_t i = 1; i < uartDebugChunkCount; i++) {
+    uartDebugChunks[i - 1] = uartDebugChunks[i];
+    uartDebugChunkReasons[i - 1] = uartDebugChunkReasons[i];
+  }
+  if (uartDebugChunkCount > 0) {
+    uartDebugChunks[uartDebugChunkCount - 1] = "";
+    uartDebugChunkReasons[uartDebugChunkCount - 1] = "";
+    uartDebugChunkCount--;
   }
   lastModemUartDebugPublishMs = millis() == 0 ? 1 : millis();
   return true;
@@ -508,24 +580,36 @@ static bool publishModemUartDebugNow(const char* reason) {
 void serviceModemUartDebug() {
   if (!modemUartDebug) {
     pendingModemUartDebugPublish = false;
+    uartDebugChunkCount = 0;
     return;
   }
   if (!state.mqttConnected) {
     return;
   }
 
-  const uint32_t now = millis();
+  // Urgent / drop: seal any remaining live text, then drain the queue.
   if (pendingModemUartDebugPublish) {
-    const String reason = pendingModemUartDebugReason.length() > 0
-                              ? pendingModemUartDebugReason
-                              : String("snapshot");
-    if (publishModemUartDebugNow(reason.c_str())) {
-      pendingModemUartDebugPublish = false;
-      pendingModemUartDebugReason = "";
+    while (modemCallLog.length() > 0) {
+      uartDebugSealOneFromLive(pendingModemUartDebugReason.length() > 0
+                                   ? pendingModemUartDebugReason.c_str()
+                                   : "snapshot");
+    }
+    if (publishOneUartDebugChunk()) {
+      if (uartDebugChunkCount == 0) {
+        pendingModemUartDebugPublish = false;
+        pendingModemUartDebugReason = "";
+      }
     }
     return;
   }
 
+  // Drain any leftover sealed chunks from a previous outage first.
+  if (uartDebugChunkCount > 0) {
+    publishOneUartDebugChunk();
+    return;
+  }
+
+  const uint32_t now = millis();
   if (lastModemUartDebugPublishMs != 0 &&
       now - lastModemUartDebugPublishMs < kModemUartDebugIntervalMs) {
     return;
@@ -533,7 +617,11 @@ void serviceModemUartDebug() {
   if (modemCallLog.length() == 0) {
     return;
   }
-  publishModemUartDebugNow("periodic");
+  // Periodic: seal live buffer intact, then publish.
+  while (modemCallLog.length() > 0) {
+    uartDebugSealOneFromLive("periodic");
+  }
+  publishOneUartDebugChunk();
 }
 bool publishTelemetryNow() {
   if (!state.mqttConnected) {

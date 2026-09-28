@@ -77,8 +77,11 @@ void appendModemLog(char direction, const String& text);
 // Records a line even when no call/LTE handshake is in progress. Used so the
 // device page shows CMQTT URCs and SMS AT that the gated logger drops.
 void appendModemLogForced(const String& text);
-// Queue a modem_uart_debug event with the current ring (lab dumps).
+// Queue a modem_uart_debug event with the current log (lab dumps).
 void snapshotModemUartDebug(const char* reason);
+// With debug ON: move live UART text into the outbound chunk queue (no wipe of
+// meaning — sealed verbatim for later MQTT publish).
+void sealModemUartDebugChunk(const char* reason);
 void serviceModemUartDebug();
 void captureLteUrcLog();
 void beginInternalWatchdog();
