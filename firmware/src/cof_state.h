@@ -227,6 +227,9 @@ extern bool modemUartDebug;
 extern uint32_t lastModemUartDebugPublishMs;
 extern bool pendingModemUartDebugPublish;
 extern String pendingModemUartDebugReason;
+// True while publishing a uart-debug chunk over CMQTT — suppress append so the
+// dump's own TOPIC/PAYLOAD/PUB lines do not re-enter the live buffer.
+extern bool uartDebugPublishing;
 extern bool lastLteFail;
 extern LteIpStack lteIpStack;
 extern String lteTraceLog;

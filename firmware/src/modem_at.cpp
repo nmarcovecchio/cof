@@ -107,6 +107,10 @@ bool modemLineInteresting(const String& line) {
          upper.indexOf("NO ANSWER") >= 0 || upper.indexOf("CHUP") >= 0;
 }
 static void appendModemLogLine(String entry) {
+  // Do not record the AT traffic of publishing uart-debug dumps themselves.
+  if (uartDebugPublishing) {
+    return;
+  }
   entry.replace("\r", " ");
   entry.replace("\n", " | ");
   entry.trim();

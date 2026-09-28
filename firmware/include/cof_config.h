@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.103"
+#define COF_FIRMWARE_VERSION "0.2.104"
 
 // Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
 #define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
@@ -221,3 +221,6 @@ constexpr uint16_t kModemUartDebugPublishMax = 3500;
 constexpr uint8_t kModemUartDebugChunkQueue = 6;
 constexpr uint16_t kModemUartDebugLineMax = 180;
 constexpr uint32_t kModemUartDebugIntervalMs = 30UL * 1000UL;
+// Safety cap: stop sealing/publishing dumps if we exceed this in a rolling minute
+// (breaks feedback storms if self-log suppression ever regresses).
+constexpr uint8_t kModemUartDebugMaxPerMinute = 20;

@@ -113,6 +113,7 @@ bool modemUartDebug = false;
 uint32_t lastModemUartDebugPublishMs = 0;
 bool pendingModemUartDebugPublish = false;
 String pendingModemUartDebugReason;
+bool uartDebugPublishing = false;
 bool lastLteFail = false;
 LteIpStack lteIpStack = kLteStackUnknown;
 String lteTraceLog;

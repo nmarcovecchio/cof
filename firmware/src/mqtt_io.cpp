@@ -466,6 +466,21 @@ void publishLteDataTrace() {
 static String uartDebugChunks[kModemUartDebugChunkQueue];
 static String uartDebugChunkReasons[kModemUartDebugChunkQueue];
 static uint8_t uartDebugChunkCount = 0;
+static uint8_t uartDebugPublishCountWindow = 0;
+static uint32_t uartDebugPublishWindowStartMs = 0;
+
+static bool uartDebugRateAllow() {
+  const uint32_t now = millis();
+  if (uartDebugPublishWindowStartMs == 0 ||
+      now - uartDebugPublishWindowStartMs >= 60UL * 1000UL) {
+    uartDebugPublishWindowStartMs = now == 0 ? 1 : now;
+    uartDebugPublishCountWindow = 0;
+  }
+  if (uartDebugPublishCountWindow >= kModemUartDebugMaxPerMinute) {
+    return false;
+  }
+  return true;
+}
 
 static void uartDebugEnqueueChunk(const String& chunk, const char* reason) {
   if (chunk.length() == 0) {
@@ -514,15 +529,16 @@ static bool uartDebugSealOneFromLive(const char* reason) {
 }
 
 void sealModemUartDebugChunk(const char* reason) {
-  if (!modemUartDebug) {
+  if (!modemUartDebug || uartDebugPublishing) {
     return;
   }
-  const char* tag = reason != nullptr ? reason : "seal";
-  // Seal enough that the live buffer can accept more lines, or everything on flush.
+  if (!uartDebugRateAllow()) {
+    return;
+  }
+  const char* tag = reason != nullptr ? reason : "overflow";
   if (modemCallLog.length() == 0) {
     return;
   }
-  // Always seal at least one chunk; if still over max, keep sealing.
   do {
     if (!uartDebugSealOneFromLive(tag)) {
       break;
@@ -531,7 +547,7 @@ void sealModemUartDebugChunk(const char* reason) {
 }
 
 void snapshotModemUartDebug(const char* reason) {
-  if (!modemUartDebug) {
+  if (!modemUartDebug || uartDebugPublishing) {
     return;
   }
   const char* tag = reason != nullptr ? reason : "snapshot";
@@ -551,6 +567,10 @@ static bool publishOneUartDebugChunk() {
   if (!state.mqttConnected || uartDebugChunkCount == 0) {
     return false;
   }
+  if (!uartDebugRateAllow()) {
+    Serial.println("[uart-debug] rate limit, pause publish");
+    return false;
+  }
   const String& body = uartDebugChunks[0];
   const String reason = uartDebugChunkReasons[0].length() > 0 ? uartDebugChunkReasons[0] : String("chunk");
   JsonDocument doc;
@@ -561,7 +581,11 @@ static bool publishOneUartDebugChunk() {
   doc["message"] = withFirmware(String("UART debug ") + reason);
   doc["modem_log"] = body;  // verbatim sealed text
   doc["uart_debug"] = true;
-  if (!publishMqttJson("event", doc, false, 1)) {
+  // Suppress append while this PUB runs so TOPIC/PAYLOAD/PUB cannot re-feed the log.
+  uartDebugPublishing = true;
+  const bool ok = publishMqttJson("event", doc, false, 1);
+  uartDebugPublishing = false;
+  if (!ok) {
     return false;
   }
   for (uint8_t i = 1; i < uartDebugChunkCount; i++) {
@@ -573,6 +597,7 @@ static bool publishOneUartDebugChunk() {
     uartDebugChunkReasons[uartDebugChunkCount - 1] = "";
     uartDebugChunkCount--;
   }
+  uartDebugPublishCountWindow++;
   lastModemUartDebugPublishMs = millis() == 0 ? 1 : millis();
   return true;
 }
@@ -587,15 +612,17 @@ void serviceModemUartDebug() {
     return;
   }
 
-  // Urgent / drop: seal any remaining live text, then drain the queue.
+  // Urgent drain: publish already-sealed chunks. Any live text that arrived
+  // after the snapshot is sealed as "overflow"/"residual" — never re-use the
+  // sticky snapshot reason (e.g. atready) or every CMQTT PUB becomes "atready".
   if (pendingModemUartDebugPublish) {
-    while (modemCallLog.length() > 0) {
-      uartDebugSealOneFromLive(pendingModemUartDebugReason.length() > 0
-                                   ? pendingModemUartDebugReason.c_str()
-                                   : "snapshot");
+    while (modemCallLog.length() > 0 && uartDebugRateAllow()) {
+      if (!uartDebugSealOneFromLive("overflow")) {
+        break;
+      }
     }
     if (publishOneUartDebugChunk()) {
-      if (uartDebugChunkCount == 0) {
+      if (uartDebugChunkCount == 0 && modemCallLog.length() == 0) {
         pendingModemUartDebugPublish = false;
         pendingModemUartDebugReason = "";
       }
@@ -615,6 +642,9 @@ void serviceModemUartDebug() {
     return;
   }
   if (modemCallLog.length() == 0) {
+    return;
+  }
+  if (!uartDebugRateAllow()) {
     return;
   }
   // Periodic: seal live buffer intact, then publish.
