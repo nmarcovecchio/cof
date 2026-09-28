@@ -77,14 +77,8 @@ void initOtaRollbackGuard() {
   }
   if (otaState == ESP_OTA_IMG_PENDING_VERIFY) {
     otaConfirmPending = true;
-    // Lab dumps after every OTA: this flag is RAM-only and normally off, so
-    // without this the first boot of a new image has no UART trail for SMS/MQTT
-    // debug. Manual modem_uart_debug OFF still works for the rest of the boot.
-    modemUartDebug = true;
-    lastModemUartDebugPublishMs = 0;
-    appendModemLogForced("=== uart debug ON (post-OTA) ===");
+    // UART debug is forced ON after prefs load (setup) so NVS is open.
     Serial.println("[ota] new image pending verify; will confirm once healthy");
-    Serial.println("[ota] modem UART debug ON for this boot");
   }
 }
 // Confirm the slot when the device proves it works. Never confirm early: doing
@@ -146,6 +140,8 @@ void loadSavedMqttConfig() {
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.observedVoicePath = preferences.getString("voiceOk", "");
   state.voiceIdentity = preferences.getString("voiceId", "");
+  // Survives reboot until Flask sends modem_uart_debug OFF (or OTA forces ON).
+  modemUartDebug = preferences.getBool("uartDbg", false);
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
   if (state.mqttConfigured) {
@@ -245,6 +241,10 @@ void publishCommandAck() {
   doc["status"] = pendingCommandStatus;
   doc["message"] = pendingCommandMessage;
   doc["firmware"] = COF_FIRMWARE_VERSION;
+  if (pendingCommandName == "modem_uart_debug") {
+    doc["enabled"] = modemUartDebug;
+    doc["modem_uart_debug"] = modemUartDebug;
+  }
   publishMqttJson("ack", doc, false, 1);
 }
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs) {

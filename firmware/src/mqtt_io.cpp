@@ -107,14 +107,10 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingCommandMessage = "Status report scheduled";
       } else if (pendingCommandName == "modem_uart_debug") {
         const bool enable = doc["enabled"] | false;
-        modemUartDebug = enable;
-        lastModemUartDebugPublishMs = 0;
+        setModemUartDebug(enable, enable ? "enabled" : "disabled");
         pendingCommandStatus = "accepted";
-        pendingCommandMessage = enable ? "UART debug ON (dump every 30s)" : "UART debug OFF";
-        appendModemLogForced(enable ? "=== uart debug ON ===" : "=== uart debug OFF ===");
-        if (enable) {
-          snapshotModemUartDebug("enabled");
-        }
+        pendingCommandMessage = enable ? "UART debug ON (persisted, dump every 30s)"
+                                       : "UART debug OFF (persisted)";
       } else if (pendingCommandName == "test_call") {
         if (pendingTestCallCommand) {
           pendingCommandStatus = "rejected";
@@ -299,6 +295,7 @@ void publishDeviceStatus(const char* status, bool retained) {
   doc["modem_ready"] = state.modemReady;
   doc["sim_ready"] = state.simReady;
   doc["lte_signal"] = state.signalQuality;
+  doc["modem_uart_debug"] = modemUartDebug;
   doc["reported_config_version"] = state.reportedConfigVersion;
   doc["reset_reason"] = state.bootResetReason;
 
@@ -324,6 +321,7 @@ void publishDeviceStatus(const char* status, bool retained) {
   discovered["sht31"] = state.sht31Ready;
   discovered["pcf8574"] = state.pcfReady;
   discovered["modem"] = state.modemReady;
+  discovered["modem_uart_debug"] = modemUartDebug;
   fillCellularJson(discovered["cellular"].to<JsonObject>());
   discovered["ds18b20_count"] = ds18b20.getDeviceCount();
   JsonArray ds18b20Addresses = discovered["ds18b20"].to<JsonArray>();
@@ -468,6 +466,21 @@ static String uartDebugChunkReasons[kModemUartDebugChunkQueue];
 static uint8_t uartDebugChunkCount = 0;
 static uint8_t uartDebugPublishCountWindow = 0;
 static uint32_t uartDebugPublishWindowStartMs = 0;
+
+void setModemUartDebug(bool enable, const char* reason) {
+  modemUartDebug = enable;
+  preferences.putBool("uartDbg", enable);
+  lastModemUartDebugPublishMs = 0;
+  appendModemLogForced(enable ? "=== uart debug ON ===" : "=== uart debug OFF ===");
+  Serial.printf("[uart-debug] %s (persisted)\n", enable ? "ON" : "OFF");
+  if (enable) {
+    snapshotModemUartDebug(reason != nullptr ? reason : "enabled");
+  } else {
+    pendingModemUartDebugPublish = false;
+    pendingModemUartDebugReason = "";
+    uartDebugChunkCount = 0;
+  }
+}
 
 static bool uartDebugRateAllow() {
   const uint32_t now = millis();
@@ -668,6 +681,7 @@ bool publishTelemetryNow() {
   doc["wifi"] = state.wifiConnected;
   fillNetworkJson(doc["network"].to<JsonObject>());
   fillConnectivityJson(doc);
+  doc["modem_uart_debug"] = modemUartDebug;
   if (isnan(state.dsTemperature)) {
     doc["temperature_1"] = nullptr;
   } else {

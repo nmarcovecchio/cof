@@ -517,6 +517,9 @@ def device_live_payload(device) -> dict:
     discovered = getattr(device, "discovered", None) or {}
     cell = discovered.get("cellular") if isinstance(discovered, dict) else None
     net = discovered.get("network") if isinstance(discovered, dict) else None
+    uart_debug = None
+    if isinstance(discovered, dict) and "modem_uart_debug" in discovered:
+        uart_debug = bool(discovered.get("modem_uart_debug"))
     cell_payload = None
     if isinstance(cell, dict):
         cell_payload = dict(cell)
@@ -532,6 +535,7 @@ def device_live_payload(device) -> dict:
             network.get("badge_text") or "",
             str(getattr(device, "status", "") or ""),
             str((net or {}).get("active") if isinstance(net, dict) else ""),
+            "1" if uart_debug else ("0" if uart_debug is False else "x"),
         ]
     )
     return {
@@ -549,6 +553,7 @@ def device_live_payload(device) -> dict:
         "network": network,
         "network_detail": net if isinstance(net, dict) else {},
         "cellular": cell_payload,
+        "modem_uart_debug": uart_debug,
         "last_readings": readings,
         "latest_telemetry_at": latest_at,
     }
@@ -1586,9 +1591,9 @@ def create_app() -> Flask:
         return send_device_command(
             device_uid,
             "modem_uart_debug",
-            "UART debug ON: dumps every 30s to the Modem panel."
+            "UART debug ON: dumps every 30s (persisted; OTA also turns it on)."
             if enabled
-            else "UART debug OFF.",
+            else "UART debug OFF (persisted).",
             extra={"enabled": enabled},
         )
 

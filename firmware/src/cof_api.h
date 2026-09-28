@@ -77,6 +77,9 @@ void appendModemLog(char direction, const String& text);
 // Records a line even when no call/LTE handshake is in progress. Used so the
 // device page shows CMQTT URCs and SMS AT that the gated logger drops.
 void appendModemLogForced(const String& text);
+// Persist + apply UART debug (NVS). Only the MQTT Flask command should pass
+// enable=false; OTA boot forces true.
+void setModemUartDebug(bool enable, const char* reason);
 // Queue a modem_uart_debug event with the current log (lab dumps).
 void snapshotModemUartDebug(const char* reason);
 // With debug ON: move live UART text into the outbound chunk queue (no wipe of

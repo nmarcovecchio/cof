@@ -550,17 +550,23 @@
       <form method="post" action="{{ url_for('device_command_modem_uart_debug', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
         <input type="hidden" name="enabled" value="true">
-        <button class="btn btn-outline-warning" type="submit" title="Dump UART cada 30s al panel Modem (RAM; se apaga al reboot)">
+        <button class="btn btn-outline-warning" type="submit" title="Dump UART cada 30s al panel Modem. Queda ON tras reboot; OTA lo prende.">
           <i class="bi bi-bug"></i> UART debug ON
         </button>
       </form>
       <form method="post" action="{{ url_for('device_command_modem_uart_debug', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
         <input type="hidden" name="enabled" value="false">
-        <button class="btn btn-outline-secondary" type="submit">
+        <button class="btn btn-outline-secondary" type="submit" title="Apaga y persiste. Solo Flask puede apagarlo.">
           UART debug OFF
         </button>
       </form>
+      {% set uart_dbg = (device.discovered or {}).get('modem_uart_debug') if device.discovered else none %}
+      <span id="device-uart-debug-badge"
+            class="badge align-self-center {% if uart_dbg %}text-bg-warning{% elif uart_dbg is sameas false %}text-bg-secondary{% else %}text-bg-light text-muted border{% endif %}"
+            title="Estado reportado por el equipo (NVS)">
+        UART {% if uart_dbg %}ON{% elif uart_dbg is sameas false %}OFF{% else %}?{% endif %}
+      </span>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">
@@ -1440,6 +1446,21 @@ window.cofBuildPager = function (host, page, pages, onSelect) {
 
     setText('device-firmware', data.firmware_version || '-');
     setText('device-ip', data.ip_address || '-');
+
+    const uartBadge = document.getElementById('device-uart-debug-badge');
+    if (uartBadge) {
+      const on = data.modem_uart_debug;
+      if (on === true) {
+        uartBadge.className = 'badge align-self-center text-bg-warning';
+        uartBadge.textContent = 'UART ON';
+      } else if (on === false) {
+        uartBadge.className = 'badge align-self-center text-bg-secondary';
+        uartBadge.textContent = 'UART OFF';
+      } else {
+        uartBadge.className = 'badge align-self-center text-bg-light text-muted border';
+        uartBadge.textContent = 'UART ?';
+      }
+    }
 
     const lastSeen = document.getElementById('device-last-seen');
     if (lastSeen) {

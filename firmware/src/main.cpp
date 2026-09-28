@@ -733,6 +733,11 @@ void setup() {
 
   preferences.begin("cof", false);
   loadSavedMqttConfig();
+  // Every OTA boot: force UART debug ON and persist — only Flask can turn it off.
+  if (otaConfirmPending) {
+    setModemUartDebug(true, "post-ota");
+    Serial.println("[ota] modem UART debug ON (persisted)");
+  }
   pinMode(COF_PIN_ZMPT_ADC, INPUT);
 
   Wire.begin(COF_PIN_I2C_SDA, COF_PIN_I2C_SCL);

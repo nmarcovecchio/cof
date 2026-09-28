@@ -221,8 +221,8 @@ extern bool pendingMqttBounce;
 extern bool pendingNetworkStatusReport;
 extern uint32_t lastLteAttemptMs;
 extern bool reportLteProgress;
-// Opt-in UART dump to the web (MQTT command modem_uart_debug). RAM only;
-// auto-enabled on the first boot after OTA (PENDING_VERIFY).
+// Opt-in UART dump to the web (MQTT command modem_uart_debug). Persisted in
+// NVS (`uartDbg`); post-OTA forces ON. Only Flask can turn it OFF.
 extern bool modemUartDebug;
 extern uint32_t lastModemUartDebugPublishMs;
 extern bool pendingModemUartDebugPublish;

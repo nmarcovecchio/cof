@@ -229,6 +229,8 @@ def persist_message(topic, payload):
                         payload=payload,
                     )
                 )
+                if command == "modem_uart_debug":
+                    store_modem_uart_debug(device, payload)
 
             db.session.commit()
         except Exception:
@@ -277,6 +279,7 @@ def store_network_status(device, payload):
         wifi = bool(payload.get("wifi"))
         ip = payload.get("ip") or payload.get("ip_address") or ""
         if not eth and not wifi and ip in ("", "-", None):
+            store_modem_uart_debug(device, payload)
             return
         network = {
             "active": "ethernet" if eth else ("wifi" if wifi else "none"),
@@ -291,6 +294,29 @@ def store_network_status(device, payload):
         }
     discovered = dict(device.discovered or {})
     discovered["network"] = network
+    if "modem_uart_debug" in payload:
+        discovered["modem_uart_debug"] = bool(payload.get("modem_uart_debug"))
+    elif isinstance(payload.get("discovered"), dict) and "modem_uart_debug" in payload["discovered"]:
+        discovered["modem_uart_debug"] = bool(payload["discovered"].get("modem_uart_debug"))
+    device.discovered = discovered
+    flag_modified(device, "discovered")
+
+
+def store_modem_uart_debug(device, payload):
+    """Merge modem_uart_debug flag into device.discovered (telemetry/ack/status)."""
+    value = None
+    if "modem_uart_debug" in payload:
+        value = bool(payload.get("modem_uart_debug"))
+    elif "enabled" in payload and payload.get("command") == "modem_uart_debug":
+        value = bool(payload.get("enabled"))
+    elif isinstance(payload.get("discovered"), dict) and "modem_uart_debug" in payload["discovered"]:
+        value = bool(payload["discovered"].get("modem_uart_debug"))
+    if value is None:
+        return
+    discovered = dict(device.discovered or {})
+    if discovered.get("modem_uart_debug") is value:
+        return
+    discovered["modem_uart_debug"] = value
     device.discovered = discovered
     flag_modified(device, "discovered")
 
