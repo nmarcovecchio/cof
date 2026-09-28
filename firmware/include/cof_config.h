@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.101"
+#define COF_FIRMWARE_VERSION "0.2.102"
 
 // Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
 #define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
@@ -178,6 +178,8 @@ constexpr uint32_t kLteDataEventMinIntervalMs = 30UL * 1000UL;
 // publishMqttJson. Queue a bounded number and flush them on reconnect.
 constexpr size_t kDeferredEventMax = 8;
 constexpr uint32_t kTelemetryPublishIntervalMs = 60000;
+// After boot / *ATREADY / reclaim / LTE MQTT up: no ATD/CMGS until this settles.
+constexpr uint32_t kModemWorkSettleMs = 20UL * 1000UL;
 constexpr uint32_t kCellularStatusIntervalMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kManifestInitialDelayMs = 15000;
 constexpr uint32_t kManifestIntervalMs = 60UL * 60UL * 1000UL;

@@ -180,6 +180,7 @@ void noteModemRebootDetected() {
   }
   Serial.println("[modem] *ATREADY detected: modem rebooted, flagging for re-init");
   noteLteSessionDrop("atready");
+  noteModemUnstable("atready");
   state.modemReady = false;
   state.simReady = false;
   state.networkRegistered = false;

@@ -182,6 +182,8 @@ extern uint32_t brokerResolveStartedMs;
 extern uint32_t lastBrokerResolveMs;
 extern String brokerResolveName;
 extern uint32_t lastTelemetryPublishMs;
+// 0 = CS work blocked; else millis when base-ready settle started.
+extern uint32_t modemStableSinceMs;
 extern uint32_t lastCellularStatusMs;
 extern uint32_t lastManifestMs;
 extern bool didInitialManifestCheck;
@@ -201,6 +203,7 @@ extern bool pendingTestCallCommand;
 extern String pendingTestCallPhone;
 extern String pendingTestCallAudioSha;
 extern String pendingTestCallCommandId;
+extern bool pendingTestCallIsAdmin;
 extern bool reportTestCallProgress;
 extern String pendingCallUrcs;
 extern String pendingModemUrcs;

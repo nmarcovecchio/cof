@@ -116,25 +116,36 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
           snapshotModemUartDebug("enabled");
         }
       } else if (pendingCommandName == "test_call") {
-        pendingTestCallCommand = true;
-        pendingTestCallPhone = doc["phone"] | "";
-        pendingTestCallPhone.trim();
-        // audio_url / audio_format are still sent by the server but no longer
-        // read: the call only ever plays the pre-recorded file on the modem.
-        pendingTestCallAudioSha = doc["call_audio"]["text_sha256"] | "";
-        pendingTestCallAudioSha.trim();
-        pendingTestCallCommandId = pendingCommandId;
-        pendingCommandStatus = "accepted";
-        pendingCommandMessage = "Test call scheduled";
+        if (pendingTestCallCommand) {
+          pendingCommandStatus = "rejected";
+          pendingCommandMessage = "Call already pending";
+        } else {
+          pendingTestCallCommand = true;
+          pendingTestCallPhone = doc["phone"] | "";
+          pendingTestCallPhone.trim();
+          // audio_url / audio_format are still sent by the server but no longer
+          // read: the call only ever plays the pre-recorded file on the modem.
+          pendingTestCallAudioSha = doc["call_audio"]["text_sha256"] | "";
+          pendingTestCallAudioSha.trim();
+          pendingTestCallCommandId = pendingCommandId;
+          pendingTestCallIsAdmin = true;
+          pendingCommandStatus = "accepted";
+          pendingCommandMessage = "Test call scheduled";
+        }
       } else if (pendingCommandName == "test_sms") {
-        pendingTestSmsCommand = true;
-        pendingTestSmsPhone = doc["phone"] | "";
-        pendingTestSmsPhone.trim();
-        pendingTestSmsText = doc["text"] | "CallOnFail prueba SMS";
-        pendingTestSmsText.trim();
-        pendingTestSmsCommandId = pendingCommandId;
-        pendingCommandStatus = "accepted";
-        pendingCommandMessage = "Test SMS scheduled";
+        if (pendingTestSmsCommand) {
+          pendingCommandStatus = "rejected";
+          pendingCommandMessage = "SMS already pending";
+        } else {
+          pendingTestSmsCommand = true;
+          pendingTestSmsPhone = doc["phone"] | "";
+          pendingTestSmsPhone.trim();
+          pendingTestSmsText = doc["text"] | "CallOnFail prueba SMS";
+          pendingTestSmsText.trim();
+          pendingTestSmsCommandId = pendingCommandId;
+          pendingCommandStatus = "accepted";
+          pendingCommandMessage = "Test SMS scheduled";
+        }
       } else if (pendingCommandName == "set_wifi") {
         const String ssid = doc["ssid"] | "";
         const String password = doc["password"] | "";
@@ -524,10 +535,10 @@ void serviceModemUartDebug() {
   }
   publishModemUartDebugNow("periodic");
 }
-void publishTelemetryNow() {
+bool publishTelemetryNow() {
   if (!state.mqttConnected) {
     Serial.println("[mqtt] telemetry skipped, not connected");
-    return;
+    return false;
   }
 
   JsonDocument doc;
@@ -566,7 +577,7 @@ void publishTelemetryNow() {
   // QoS 1 on the modem. The A76XX examples use it, and a QoS 0 CMQTTPUB that
   // never emits +CMQTTPUB was a candidate for the once-a-minute teardown
   // (telemetry default is 60s). LAN PubSubClient ignores this argument.
-  publishMqttJson("telemetry", doc, false, state.lteMqttTransport ? 1 : 0);
+  return publishMqttJson("telemetry", doc, false, state.lteMqttTransport ? 1 : 0);
 }
 #if COF_LTE_MQTT_NATIVE
 // Native CMQTT connect/reconnect path for the LTE transport. Mirrors the LAN
@@ -707,8 +718,9 @@ static void connectMqttNativeIfNeeded() {
   lastMqttOkMs = millis();
   lastSilenceProbeMs = 0;
   publishDeviceStatus("online", true);
-  publishTelemetryNow();
-  lastTelemetryPublishMs = millis();
+  if (publishTelemetryNow()) {
+    lastTelemetryPublishMs = millis();
+  }
   // Snapshot after the first publishes: their sendAT() flush is what usually
   // catches the async +CMQTTSUB / +CMQTTRX that follow the SUB prompt OK.
   // A test SMS snaps its own trace before reconnecting; keep that message and
@@ -906,8 +918,9 @@ void connectMqttIfNeeded() {
   mqttClient.subscribe(mqttTopic("config/desired").c_str(), 1);
   mqttClient.subscribe(mqttTopic("command").c_str(), 1);
   publishDeviceStatus("online", true);
-  publishTelemetryNow();
-  lastTelemetryPublishMs = millis();
+  if (publishTelemetryNow()) {
+    lastTelemetryPublishMs = millis();
+  }
   publishLteDataTrace();
   lastCellularStatusMs = millis();
   setStatus("MQTT OK");

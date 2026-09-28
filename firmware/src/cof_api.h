@@ -62,6 +62,9 @@ void releaseLteMqttForModem();
 void takeModemForVoiceSms(ModemUartOwner owner);
 void releaseModemToMqtt(bool wasOnLte);
 bool modemUartOwnedByMqtt();
+// General CS gate: no call/SMS until modem is past ATREADY/boot/LTE bring-up settle.
+void noteModemUnstable(const char* reason);
+bool modemCsWorkAllowed();
 String resolveLteMqttPeer(const char* host);
 void restorePacketServices();
 void stopLtePdp();
@@ -134,7 +137,7 @@ bool publishDeviceEvent(const char* type, const char* severity, const String& me
 void publishDeviceStatus(const char* status, bool retained = true);
 void publishLteDataTrace();
 bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = false, uint8_t qos = 0);
-void publishTelemetryNow();
+bool publishTelemetryNow();
 void requestMqttBounce(const char* reason);
 
 // ---- owned by net_paths -------------------------------------

@@ -349,6 +349,7 @@ void stopLtePdp() {
   lastLteRetryDelayMs = kLteRetryIntervalMs;
   lteMqttConnectFails = 0;
   pendingNetworkStatusReport = true;
+  noteModemUnstable("stop-lte");
 }
 void releaseLteMqttForModem() {
   if (!state.lteMqttTransport) {
@@ -368,12 +369,55 @@ bool modemUartOwnedByMqtt() {
   return state.modemUartOwner == kModemUartMqtt;
 }
 
+void noteModemUnstable(const char* reason) {
+  if (modemStableSinceMs != 0) {
+    Serial.printf("[modem] CS unstable (%s)\n", reason != nullptr ? reason : "?");
+  }
+  modemStableSinceMs = 0;
+}
+
+static bool modemBaseReadyForCs() {
+  if (!modemUartOwnedByMqtt()) {
+    return false;
+  }
+  if (state.callInProgress || state.otaInProgress || state.audioSyncInProgress) {
+    return false;
+  }
+  if (modemRebootUrcSeen) {
+    return false;
+  }
+  if (!state.modemReady || !state.simReady || !state.networkRegistered) {
+    return false;
+  }
+  // Cellular-only sites: wait until MQTT is up so we never ATD/CMGS during
+  // boot, *ATREADY recovery, or LTE/CMQTT bring-up. LAN may still call/SMS
+  // while MQTT is reconnecting (modem UART is free of CMQTT).
+  if (!lanConnected() && !state.mqttConnected) {
+    return false;
+  }
+  return true;
+}
+
+bool modemCsWorkAllowed() {
+  if (!modemBaseReadyForCs()) {
+    modemStableSinceMs = 0;
+    return false;
+  }
+  if (modemStableSinceMs == 0) {
+    modemStableSinceMs = millis() == 0 ? 1 : millis();
+    Serial.println("[modem] CS settle started");
+    return false;
+  }
+  return (millis() - modemStableSinceMs) >= kModemWorkSettleMs;
+}
+
 void takeModemForVoiceSms(ModemUartOwner owner) {
   // Voice and SMS own the UART until releaseModemToMqtt(). MQTT must not
   // cmqttLoop / CONNECT / PUB on LTE while this is set.
   if (owner != kModemUartVoice && owner != kModemUartSms) {
     owner = kModemUartSms;
   }
+  noteModemUnstable(owner == kModemUartVoice ? "take-voice" : "take-sms");
   state.modemUartOwner = owner;
   if (!state.lteMqttTransport) {
     return;
@@ -398,6 +442,7 @@ void releaseModemToMqtt(bool wasOnLte) {
   }
   state.modemUartOwner = kModemUartMqtt;
   lastMqttReconnectMs = 0;
+  noteModemUnstable("release-cs");
 }
 
 void restorePacketServices() {

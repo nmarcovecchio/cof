@@ -71,6 +71,7 @@ uint32_t lastBrokerResolveMs = 0;
 // whole async lookup, and state.mqttHost can be rewritten by a config apply.
 String brokerResolveName;
 uint32_t lastTelemetryPublishMs = 0;
+uint32_t modemStableSinceMs = 0;
 uint32_t lastCellularStatusMs = 0;
 uint32_t lastManifestMs = 0;
 bool didInitialManifestCheck = false;
@@ -90,6 +91,7 @@ bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioSha = "";
 String pendingTestCallCommandId = "";
+bool pendingTestCallIsAdmin = false;
 bool reportTestCallProgress = false;
 String pendingCallUrcs;
 String pendingModemUrcs;
@@ -445,8 +447,16 @@ void handleButton() {
     const uint32_t heldMs = now - buttonPressedAtMs;
     if (heldMs > 3000) {
       checkManifest(true);
+    } else if (pendingTestCallCommand) {
+      setStatus("Call pending");
     } else {
-      placeCallAndPlayAudio();
+      // Same CS gate as MQTT jobs: hold until modem STABLE, do not dial mid-ATREADY.
+      pendingTestCallCommand = true;
+      pendingTestCallPhone = "";
+      pendingTestCallAudioSha = "";
+      pendingTestCallCommandId = "";
+      pendingTestCallIsAdmin = false;
+      setStatus("Call queued");
     }
   }
 
@@ -666,7 +676,16 @@ void handleSerialCommand(const String& command) {
       break;
     case 'c':
     case 'C':
-      placeCallAndPlayAudio();
+      if (pendingTestCallCommand) {
+        Serial.println("[serial] call already pending");
+      } else {
+        pendingTestCallCommand = true;
+        pendingTestCallPhone = "";
+        pendingTestCallAudioSha = "";
+        pendingTestCallCommandId = "";
+        pendingTestCallIsAdmin = false;
+        Serial.println("[serial] call queued (waits modem STABLE)");
+      }
       break;
     case 'r':
     case 'R':
@@ -801,8 +820,7 @@ void loop() {
     runModemProbe(probeCommandId);
   }
 
-  if (pendingTestSmsCommand && !state.callInProgress && !state.otaInProgress &&
-      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
+  if (pendingTestSmsCommand && modemCsWorkAllowed()) {
     const String smsPhone = pendingTestSmsPhone;
     const String smsText = pendingTestSmsText;
     const String smsCommandId = pendingTestSmsCommandId;
@@ -822,21 +840,24 @@ void loop() {
     publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId);
   }
 
-  if (pendingTestCallCommand && !state.callInProgress && !state.otaInProgress &&
-      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
+  if (pendingTestCallCommand && modemCsWorkAllowed()) {
     const String callPhone = pendingTestCallPhone;
     const String callAudioSha = pendingTestCallAudioSha;
     const String callCommandId = pendingTestCallCommandId;
+    const bool callAdmin = pendingTestCallIsAdmin;
     pendingTestCallCommand = false;
     pendingTestCallPhone = "";
     pendingTestCallAudioSha = "";
     pendingTestCallCommandId = "";
-    reportTestCallProgress = true;
-    const String result = placeCallAndPlayAudio(callPhone, true, callAudioSha);
+    pendingTestCallIsAdmin = false;
+    reportTestCallProgress = callAdmin;
+    const String result = placeCallAndPlayAudio(callPhone, callAdmin, callAudioSha);
     reportTestCallProgress = false;
     connectMqttIfNeeded();
-    const bool ok = result.startsWith("Call done");
-    publishTestCallResult(result, ok, callCommandId);
+    if (callAdmin) {
+      const bool ok = result.startsWith("Call done");
+      publishTestCallResult(result, ok, callCommandId);
+    }
   }
 
   // Use a fresh millis(): connectMqttIfNeeded() can spend seconds on CMQTT AT and
@@ -847,8 +868,9 @@ void loop() {
     const uint32_t telemetryNow = millis();
     if (state.mqttConnected &&
         telemetryNow - lastTelemetryPublishMs >= state.telemetryIntervalMs) {
-      lastTelemetryPublishMs = telemetryNow;
-      publishTelemetryNow();
+      if (publishTelemetryNow()) {
+        lastTelemetryPublishMs = millis();
+      }
     }
   }
 
@@ -867,8 +889,8 @@ void loop() {
     pollModem();
   }
 
-  if (now - lastSmsPollMs >= kSmsPollIntervalMs && !state.callInProgress && !state.audioSyncInProgress &&
-      !state.lteMqttTransport && modemUartOwnedByMqtt() &&
+  if (now - lastSmsPollMs >= kSmsPollIntervalMs && modemCsWorkAllowed() &&
+      !state.lteMqttTransport &&
       !pendingTestSmsCommand && !pendingTestCallCommand) {
     lastSmsPollMs = now;
     pollIncomingSms();

@@ -864,6 +864,10 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
 String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha) {
   // Validate first; only then take the UART mutex. Early exits used to DISC
   // MQTT and leave reclaim to the caller, and could break LAN checkManifest.
+  if (!modemCsWorkAllowed()) {
+    setStatus("Modem not ready");
+    return "Modem not ready";
+  }
   if (!adminTest && !COF_ENABLE_CALLS) {
     setStatus("Calls disabled");
     Serial.println("[call] Set COF_ENABLE_CALLS to 1 and COF_PHONE_NUMBER before testing calls.");
@@ -1026,6 +1030,10 @@ String transmitSms(const String& phone, const String& body) {
   return "SMS sent";
 }
 String sendTestSms(const String& phoneOverride, const String& text) {
+  if (!modemCsWorkAllowed()) {
+    setStatus("Modem not ready");
+    return "Modem not ready";
+  }
   if (!state.modemReady) {
     initModem();
   }
