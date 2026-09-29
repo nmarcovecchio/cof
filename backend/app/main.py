@@ -1377,8 +1377,9 @@ def create_app() -> Flask:
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        header = ["fecha_hora", "device_id", "via"]
+        header = ["fecha_hora", "device_id"]
         header.extend(item["label"] + (f" ({item['unit']})" if item["unit"] else "") for item in series)
+        header.append("fuente")
         header.extend(label for _, label in AUX_COLUMNS)
         writer.writerow(header)
         # Each column must honour its own window: without this a reassigned
@@ -1396,7 +1397,6 @@ def create_app() -> Flask:
             line = [
                 row.received_at.isoformat() if row.received_at else "",
                 device.device_uid,
-                extract_mqtt_path(payload) or "",
             ]
             at = _to_epoch(row.received_at)
             for item in series:
@@ -1405,6 +1405,7 @@ def create_app() -> Flask:
                     line.append(None)
                 else:
                     line.append(extract_value(payload, item))
+            line.append(extract_mqtt_path(payload) or "")
             line.extend(extract_aux_values(payload).values())
             writer.writerow(line)
 

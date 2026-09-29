@@ -544,7 +544,7 @@ def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int
     for row in rows:
         payload = row.payload if isinstance(row.payload, dict) else {}
         at = _to_epoch(getattr(row, "received_at", None))
-        values = {"_path": extract_mqtt_path(payload)}
+        values = {}
         for item in series:
             starts, ends = spans[item["id"]]
             if at is None or (starts is not None and at < starts) or (
@@ -553,6 +553,7 @@ def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int
                 values[item["id"]] = None
             else:
                 values[item["id"]] = extract_value(payload, item)
+        values["_path"] = extract_mqtt_path(payload)
         out_rows.append(
             {
                 "t": _iso_utc(getattr(row, "received_at", None)),
@@ -561,16 +562,14 @@ def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int
         )
 
     columns = [
-        {"id": "_path", "label": "Via", "unit": ""},
-    ]
-    columns.extend(
         {
             "id": item["id"],
             "label": item.get("label") or item["id"],
             "unit": item.get("unit") or "",
         }
         for item in series
-    )
+    ]
+    columns.append({"id": "_path", "label": "Fuente", "unit": "", "kind": "path"})
     return {
         "columns": columns,
         "rows": out_rows,

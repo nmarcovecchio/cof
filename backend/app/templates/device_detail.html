@@ -1181,6 +1181,18 @@ window.cofBuildPager = function (host, page, pages, onSelect) {
     return String(value);
   }
 
+  function pathBadge(value) {
+    const label = (value || '').toString();
+    if (!label) {
+      return '<span class="text-muted">—</span>';
+    }
+    let tone = 'text-bg-secondary';
+    if (label === 'Ethernet') tone = 'text-bg-primary';
+    else if (label === 'WiFi') tone = 'text-bg-info';
+    else if (label === 'LTE') tone = 'text-bg-warning';
+    return '<span class="badge ' + tone + '">' + label + '</span>';
+  }
+
   function renderTable(data) {
     const columns = data.columns || [];
     tableHead.innerHTML = '';
@@ -1191,6 +1203,7 @@ window.cofBuildPager = function (host, page, pages, onSelect) {
     columns.forEach(function (col) {
       const th = document.createElement('th');
       th.textContent = col.label + (col.unit ? ' (' + col.unit + ')' : '');
+      if (col.kind === 'path') th.className = 'text-end';
       headRow.appendChild(th);
     });
     tableHead.appendChild(headRow);
@@ -1204,7 +1217,13 @@ window.cofBuildPager = function (host, page, pages, onSelect) {
       tr.appendChild(tdTime);
       columns.forEach(function (col) {
         const td = document.createElement('td');
-        td.textContent = formatCell(row.v ? row.v[col.id] : null);
+        const cell = row.v ? row.v[col.id] : null;
+        if (col.kind === 'path' || col.id === '_path') {
+          td.className = 'text-end';
+          td.innerHTML = pathBadge(cell);
+        } else {
+          td.textContent = formatCell(cell);
+        }
         tr.appendChild(td);
       });
       tableBody.appendChild(tr);
