@@ -449,6 +449,123 @@ void runModemProbe(const String& commandId) {
   publishModemProbe("end", true, commandId);
 }
 
+// --- CMQTT native-path probe ------------------------------------------------
+//
+// Answers the question the native MQTT design hinges on: does DISC (and the
+// REL/STOP teardown) reboot this module (*ATREADY)? The BACKLOG (0.2.106 /
+// 0.2.110) recorded that it does on the A7672, but that was lab history, not a
+// proof on THIS unit. This re-runs the exact sequence against a live session,
+// over LAN so the result still reaches the panel if the modem does reboot.
+//
+// LAN-only on purpose: on a LTE-only site the session being DISC'd is the only
+// link the device has, so a reboot would take the reporting path down with it.
+// Anonymous connect (the broker has allow_anonymous) with a distinct client id
+// so the LAN PubSubClient is not kicked off its own client id by the takeover.
+
+static String cmqttLinkSummary(const String& resp) {
+  // Read-only summary of AT+CMQTTCONNECT?. The raw line can carry the server
+  // address and credentials, so never publish it verbatim.
+  const int at = resp.indexOf("+CMQTTCONNECT: 0");
+  if (at < 0) {
+    return "no client 0";
+  }
+  const int nl = resp.indexOf('\n', at);
+  const String line = nl < 0 ? resp.substring(at) : resp.substring(at, nl);
+  return line.indexOf("://") >= 0 ? "up (tcp session)" : "down (no session)";
+}
+
+void runCmqttProbe(const String& commandId) {
+  if (!state.modemReady) {
+    publishModemProbe("modem not ready", false, commandId);
+    return;
+  }
+  if (state.lteMqttTransport) {
+    publishModemProbe("LTE MQTT is up; refusing to DISC the live session", false, commandId);
+    return;
+  }
+  if (!state.mqttConnected) {
+    publishModemProbe("requires LAN MQTT up (Ethernet/WiFi) so the result survives a reboot",
+                      false, commandId);
+    return;
+  }
+
+  publishModemProbe("start fw=" COF_FIRMWARE_VERSION, true, commandId);
+
+  // Own the UART for the whole probe. On LAN the modem is quiet (CMQTT was torn
+  // down by maintainLteFallback), and taking it also stops pollModem()'s AT from
+  // interleaving mid-probe. No DISC is sent on the way in (see lte_pdp.cpp).
+  takeModemForVoiceSms(kModemUartSms);
+
+  String resp;
+
+  // Read-only baseline.
+  if (sendAT("AT+CMQTTCONNECT?", "OK", 5000, &resp)) {
+    publishModemProbe("baseline " + cmqttLinkSummary(resp), true, commandId);
+  } else {
+    publishModemProbe("baseline CMQTTCONNECT? no answer", false, commandId);
+  }
+  if (sendAT("AT+CMQTTACCQ?", "OK", 5000, &resp)) {
+    publishModemProbe("clients " + probeFirstLine(resp), true, commandId);
+  }
+
+  // Bring up a live session so DISC targets a real broker link.
+  const bool started = sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp);
+  publishModemProbe(String("CMQTTSTART ") + (started ? "ok" : "fail " + probeFirstLine(resp)),
+                    started, commandId);
+
+  const bool acquired = sendAT("AT+CMQTTACCQ=0,\"cof-probe\"", "OK", 5000);
+  publishModemProbe(String("CMQTTACCQ ") + (acquired ? "ok" : "fail"), acquired, commandId);
+
+  const String server = String("tcp://") + state.mqttHost + ":" + String(state.mqttPort);
+  const bool connected =
+      sendAT(String("AT+CMQTTCONNECT=0,\"") + server + "\"," + String(kMqttKeepAliveSeconds) + ",1",
+             "+CMQTTCONNECT:", 20000, &resp);
+  publishModemProbe(String("CMQTTCONNECT ") + (connected ? "ok " + server : "fail " + probeFirstLine(resp)),
+                    connected, commandId);
+
+  if (sendAT("AT+CMQTTCONNECT?", "OK", 5000, &resp)) {
+    publishModemProbe("before DISC: " + cmqttLinkSummary(resp), true, commandId);
+  }
+
+  // The destructive test. *ATREADY is the module's own "I rebooted" URC and can
+  // arrive from any of DISC/REL/STOP; if it does, later CMQTT commands must be
+  // skipped (sendAT refuses them anyway until re-init).
+  bool rebooted = modemRebootUrcSeen;
+  const bool disc = sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000, &resp);
+  if (modemRebootUrcSeen) {
+    rebooted = true;
+  }
+  publishModemProbe(String("DISC ") + (disc ? "ok " : "fail ") + probeFirstLine(resp) +
+                        (modemRebootUrcSeen ? " + *ATREADY (REBOOT)" : ""),
+                    disc, commandId);
+
+  if (modemRebootUrcSeen) {
+    publishModemProbe("REL skipped (module rebooted)", false, commandId);
+    publishModemProbe("STOP skipped (module rebooted)", false, commandId);
+  } else {
+    const bool rel = sendAT("AT+CMQTTREL=0", "OK", 5000, &resp);
+    if (modemRebootUrcSeen) {
+      rebooted = true;
+    }
+    publishModemProbe(String("REL ") + (rel ? "ok" : "fail"), rel, commandId);
+
+    const bool stop = sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000, &resp);
+    if (modemRebootUrcSeen) {
+      rebooted = true;
+    }
+    publishModemProbe(String("STOP ") + (stop ? "ok" : "fail"), stop, commandId);
+  }
+
+  if (modemRebootUrcSeen) {
+    publishModemProbe("MODEM REBOOTED during DISC/QUIT (*ATREADY seen)", false, commandId);
+  } else {
+    publishModemProbe("no reboot (*ATREADY) during DISC/QUIT", true, commandId);
+  }
+
+  releaseModemToMqtt(false);
+  publishModemProbe("end", true, commandId);
+}
+
 int parseClccStatAt(const String& response, int tag) {
   if (tag < 0) {
     return -1;

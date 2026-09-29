@@ -240,6 +240,7 @@ void publishCallModemSignal(const String& raw);
 void publishInboundSms(const String& from, const String& text);
 void publishSmsRecords(const String& response, const char* tag);
 void runModemProbe(const String& commandId = "");
+void runCmqttProbe(const String& commandId = "");
 int queryClccStat();
 String resolveTestPhone(const String& phoneOverride);
 String sendTestSms(const String& phoneOverride, const String& text);

@@ -1604,6 +1604,17 @@ def create_app() -> Flask:
             "Modem probe command sent. Results arrive as modem_probe events.",
         )
 
+    @app.post("/devices/<device_uid>/commands/cmqtt-probe")
+    @login_required
+    def device_command_cmqtt_probe(device_uid):
+        # LAN-only on the device: the probe DISC/QUITs the native CMQTT session,
+        # which can reboot the modem, so it must run while MQTT rides Ethernet/WiFi.
+        return send_device_command(
+            device_uid,
+            "cmqtt_probe",
+            "CMQTT probe command sent (LAN only). Results arrive as modem_probe events.",
+        )
+
     @app.post("/devices/<device_uid>/commands/modem-uart-debug")
     @login_required
     def device_command_modem_uart_debug(device_uid):

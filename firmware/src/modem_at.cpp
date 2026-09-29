@@ -156,9 +156,13 @@ static void appendModemLogLine(String entry) {
 // AT+CMQTTCONNECT= and AT+CGAUTH=, and this log is published to the panel (and
 // stored in the events table) whenever UART debug is ON. Two adjacent quoted
 // arguments (`","`) is what tells those apart from the single-quoted-argument
-// forms - AT+CMQTTCONNECT? and a CONNECT without credentials must stay intact.
+// forms. The READ response of AT+CMQTTCONNECT? echoes the same credentials back
+// as `+CMQTTCONNECT: <idx>,"tcp://…",…,"user","pass"` (colon, not `=`), so it
+// must be redacted too; a CONNECT without credentials (or the `+CMQTTCONNECT:
+// 0,0` result) has no `","` and stays intact.
 static String redactTrailingCredential(const String& line) {
-  if (line.indexOf("+CMQTTCONNECT=") < 0 && line.indexOf("+CGAUTH=") < 0) {
+  if (line.indexOf("+CMQTTCONNECT=") < 0 && line.indexOf("+CMQTTCONNECT:") < 0 &&
+      line.indexOf("+CGAUTH=") < 0) {
     return line;
   }
   const int pair = line.indexOf("\",\"");

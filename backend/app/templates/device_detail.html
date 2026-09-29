@@ -547,6 +547,12 @@
           <i class="bi bi-terminal"></i> Sondear modem
         </button>
       </form>
+      <form method="post" action="{{ url_for('device_command_cmqtt_probe', device_uid=device.device_uid) }}" onsubmit="return confirm('Probar DISC/QUIT del MQTT nativo (CMQTT)? Solo corre con MQTT por Ethernet/WiFi. Arranca una sesion, la desconecta con CMQTTDISC, libera con CMQTTREL y para con CMQTTSTOP, e informa si el modem se reinicia (*ATREADY).');">
+        {{ csrf_field() }}
+        <button class="btn btn-outline-danger" type="submit">
+          <i class="bi bi-exclamation-triangle"></i> Probar DISC/QUIT (CMQTT)
+        </button>
+      </form>
       <form method="post" action="{{ url_for('device_command_modem_uart_debug', device_uid=device.device_uid) }}">
         {{ csrf_field() }}
         <input type="hidden" name="enabled" value="true">

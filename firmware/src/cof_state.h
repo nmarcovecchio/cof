@@ -199,6 +199,8 @@ extern bool pendingOtaCommand;
 extern bool pendingStatusReportCommand;
 extern bool pendingModemProbeCommand;
 extern String pendingModemProbeCommandId;
+extern bool pendingCmqttProbeCommand;
+extern String pendingCmqttProbeCommandId;
 extern bool pendingTestCallCommand;
 extern String pendingTestCallPhone;
 extern String pendingTestCallAudioSha;

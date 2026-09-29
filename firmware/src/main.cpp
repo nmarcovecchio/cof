@@ -87,6 +87,8 @@ bool pendingOtaCommand = false;
 bool pendingStatusReportCommand = false;
 bool pendingModemProbeCommand = false;
 String pendingModemProbeCommandId = "";
+bool pendingCmqttProbeCommand = false;
+String pendingCmqttProbeCommandId = "";
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioSha = "";
@@ -821,6 +823,14 @@ void loop() {
     pendingModemProbeCommand = false;
     pendingModemProbeCommandId = "";
     runModemProbe(probeCommandId);
+  }
+
+  if (pendingCmqttProbeCommand && !state.callInProgress && !state.otaInProgress &&
+      !state.audioSyncInProgress && modemUartOwnedByMqtt()) {
+    const String probeCommandId = pendingCmqttProbeCommandId;
+    pendingCmqttProbeCommand = false;
+    pendingCmqttProbeCommandId = "";
+    runCmqttProbe(probeCommandId);
   }
 
   if (pendingTestSmsCommand && modemCsWorkAllowed()) {

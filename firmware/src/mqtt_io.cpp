@@ -108,6 +108,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         pendingModemProbeCommandId = pendingCommandId;
         pendingCommandStatus = "accepted";
         pendingCommandMessage = "Modem probe scheduled";
+      } else if (pendingCommandName == "cmqtt_probe") {
+        pendingCmqttProbeCommand = true;
+        pendingCmqttProbeCommandId = pendingCommandId;
+        pendingCommandStatus = "accepted";
+        pendingCommandMessage = "CMQTT probe scheduled (LAN only)";
       } else if (pendingCommandName == "status_report") {
         pendingStatusReportCommand = true;
         pendingCommandStatus = "accepted";

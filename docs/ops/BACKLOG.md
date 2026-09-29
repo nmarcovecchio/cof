@@ -87,6 +87,16 @@ armados en tres lugares que el producto usa todo el tiempo.
 - **Password redactada en el log UART.** `AT+CMQTTCONNECT=...,"user","pass"` y
  `AT+CGAUTH=...` se publicaban enteros al panel (y quedaban en la tabla de
  events) con UART debug ON. Se redacta el ultimo argumento entre comillas.
+ En 0.2.111 se cubrio tambien el **read** de `AT+CMQTTCONNECT?`, que devuelve
+ `+CMQTTCONNECT: 0,"tcp://…",…,"user","pass"` (con `:`, no `=`); `cmqttProbeBrokerLink()`
+ lo logueaba entero y filtraba el password al dump UART.
+
+**0.2.111 — probe `cmqtt_probe` (boton "Probar DISC/QUIT (CMQTT)").** Ejecuta,
+sobre LAN (MQTT por Ethernet/WiFi, nunca con MQTT vivo por LTE), la secuencia
+exacta que antes reiniciaba el A7672: `CMQTTSTART` → `CMQTTACCQ` → `CMQTTCONNECT`
+(anonimo, client id `cof-probe`) → `CMQTTDISC` → `CMQTTREL` → `CMQTTSTOP`, y
+reporta paso a paso si aparece `*ATREADY` (reboot) en algun comando. Sirve para
+confirmar en cada unidad, sin consola serial, el bug DISC/QUIT de §0.2.106/110.
 
 Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
 hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,
