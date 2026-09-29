@@ -40,6 +40,14 @@ AUX_COLUMNS = (
     ("network_internet_ok", "internet_ok"),
 )
 
+# MQTT path labels for the raw table / CSV (firmware network.active).
+_MQTT_PATH_LABELS = {
+    "ethernet": "Ethernet",
+    "wifi": "WiFi",
+    "lte": "LTE",
+    "none": "ninguna",
+}
+
 # Chart bucket sizes, in seconds, by range width. Keeps the payload the browser
 # has to render bounded (~2k points) no matter how long the range is.
 _BUCKETS = (
@@ -298,6 +306,21 @@ def extract_aux_values(payload: dict) -> dict:
     return {label: payload.get(key) for key, label in AUX_COLUMNS}
 
 
+def extract_mqtt_path(payload: dict) -> str | None:
+    """MQTT path used when this sample was published (Ethernet / WiFi / LTE).
+
+    Firmware already embeds ``network.active`` in every telemetry frame
+    (``activeNetworkName()``). Historical rows without that field return None.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    net = payload.get("network")
+    if isinstance(net, dict):
+        active = str(net.get("active") or "").strip().lower()
+        if active in _MQTT_PATH_LABELS:
+            return _MQTT_PATH_LABELS[active]
+    return None
+
+
 def last_readings(device_id: int, windows: list, now: datetime, max_age_days: int = 7) -> list[dict]:
     """The most recent reading of each active sensor, for the summary cards.
 
@@ -521,7 +544,7 @@ def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int
     for row in rows:
         payload = row.payload if isinstance(row.payload, dict) else {}
         at = _to_epoch(getattr(row, "received_at", None))
-        values = {}
+        values = {"_path": extract_mqtt_path(payload)}
         for item in series:
             starts, ends = spans[item["id"]]
             if at is None or (starts is not None and at < starts) or (
@@ -538,13 +561,16 @@ def raw_rows_page(rows, series: list[dict], page: int, per_page: int, total: int
         )
 
     columns = [
+        {"id": "_path", "label": "Via", "unit": ""},
+    ]
+    columns.extend(
         {
             "id": item["id"],
             "label": item.get("label") or item["id"],
             "unit": item.get("unit") or "",
         }
         for item in series
-    ]
+    )
     return {
         "columns": columns,
         "rows": out_rows,

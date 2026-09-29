@@ -1376,7 +1376,7 @@ def create_app() -> Flask:
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        header = ["fecha_hora", "device_id"]
+        header = ["fecha_hora", "device_id", "via"]
         header.extend(item["label"] + (f" ({item['unit']})" if item["unit"] else "") for item in series)
         header.extend(label for _, label in AUX_COLUMNS)
         writer.writerow(header)
@@ -1392,7 +1392,11 @@ def create_app() -> Flask:
         }
         for row in rows:
             payload = row.payload if isinstance(row.payload, dict) else {}
-            line = [row.received_at.isoformat() if row.received_at else "", device.device_uid]
+            line = [
+                row.received_at.isoformat() if row.received_at else "",
+                device.device_uid,
+                extract_mqtt_path(payload) or "",
+            ]
             at = _to_epoch(row.received_at)
             for item in series:
                 starts, ends = spans[item["id"]]
