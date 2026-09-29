@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-29**. Ultimo firmware publicado: **0.2.112** (en `ota/manifest.json`).
+Estado: **2026-09-29**. Ultimo firmware publicado: **0.2.115** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -166,6 +166,59 @@ Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
 hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,
 `CSQ 99` sostenido, el ladder de recuperacion de radio (que resetea el modulo de
 todas formas) y el borrado de credenciales.
+
+**0.2.115 — `lockGsmForCall()` ya no cuelga la llamada en un sitio solo-LTE.** Campo
+2026-09-29 21:43 UTC (`cof-test`, 0.2.114, saliendo por LTE): un `test_call` llego y
+se acepto (`command_ack`), publico `Rule audio not on device, using fallback`, y a
+partir de ahi **4 min de silencio total** (sin telemetria ni eventos). A las 21:47:31
+el dump UART muestra el modem reiniciado (`AT`/`ATE0`/`ATI`/`AT+CPIN?` = `initModem()`
+completo) y en `+CPSI: NO SERVICE,Online` con **`+CNMP: 13`**. La llamada nunca se
+marco: no hay un solo `ATD` en el trace.
+
+La huella `+CNMP: 13` es `lockGsmForCall()` ([`sms_voice.cpp`](../firmware/src/sms_voice.cpp)),
+que corria **incondicional** cuando el primer dial no completaba:
+`AT+CNMP=13` (GSM-only) → `waitForRadioService(45 s, true)` + `waitUntilModemReady(30 s)`.
+**El sitio no tiene 2G usable** (radio LTE Band 2/Band 28, CSQ 31), asi que el lock
+dejaba la radio en `NO SERVICE`, quemaba 75 s bloqueantes en el loop cooperativo
+(sin telemetria ni watchdog de MQTT) y el modem reiniciaba con `CNMP` todavia en 13.
+`restoreAutoRadio()` solo restauraba `CNMP=2` si `forcedGsmForCall` seguia en RAM, asi
+que un reboot en medio del lock dejaba la radio en GSM-only/NO SERVICE.
+
+**Dato que cerro el diagnostico (usuario):** saliendo por **Ethernet la llamada sale
+perfecta**; solo falla por LTE, con la misma senal y el mismo firmware. No es la radio
+ni el dial: es **que camino de retry se elige al fallar el primer intento**. Por
+Ethernet el primer CSFB completa y el retry no corre; por LTE el primer intento no
+completa a tiempo y escalaba al GSM-lock sin 2G. Agravante: `persistSkipGsm(true)`
+**no tenia ningun caller** (el unico uso era `persistSkipGsm(false)` en
+`bounceRadioForCsfb()`), o sea la unica proteccion contra el lock existia pero nunca
+se activaba.
+
+Cambios en 0.2.115:
+
+- **`gsmAccessPlausible()`** (nuevo, [`modem_at.cpp`](../firmware/src/modem_at.cpp)):
+  escanea con `AT+COPS=?` y acepta el lock solo si algun operador anuncia GSM/2G
+  (bit 2 de la mascara de ACT). Un `observedVoicePath` previo `"gsm"` evita el scan;
+  el veredicto se cachea por boot. Un scan que no contesta **no** bloquea (unknown ≠ no).
+- **`lockGsmForCall()` devuelve `bool` y se gatea**: si no hay 2G, no toca el radio y
+  sale con `false` (el caller termina con el resultado del primer intento). Si lockea,
+  exige que `waitForRadioService(45 s, true)` devuelva servicio **antes** de gastar el
+  segundo wait; si no aparece GSM, hace `restoreAutoRadio()` y sale.
+- **Camino de retry** ([`sms_voice.cpp`](../firmware/src/sms_voice.cpp)): no corre el
+  `bounceRadioForCsfb()` de la rama `else if` cuando el lock no tomo, asi un sitio
+  solo-LTE no paga `bounce + lock + bounce` por una sola llamada. El resultado se
+  anota con `(no 2G here, GSM lock skipped)` para que el motivo se vea en el panel.
+- **`configureCellularApn()` fuerza `AT+CNMP=2`** y limpia `forcedGsmForCall`, asi un
+  reboot (del ESP32 o del modulo) durante el lock no deja la radio en GSM-only.
+  `restoreAutoRadio()` ademas pregunta `CNMP` real (`state.cnmp`) en vez de confiar
+  solo en el flag en RAM.
+- **Instrumentacion:** `waitForRadioService(gsmOnly)` loguea `radio`/`csq` al expirar,
+  y `lockGsmForCall()` registra el motivo (`GSM lock skipped: no 2G in COPS scan` /
+  `GSM lock timed out, restoring CNMP=2`) via `appendModemLogForced`, que viaja en el
+  evento final. El silencio del 2026-09-29 no se puede repetir sin dejar rastro.
+
+**Pendiente de validar en hardware:** `test_call` en `cof-test` solo-LTE (Ethernet
+desenchufado) no debe producir silencio > 20 s ni reboot del modem, debe publicar el
+motivo; y con Ethernet debe seguir andando perfecto (sin regresion).
 
 ---
 
