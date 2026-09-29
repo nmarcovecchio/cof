@@ -137,6 +137,26 @@ bool cmqttIsConnected() {
   return cmqttBrokerUp;
 }
 
+// Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
+// Two in a row → DISC only (keep CMQTT service) so we stop hammering a zombie
+// session; CMQTTSTOP here was historically linked to *ATREADY.
+static uint8_t cmqttPubSoftFails = 0;
+
+static void cmqttNotePubSoftFail(const char* why) {
+  cmqttPubSoftFails++;
+  appendModemLogForced(String(why) + " (" + String(cmqttPubSoftFails) + "/" +
+                        String(kCmqttPubSoftFailLimit) + ")");
+  if (cmqttPubSoftFails < kCmqttPubSoftFailLimit) {
+    return;
+  }
+  appendModemLogForced("PUB soft fail limit, DISC (no STOP)");
+  Serial.println("[cmqtt] soft PUB fail limit: DISC, will CONNECT again");
+  noteLteSessionDrop("pub-soft");
+  cmqttDisconnect();
+  cmqttPubSoftFails = 0;
+  state.mqttConnected = false;
+}
+
 bool cmqttIsRxBusy() {
   // True while a published message is mid-delivery (+CMQTTRXSTART seen, not yet
   // +CMQTTRXEND). serviceLteMqttHealth() skips its AT+CSQ probe in this window so
@@ -287,8 +307,9 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
   if (!cmqttPromptWrite(String("AT+CMQTTTOPIC=0,") + String(topic.length()), topic, 5000)) {
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
     } else {
-      appendModemLogForced("PUB topic fail, session kept");
+      cmqttNotePubSoftFail("PUB topic fail");
     }
     return false;
   }
@@ -300,8 +321,9 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
   if (!cmqttPromptWrite(String("AT+CMQTTPAYLOAD=0,") + String(len), body, 5000)) {
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
     } else {
-      appendModemLogForced("PUB payload fail, session kept");
+      cmqttNotePubSoftFail("PUB payload fail");
     }
     return false;
   }
@@ -315,15 +337,18 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     if (modemRebootUrcSeen) {
       noteLteSessionDrop("atready");
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
     } else if (resp.indexOf("+CMQTTNONET") >= 0) {
       noteLteSessionDrop("nonet");
       cmqttBrokerUp = false;
       ltePdpDown = true;
+      cmqttPubSoftFails = 0;
     } else if (resp.indexOf("+CMQTTCONNLOST") >= 0) {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
     } else {
-      appendModemLogForced("PUB no URC, session kept");
+      cmqttNotePubSoftFail("PUB no URC");
     }
     return false;
   }
@@ -335,9 +360,13 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     if (pubCode == 9 || pubCode == 11 || pubCode == 26) {
       noteLteSessionDrop("pub");
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
+    } else {
+      cmqttNotePubSoftFail("PUB result");
     }
     return false;
   }
+  cmqttPubSoftFails = 0;
   return true;
 }
 
@@ -345,6 +374,7 @@ static void cmqttDropAfterReboot() {
   cmqttServiceUp = false;
   cmqttClientAcquired = false;
   cmqttBrokerUp = false;
+  cmqttPubSoftFails = 0;
   cmqttLineBuf = "";
   cmqttRxActive = false;
   cmqttRxInPayload = false;
@@ -443,12 +473,17 @@ void cmqttLoop() {
     if (line.startsWith("+CMQTTCONNLOST")) {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
+      cmqttPubSoftFails = 0;
       continue;
     }
     if (line.startsWith("+CMQTTNONET")) {
+      // Broker/network lost the PDP link. Do NOT TearDown/STOP here: the carrier
+      // often re-activates PDP (EPS PDN ACT) within seconds, and CMQTTSTOP on this
+      // module triggers *ATREADY. Keep service+client; CONNECT again after backoff.
       noteLteSessionDrop("nonet");
       cmqttBrokerUp = false;
-      ltePdpDown = true;   // the network library died: rebuild the PDP
+      ltePdpDown = true;
+      cmqttPubSoftFails = 0;
       continue;
     }
 

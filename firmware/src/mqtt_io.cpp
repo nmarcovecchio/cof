@@ -725,12 +725,14 @@ static void connectMqttNativeIfNeeded() {
   if (cmqttIsConnected()) {
     cmqttLoop();
     if (!cmqttIsConnected()) {
-      // A URC dropped us (CONNLOST, or NONET which also set ltePdpDown).
+      // CONNLOST or NONET cleared the broker flag. For NONET we used to call
+      // stopLtePdp() → CMQTTSTOP, which rebooted the A7672 (*ATREADY) while the
+      // carrier was already re-attaching PDP. Keep the CMQTT service and CONNECT
+      // again on the next reconnect pass.
       state.mqttConnected = false;
       if (ltePdpDown) {
         ltePdpDown = false;
-        Serial.println("[lte] network closed (out of service), releasing PDP");
-        stopLtePdp();
+        Serial.println("[lte] CMQTTNONET: no STOP, will CMQTTCONNECT again");
       }
       lteMqttConnectFails = 0;
     } else {
