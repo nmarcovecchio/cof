@@ -180,7 +180,18 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   }
 }
 bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained, uint8_t qos) {
-  if (!state.mqttConnected || !modemUartOwnedByMqtt()) {
+  if (!state.mqttConnected) {
+    return false;
+  }
+  // The UART mutex only gates the LTE/CMQTT path, where publishing IS an AT
+  // command (CMQTTPUB) and cannot run while the UART is borrowed for voice/SMS
+  // or the probe. On LAN the broker lives on Ethernet/WiFi (PubSubClient) and
+  // never touches the modem UART, so holding the gate here only deferred - and,
+  // on a modem reset, dropped - the probe progress and SMS/call results.
+  // 0.2.111's cmqtt_probe runs LAN-only yet still hit this gate and lost every
+  // step after "start" to the 8-slot deferred queue; the modem then reset and
+  // took the ESP32 with it before anything flushed.
+  if (state.lteMqttTransport && !modemUartOwnedByMqtt()) {
     return false;
   }
 

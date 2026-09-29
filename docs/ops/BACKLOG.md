@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.110** (en `ota/manifest.json`).
+Estado: **2026-09-29**. Ultimo firmware publicado: **0.2.112** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -97,6 +97,23 @@ exacta que antes reiniciaba el A7672: `CMQTTSTART` → `CMQTTACCQ` → `CMQTTCON
 (anonimo, client id `cof-probe`) → `CMQTTDISC` → `CMQTTREL` → `CMQTTSTOP`, y
 reporta paso a paso si aparece `*ATREADY` (reboot) en algun comando. Sirve para
 confirmar en cada unidad, sin consola serial, el bug DISC/QUIT de §0.2.106/110.
+
+**0.2.112 — fix de reporte del `cmqtt_probe` (gate de `publishMqttJson`).** El
+gate `!modemUartOwnedByMqtt()` en `publishMqttJson()` bloqueaba **todo** publish
+mientras la UART estaba prestada, incluso en LAN, donde el MQTT sale por
+Ethernet/WiFi (`PubSubClient`) y **nunca toca la UART del modem**. En el probe de
+0.2.111 eso difirio todos los pasos posteriores al `start` a la cola de 8 slots
+(`kDeferredEventMax`), y al resetear el modem el ESP32 se reinicio antes de
+flushear: en el panel solo quedo `start`, `end` y un burst de `CMQTTSTART ok`.
+Ahora el gate solo aplica cuando `state.lteMqttTransport` (ahi el publish **es**
+`CMQTTPUB` sobre la UART y si hay que bloquear); en LAN se publica en vivo.
+
+**Hallazgo de campo (cof-test, 2026-09-29 14:51 UTC):** con 0.2.111 el probe
+confirmo `CMQTTSTART ok` pero el equipo se reinicio (ESP32: el contador `T+` de
+`millis()` paso de `T+39360` a `T+3164`; el dump siguiente muestra un
+`initModem()` completo) antes de poder publicar que paso disparo el reset. El
+culpable (¿`ACCQ`/`CONNECT`/`DISC`?) queda por reconfirmar con 0.2.112, que
+reporta cada paso en tiempo real.
 
 Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
 hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,
