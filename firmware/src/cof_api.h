@@ -121,8 +121,6 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
 void cmqttDisconnect();
 bool cmqttIsConnected();
 bool cmqttIsRxBusy();
-// True after soft PUB reclaim (flags only): CONNECT again, do not STOP/teardown.
-bool cmqttSoftReclaimPending();
 void cmqttLoop();
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos);
 bool cmqttSubscribe(const String& topic, uint8_t qos);

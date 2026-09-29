@@ -138,14 +138,11 @@ bool cmqttIsConnected() {
 }
 
 // Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
-// Two in a row → clear broker flag only (keep CMQTT service+client). DISC and
-// STOP both reboot this A7672 (*ATREADY); CONNECT again without teardown.
+// Two in a row → publish cooldown only. DISC (0.2.106) and CONNECT-without-DISC
+// on a live session (0.2.107) both rebooted this A7672 (*ATREADY). Keep the
+// CMQTT session; skip PUB until the cooldown elapses, then try again.
 static uint8_t cmqttPubSoftFails = 0;
-static bool cmqttSoftReclaim = false;
-
-bool cmqttSoftReclaimPending() {
-  return cmqttSoftReclaim;
-}
+static uint32_t cmqttPubCooldownUntilMs = 0;
 
 static void cmqttNotePubSoftFail(const char* why) {
   cmqttPubSoftFails++;
@@ -154,13 +151,15 @@ static void cmqttNotePubSoftFail(const char* why) {
   if (cmqttPubSoftFails < kCmqttPubSoftFailLimit) {
     return;
   }
-  appendModemLogForced("PUB soft fail limit, flags only (no DISC)");
-  Serial.println("[cmqtt] soft PUB fail limit: clear broker flag, CONNECT again");
-  noteLteSessionDrop("pub-soft");
-  cmqttBrokerUp = false;
-  cmqttSoftReclaim = true;
+  cmqttPubCooldownUntilMs = millis() + kCmqttPubSoftCooldownMs;
+  if (cmqttPubCooldownUntilMs == 0) {
+    cmqttPubCooldownUntilMs = 1;
+  }
   cmqttPubSoftFails = 0;
-  state.mqttConnected = false;
+  appendModemLogForced("PUB soft fail limit, cooldown " +
+                        String(kCmqttPubSoftCooldownMs / 1000UL) + "s (no DISC/CONNECT)");
+  Serial.printf("[cmqtt] soft PUB fail limit: cooldown %lu s, session kept\n",
+                static_cast<unsigned long>(kCmqttPubSoftCooldownMs / 1000UL));
 }
 
 bool cmqttIsRxBusy() {
@@ -265,7 +264,6 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   }
 
   cmqttBrokerUp = true;
-  cmqttSoftReclaim = false;
   Serial.println("[cmqtt] connected to " + serverAddr);
   return true;
 }
@@ -309,13 +307,20 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
   if (!cmqttBrokerUp) {
     return false;
   }
+  if (cmqttPubCooldownUntilMs != 0) {
+    const uint32_t now = millis();
+    if (now < cmqttPubCooldownUntilMs) {
+      return false;
+    }
+    cmqttPubCooldownUntilMs = 0;
+  }
   // Topic first, then payload, then the actual PUB. The modem clears topic and
   // payload after each PUB (per the app note), so both must be set every time.
   if (!cmqttPromptWrite(String("AT+CMQTTTOPIC=0,") + String(topic.length()), topic, 5000)) {
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else {
       cmqttNotePubSoftFail("PUB topic fail");
     }
@@ -330,7 +335,7 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else {
       cmqttNotePubSoftFail("PUB payload fail");
     }
@@ -347,18 +352,18 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
       noteLteSessionDrop("atready");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else if (resp.indexOf("+CMQTTNONET") >= 0) {
       noteLteSessionDrop("nonet");
       cmqttBrokerUp = false;
       ltePdpDown = true;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else if (resp.indexOf("+CMQTTCONNLOST") >= 0) {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else {
       cmqttNotePubSoftFail("PUB no URC");
     }
@@ -373,13 +378,14 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
       noteLteSessionDrop("pub");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
     } else {
       cmqttNotePubSoftFail("PUB result");
     }
     return false;
   }
   cmqttPubSoftFails = 0;
+  cmqttPubCooldownUntilMs = 0;
   return true;
 }
 
@@ -388,7 +394,7 @@ static void cmqttDropAfterReboot() {
   cmqttClientAcquired = false;
   cmqttBrokerUp = false;
   cmqttPubSoftFails = 0;
-  cmqttSoftReclaim = false;
+  cmqttPubCooldownUntilMs = 0;
   cmqttLineBuf = "";
   cmqttRxActive = false;
   cmqttRxInPayload = false;
@@ -452,7 +458,7 @@ void cmqttTearDown() {
   cmqttRxTopic = "";
   cmqttRxPayload = "";
   cmqttPubSoftFails = 0;
-  cmqttSoftReclaim = false;
+  cmqttPubCooldownUntilMs = 0;
 }
 
 // Dispatch a completed inbound message into the shared callback. onMqttMessage
@@ -490,7 +496,7 @@ void cmqttLoop() {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
       continue;
     }
     if (line.startsWith("+CMQTTNONET")) {
@@ -501,7 +507,7 @@ void cmqttLoop() {
       cmqttBrokerUp = false;
       ltePdpDown = true;
       cmqttPubSoftFails = 0;
-      cmqttSoftReclaim = false;
+      cmqttPubCooldownUntilMs = 0;
       continue;
     }
 

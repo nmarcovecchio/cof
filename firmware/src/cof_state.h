@@ -222,7 +222,7 @@ extern bool pendingNetworkStatusReport;
 extern uint32_t lastLteAttemptMs;
 extern bool reportLteProgress;
 // Opt-in UART dump to the web (MQTT command modem_uart_debug). Persisted in
-// NVS (`uartDbg`); post-OTA forces ON. Only Flask can turn it OFF.
+// NVS (`uartDbg`). OTA does not force it on — only Flask toggles it.
 extern bool modemUartDebug;
 extern uint32_t lastModemUartDebugPublishMs;
 extern bool pendingModemUartDebugPublish;

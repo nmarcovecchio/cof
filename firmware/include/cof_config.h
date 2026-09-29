@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.107"
+#define COF_FIRMWARE_VERSION "0.2.108"
 
 // Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
 #define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
@@ -147,10 +147,11 @@ constexpr uint32_t kLteHealthProbeMs = 5UL * 60UL * 1000UL;
 // radio cycle (resetModemRadio stage 3) instead of looping connect -> rebuild.
 constexpr uint8_t kLteMqttConnectFailLimit = 3;
 constexpr uint8_t kLteMqttRebuildEscalateCycles = 3;
-// Consecutive CMQTT TOPIC/PAYLOAD/PUB soft fails before flags-only reclaim (no
-// DISC/STOP). Hammering TOPIC caused *ATREADY (0.2.105); DISC on the soft limit
-// also rebooted the A7672 (0.2.106 field: after pub-soft → cold CMQTTSTART).
+// Consecutive CMQTT TOPIC/PAYLOAD/PUB soft fails before a publish cooldown.
+// Do NOT DISC/STOP/CONNECT: those reboot this A7672 (*ATREADY). Field: DISC in
+// 0.2.106 and CONNECT-on-live-session in 0.2.107 both showed pub-soft+atready.
 constexpr uint8_t kCmqttPubSoftFailLimit = 2;
+constexpr uint32_t kCmqttPubSoftCooldownMs = 60UL * 1000UL;
 // Modem radio recovery. pollModem() runs every 30 s on LAN and 5 s without it, so
 // this interval only has to be long enough for one recovery step to take effect.
 // 150 s over 5 steps means a stuck radio escalates to a full ESP32 restart in

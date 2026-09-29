@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.107** (en `ota/manifest.json`).
+Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.108** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -29,6 +29,11 @@ solo-LTE.
 `CMQTTDISC` (0.2.106 lo hizo y reiniciaba el A7672). Solo baja flags y reintenta
 `CONNECT`; connect-fail no escala a `STOP` mientras haya soft reclaim pendiente.
 Drop reason admite `pub-soft+atready` si el URC llega despues.
+
+**0.2.108 — cooldown en vez de CONNECT + UART debug respeta OFF:** 0.2.107
+siguio en `pub-soft+atready` porque `CMQTTCONNECT` sobre sesion viva tambien
+reinicia el modulo. Soft-fail ahora solo pausa PUB 60 s (sin DISC/CONNECT).
+OTA ya no fuerza `uartDbg` ON.
 
 ---
 

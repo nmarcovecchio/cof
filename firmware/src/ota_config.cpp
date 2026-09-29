@@ -140,7 +140,8 @@ void loadSavedMqttConfig() {
   state.skipGsmVoice = preferences.getBool("skipGsm", false);
   state.observedVoicePath = preferences.getString("voiceOk", "");
   state.voiceIdentity = preferences.getString("voiceId", "");
-  // Survives reboot until Flask sends modem_uart_debug OFF (or OTA forces ON).
+  // Survives reboot. Flask modem_uart_debug ON/OFF is the only writer besides
+  // first boot default (false). OTA must not force it back on.
   modemUartDebug = preferences.getBool("uartDbg", false);
   state.mqttConfigured = state.mqttHost.length() > 0 && state.mqttDeviceId.length() > 0;
 
