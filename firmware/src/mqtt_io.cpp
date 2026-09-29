@@ -17,8 +17,15 @@ void requestMqttBounce(const char* reason) {
 void bounceMqttForRouteChange() {
 #if COF_LTE_MQTT_NATIVE
   if (state.lteMqttTransport) {
-    cmqttDisconnect();
-  } else
+    // Nothing to bounce on the native path, and CMQTTDISC here is one of the two
+    // commands that reboot this A7672. A route change ends one of two ways: LAN
+    // proves usable, and then maintainLteFallback() / serviceNetworkPaths() run
+    // the one legitimate stopLtePdp(); or LTE stays, and then the session we
+    // would have dropped is the one we still need. Only clear the backoff so a
+    // reconnect can fire at once if the session did die.
+    lastMqttReconnectMs = 0;
+    return;
+  }
 #endif
   if (mqttClient.connected() || state.mqttConnected) {
     mqttClient.disconnect();
@@ -207,9 +214,11 @@ bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained, uin
 #endif
     state.mqttConnected = false;
 #if COF_LTE_MQTT_NATIVE
-    if (state.lteMqttTransport) {
-      cmqttDisconnect();
-    } else
+    // Reaching here on the LTE path means cmqttIsConnected() is already false (the
+    // early return above), so there is nothing to disconnect: the CMQTT code that
+    // cleared the flag decided, with the module's own answer, whether a DISC was
+    // safe. Dropping the flag is the whole action.
+    if (!state.lteMqttTransport)
 #endif
     {
       mqttClient.disconnect();
@@ -779,6 +788,20 @@ static void connectMqttNativeIfNeeded() {
     }
     setStatus("MQTT fail");
     lteMqttConnectFails++;
+    // The usual reason a CONNECT fails after +CMQTTNONET is that the bearer
+    // CMQTTSTART dialed is gone, and the escalation below is CMQTTSTOP - a modem
+    // reboot. CGACT re-activates context 1 (the one CGDCONT/CMQTTSTART use)
+    // without touching the CMQTT stack, so the next attempt has a bearer to run
+    // over. The failure still counts: the escape hatch must never be disarmed.
+    // Only when the service is up: if CMQTTSTART is what failed, it dials the
+    // bearer itself and these two commands would just slow the retry down.
+    if (cmqttServiceIsUp()) {
+      String bearerIp;
+      if (!queryLteIp(bearerIp)) {
+        appendModemLogForced("bearer down after connect fail, CGACT=1,1");
+        sendAT("AT+CGACT=1,1", "OK", 20000);
+      }
+    }
     if (lteMqttConnectFails >= kLteMqttConnectFailLimit) {
       lteMqttConnectFails = 0;
       Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
@@ -1081,9 +1104,12 @@ void enforceMqttSilenceWatchdog() {
   if (state.lteMqttTransport) {
     // The A7672's CMQTT stack runs keepalive natively (keepalive_time in
     // CMQTTCONNECT) and surfaces passive loss as +CMQTTCONNLOST / +CMQTTNONET,
-    // which cmqttLoop() folds back into the connection state. There is no
-    // PubSubClient socket to ping, so nothing to probe here; the reconnect path
-    // in connectMqttNativeIfNeeded() is what reacts to a dropped broker link.
+    // which cmqttLoop() folds back into the connection state. Deliberately no
+    // probe here: the read-only AT+CMQTTCONNECT? check exists but sending AT on a
+    // healthy live session every silence window is exactly the chatter this path
+    // avoids. It is used where a failure already happened (soft fail, CS
+    // handover, teardown). The reconnect path in connectMqttNativeIfNeeded() is
+    // what reacts to a dropped broker link; the restart above is the backstop.
     if (!cmqttIsConnected()) {
       lastSilenceProbeMs = 0;
     }

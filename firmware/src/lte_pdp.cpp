@@ -294,7 +294,7 @@ bool ensureLtePdp() {
   lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
   return false;
 }
-// Mutable so *ATREADY can append after a first cause (e.g. pub-soft+atready).
+// Mutable so *ATREADY can append after a first cause (e.g. pub-dead+atready).
 static char lteSessionDropBuf[40] = {};
 static bool lteSessionDropSet = false;
 
@@ -365,20 +365,6 @@ void stopLtePdp() {
   pendingNetworkStatusReport = true;
   noteModemUnstable("stop-lte");
 }
-void releaseLteMqttForModem() {
-  if (!state.lteMqttTransport) {
-    return;
-  }
-#if COF_LTE_MQTT_NATIVE
-  cmqttDisconnect();
-#else
-  mqttClient.disconnect();
-  lteMqttClient.stop();
-#endif
-  state.mqttConnected = false;
-  lastMqttReconnectMs = 0;
-}
-
 bool modemUartOwnedByMqtt() {
   return state.modemUartOwner == kModemUartMqtt;
 }
@@ -436,27 +422,43 @@ void takeModemForVoiceSms(ModemUartOwner owner) {
   if (!state.lteMqttTransport) {
     return;
   }
-  // DISC only: STOP/TearDown happens on release. Stopping here can reboot the
-  // module mid-CMGS/ATD (observed with aggressive CMQTTSTOP).
 #if COF_LTE_MQTT_NATIVE
-  cmqttDisconnect();
+  // Nothing is sent to the module here. The MQTT session lives inside the A7672
+  // and it keepalives it by itself, so "taking the UART" only means: stop issuing
+  // CMQTT AT and stop draining the UART as MQTT. Both are already enforced by the
+  // modemUartOwnedByMqtt() gates in connectMqttIfNeeded / publishMqttJson /
+  // serviceLteMqttHealth. The CMQTTDISC that used to be sent here is one of the
+  // two commands that reboot this module (*ATREADY), and it cost a reboot on
+  // every test SMS and every alarm call. releaseModemToMqtt() asks the module
+  // what survived instead of rebuilding.
+  state.mqttConnected = false;
+  appendModemLogForced("CS take: UART borrowed, CMQTT session kept");
 #else
   mqttClient.disconnect();
   lteMqttClient.stop();
-#endif
   state.mqttConnected = false;
+#endif
 }
 
 void releaseModemToMqtt(bool wasOnLte) {
-  // Full teardown when we had been riding LTE so the next connectMqttIfNeeded()
-  // rebuilds CMQTT from START. DISC-only left the service half-up and SMS
-  // reconnect wedged (CONNECT over a stale CMQTT session).
-  if (wasOnLte) {
-    stopLtePdp();
-  }
+  // Ownership first: the resume below is an AT command and sendAT/cmqttLoop are
+  // gated on modemUartOwnedByMqtt().
   state.modemUartOwner = kModemUartMqtt;
   lastMqttReconnectMs = 0;
   noteModemUnstable("release-cs");
+  if (!wasOnLte) {
+    return;
+  }
+#if COF_LTE_MQTT_NATIVE
+  // This used to be stopLtePdp() → cmqttTearDown() → DISC + REL + STOP, i.e. both
+  // known *ATREADY triggers on the way out of every SMS and every alarm call. The
+  // old justification ("DISC-only left the service half-up and the reconnect
+  // CONNECTed over a stale session") no longer holds: nothing was disconnected on
+  // the way in, and the resume path probes the module instead of guessing.
+  cmqttResumeAfterUartHandover();
+#else
+  stopLtePdp();
+#endif
 }
 
 void restorePacketServices() {

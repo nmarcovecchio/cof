@@ -56,9 +56,8 @@ bool netopenIsActive();
 bool netopenResultOk(const String& resp);
 bool parseLteIp(const String& resp, String& ipOut);
 bool queryLteIp(String& ipOut);
-void releaseLteMqttForModem();
-// Logical UART mutex: take before voice/SMS AT, release after (tears down LTE
-// CMQTT cleanly when wasOnLte so reconnect starts from CMQTTSTART).
+// Logical UART mutex: take before voice/SMS AT, release after. Neither end
+// disconnects CMQTT: the session lives in the module, and DISC/STOP reboot it.
 void takeModemForVoiceSms(ModemUartOwner owner);
 void releaseModemToMqtt(bool wasOnLte);
 bool modemUartOwnedByMqtt();
@@ -68,7 +67,7 @@ bool modemCsWorkAllowed();
 String resolveLteMqttPeer(const char* host);
 void restorePacketServices();
 void stopLtePdp();
-// First cause wins; *ATREADY may append ("pub-soft+atready") until take.
+// First cause wins; *ATREADY may append ("pub-dead+atready") until take.
 void noteLteSessionDrop(const char* reason);
 const char* takeLteSessionDrop();
 
@@ -121,12 +120,20 @@ void waitWithWatchdog(uint32_t ms);
 // ---- owned by lte_mqtt_native -------------------------------
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
                   const String& host, int port, const String& username, const String& password);
-void cmqttDisconnect();
 bool cmqttIsConnected();
 bool cmqttIsRxBusy();
+// CMQTTSTART is up (says nothing about the broker link). Used to tell a failed
+// CONNECT over a dead bearer from a service that never started.
+bool cmqttServiceIsUp();
 void cmqttLoop();
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos);
+// Called when voice/SMS hands the UART back: keeps a session the module says is
+// live, clears flags (no DISC/REL/STOP) when it says the session is gone.
+void cmqttResumeAfterUartHandover();
 bool cmqttSubscribe(const String& topic, uint8_t qos);
+// Last resort only (LAN takes over for good, 3 failed CONNECTs, CSQ 99, radio
+// ladder, credential wipe): DISC+REL+STOP, and DISC only if the module confirms
+// a live session. Never call this from a hot path - it can reboot the module.
 void cmqttTearDown();
 void serviceLteMqttHealth();
 

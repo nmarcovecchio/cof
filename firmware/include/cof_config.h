@@ -8,7 +8,7 @@
 
 // Firmware version shown on OLED and used by OTA comparison.
 // NOTE: must be strictly lower than ota/manifest.json for a device to update.
-#define COF_FIRMWARE_VERSION "0.2.109"
+#define COF_FIRMWARE_VERSION "0.2.110"
 
 // Same origin as the OTA bin (Flask serves both from OTA_DIR with no-store).
 #define COF_MANIFEST_URL "https://app.callonfail.com.ar/ota/manifest.json"
@@ -149,9 +149,9 @@ constexpr uint8_t kLteMqttConnectFailLimit = 3;
 constexpr uint8_t kLteMqttRebuildEscalateCycles = 3;
 // Consecutive CMQTT TOPIC/PAYLOAD/PUB soft fails before the module is asked
 // whether the session is still alive (AT+CMQTTCONNECT?, read-only). Dead → clear
-// flags and CONNECT again; alive → publish cooldown. Do NOT DISC/STOP, and never
-// CONNECT without that check: DISC in 0.2.106 and CONNECT-on-live-session in
-// 0.2.107 both rebooted this A7672 (pub-soft+atready).
+// flags and CONNECT again (drop reason `pub-dead`); alive or no answer → publish
+// cooldown. Do NOT DISC/STOP, and never CONNECT without that check: DISC in
+// 0.2.106 and CONNECT-on-live-session in 0.2.107 both rebooted this A7672.
 constexpr uint8_t kCmqttPubSoftFailLimit = 2;
 constexpr uint32_t kCmqttPubSoftCooldownMs = 60UL * 1000UL;
 // Modem radio recovery. pollModem() runs every 30 s on LAN and 5 s without it, so

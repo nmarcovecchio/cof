@@ -929,8 +929,8 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
     }
   }
 
-  // Remember LTE before take: CSFB / voice tear down the data plane; release
-  // does stopLtePdp so reconnect rebuilds CMQTT from START (same as SMS).
+  // Remember LTE before take: the release path then asks the module what
+  // survived the call (CSFB can drop the bearer) instead of tearing CMQTT down.
   const bool wasOnLte = state.lteDataUp || state.lteMqttTransport;
   takeModemForVoiceSms(kModemUartVoice);
   state.callInProgress = true;
@@ -1067,8 +1067,8 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     body = body.substring(0, 160);
   }
 
-  // Same UART mutex as voice: DISC, send on a quiet modem, then TearDown +
-  // reconnect (not CONNECT over a live CMQTT service).
+  // Same UART mutex as voice: borrow the UART (no DISC), send on a quiet modem,
+  // then resume the CMQTT session the module kept (no REL/STOP).
   const bool wasOnLte = state.lteDataUp || state.lteMqttTransport;
   takeModemForVoiceSms(kModemUartSms);
 

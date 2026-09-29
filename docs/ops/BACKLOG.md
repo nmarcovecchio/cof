@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.109** (en `ota/manifest.json`).
+Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.110** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -24,14 +24,15 @@ reconnect CMQTT largo y republicaba ~2 s despues). En path nativo
 `queryLteIp` ya no llama `AT+IPADDR` (siempre ERROR / 4 s); usa `CGPADDR=1`
 (OLED/IP intactos).
 
-**0.2.107 — soft reclaim sin DISC:** el limite de soft-fail PUB ya no manda
-`CMQTTDISC` (0.2.106 lo hizo y reiniciaba el A7672). Solo baja flags y reintenta
-`CONNECT`; connect-fail no escala a `STOP` mientras haya soft reclaim pendiente.
-Drop reason admite `pub-soft+atready` si el URC llega despues.
+**0.2.106 / 0.2.107 (historico, ya superado):** 0.2.106 mandaba `CMQTTDISC` al
+llegar al limite de soft-fail PUB y eso reiniciaba el A7672; 0.2.107 lo cambio por
+"bajar flags + `CONNECT`" con un guard `cmqttSoftReclaimPending()` que evitaba el
+`STOP` — ese guard **se borro en 0.2.108** y el `CONNECT` a ciegas sobre sesion
+viva resulto ser otro gatillo de reboot. Nada de esto sigue en el codigo.
 
 **0.2.108 — cooldown en vez de CONNECT + UART debug respeta OFF:** 0.2.107
-siguio en `pub-soft+atready` porque `CMQTTCONNECT` sobre sesion viva tambien
-reinicia el modulo. Soft-fail ahora solo pausa PUB 60 s (sin DISC/CONNECT).
+siguio en reboots porque `CMQTTCONNECT` sobre sesion viva tambien reinicia el
+modulo. Soft-fail ahora solo pausa PUB 60 s (sin DISC/CONNECT).
 OTA ya no fuerza `uartDbg` ON.
 
 **0.2.109 — `*ATREADY` invisible en sesion viva (causa raiz del offline del
@@ -51,6 +52,46 @@ se mantiene el cooldown — nunca `DISC`/`STOP`, nunca `CONNECT` a ciegas; (3) s
 `CMQTTSTART` responde `ERROR` ("ya arrancado", tipico tras reboot del ESP32) se
 adopta el servicio via `AT+CMQTTACCQ?` en vez de mandar `CMQTTSTOP`, y si el
 cliente 0 sigue conectado con nuestro client id se reusa la sesion tal cual.
+
+**0.2.110 — `DISC`/`REL`/`STOP` fuera de todos los hot paths.** Campo 0.2.109:
+12 min de traza UART continua sin un solo `*ATREADY`, pero los gatillos seguian
+armados en tres lugares que el producto usa todo el tiempo.
+
+- **SMS / llamada sobre LTE.** `takeModemForVoiceSms()` mandaba `CMQTTDISC` sobre
+ sesion **viva** y `releaseModemToMqtt(wasOnLte)` hacia `stopLtePdp()` →
+ `REL`+`STOP`: los dos gatillos, en cada test SMS y en **cada llamada de alarma**.
+ Ahora el take no manda nada (la sesion vive en el modulo y el keepalive es suyo;
+ los gates de `modemUartOwnedByMqtt()` ya impedian CMQTT AT), y el release llama
+ `cmqttResumeAfterUartHandover()`: descarta el frame RX a medias, y si
+ `AT+CMQTTCONNECT?` dice que la sesion vive se reusa tal cual, si dice que murio
+ (llamada mas larga que el keepalive, CSFB que se llevo el bearer) baja **solo
+ flags** y el siguiente pase hace `CONNECT`. Si el modulo se reinicio durante la
+ llamada, `modemRebootUrcSeen` manda al camino de re-init de 0.2.109.
+- **Route bounce.** `bounceMqttForRouteChange()` ya no manda `DISC` en path
+ nativo: solo limpia el backoff. O la LAN sirve — y entonces corre el unico
+ `stopLtePdp()` legitimo, el de `maintainLteFallback()`/`serviceNetworkPaths()` —
+ o se queda LTE, y entonces la sesion que iba a tirar es la que hace falta.
+- **`cmqttTearDown()` pregunta antes de `DISC`.** Si el modulo dice que no hay
+ sesion, se saltea el `DISC` (esa era la cadena documentada `+CMQTTDISC: 0,11` →
+ `CMQTTREL ERROR` → `CMQTTSTOP` encima del boot) y va directo a `REL`/`STOP`.
+- **`Unknown` es conservador en todos lados.** El adopt trataba "el modulo no
+ contesta" como "no conectado" y hacia `CONNECT` a ciegas (la jugada de 0.2.107),
+ mientras el soft-fail lo trataba como "no tocar". Ahora `Unknown` → camino
+ `STOP` en el adopt, cooldown en el soft-fail: nunca `CONNECT` sin confirmacion.
+- **`CGACT` antes de escalar.** Un `CONNECT` que falla tras `+CMQTTNONET` suele ser
+ el bearer caido; se reactiva el contexto 1 con `AT+CGACT=1,1` (no toca CMQTT) en
+ vez de llegar antes al `stopLtePdp()`. La falla igual cuenta: el escape hatch no
+ se desarma nunca.
+- **`cmqttDisconnect()` y `releaseLteMqttForModem()` borrados** (el primero ya solo
+ se llamaba donde el flag estaba en false, el segundo era codigo muerto).
+- **Password redactada en el log UART.** `AT+CMQTTCONNECT=...,"user","pass"` y
+ `AT+CGAUTH=...` se publicaban enteros al panel (y quedaban en la tabla de
+ events) con UART debug ON. Se redacta el ultimo argumento entre comillas.
+
+Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
+hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,
+`CSQ 99` sostenido, el ladder de recuperacion de radio (que resetea el modulo de
+todas formas) y el borrado de credenciales.
 
 ---
 

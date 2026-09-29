@@ -137,6 +137,13 @@ bool cmqttIsConnected() {
   return cmqttBrokerUp;
 }
 
+bool cmqttServiceIsUp() {
+  // "CMQTTSTART succeeded and we have not stopped it". Lets the reconnect path
+  // tell a CONNECT that failed over a dead bearer (service up, worth a CGACT)
+  // from a CMQTTSTART that never came up (CMQTTSTART dials the bearer itself).
+  return cmqttServiceUp;
+}
+
 // Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
 // Two in a row → ask the module whether the session is actually alive, then
 // either cool publishing down (alive) or clear our flags so the next pass can
@@ -282,9 +289,20 @@ static CmqttAdoptResult cmqttAdoptRunningService(const String& clientId) {
   }
   // Re-issuing ACCQ for an existing index answers ERROR, so take the client too.
   cmqttClientAcquired = true;
-  if (cmqttProbeBrokerLink() != kCmqttLinkUp) {
+  const CmqttLinkState link = cmqttProbeBrokerLink();
+  if (link == kCmqttLinkDown) {
     appendModemLogForced("adopted CMQTT client, no session");
     return kCmqttAdoptService;
+  }
+  if (link == kCmqttLinkUnknown) {
+    // The module would not say. Continuing would CMQTTCONNECT on a client that
+    // may still be connected - the 0.2.107 reboot trigger. "Unknown" is treated
+    // the same everywhere in this file: never act on it as if it meant "dead".
+    // Fall back to the STOP path, which is the pre-0.2.109 behaviour.
+    appendModemLogForced("CMQTT link unknown, cannot adopt");
+    cmqttClientAcquired = false;
+    cmqttServiceUp = false;
+    return kCmqttAdoptFailed;
   }
   // Live session with our client id, and the module keeps its subscriptions
   // across our reboot: resume it. This is what turns a silence-watchdog restart
@@ -523,13 +541,52 @@ static void cmqttDropAfterReboot() {
   cmqttRxPayload = "";
 }
 
-void cmqttDisconnect() {
-  // Graceful disconnect, keeps the service + client so the next connect is fast.
-  if (cmqttBrokerUp) {
-    String resp;
-    sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000, &resp);
+// Voice/SMS borrowed the UART and gave it back. Nothing was disconnected on the
+// way in (DISC is one of the two commands that reboot this A7672), so the module
+// normally still holds the session it keepalives by itself. Ask what survived
+// instead of rebuilding: that is what used to cost a modem reboot on every test
+// SMS and every alarm call (DISC on take + REL/STOP on release).
+void cmqttResumeAfterUartHandover() {
+  // Anything half-assembled when the UART was borrowed is unrecoverable: the raw
+  // topic/payload bytes went to the voice/SMS reader. Drop it (QoS 1 means the
+  // broker re-delivers) so cmqttLoop() does not resume inside a dead frame and
+  // cmqttIsRxBusy() does not stay true forever, which would mute the CSQ probe.
+  cmqttLineBuf = "";
+  cmqttRxActive = false;
+  cmqttRxInPayload = false;
+  cmqttRxTopic = "";
+  cmqttRxPayload = "";
+  if (modemRebootUrcSeen) {
+    // The module rebooted under the call/SMS (CFUN bounce for CSFB, or on its
+    // own). cmqttTearDown() is flags-only in this state; pollModem() re-inits.
+    cmqttTearDown();
+    return;
   }
-  cmqttBrokerUp = false;
+  if (!cmqttServiceUp || !cmqttBrokerUp) {
+    return;   // nothing to resume; the normal connect path owns it from here
+  }
+  const CmqttLinkState link = cmqttProbeBrokerLink();
+  if (modemRebootUrcSeen) {
+    cmqttTearDown();
+    return;
+  }
+  if (link == kCmqttLinkDown) {
+    // A call longer than the keepalive, or a CSFB that dropped the bearer. Flags
+    // only: the module says there is nothing to release, so the next pass may
+    // CMQTTCONNECT without the blind-CONNECT risk of 0.2.107.
+    noteLteSessionDrop("cs-handover");
+    cmqttBrokerUp = false;
+    cmqttPubSoftFails = 0;
+    cmqttPubCooldownUntilMs = 0;
+    appendModemLogForced("CS handover: session gone, will CONNECT");
+    return;
+  }
+  // Live, or the module would not say. Either way leave it alone: a live session
+  // resumes on the next pass, and an unknown one is settled by the soft-fail
+  // probe on the first publish. Same rule as everywhere else - never act on
+  // "unknown" as if it meant "dead".
+  appendModemLogForced(link == kCmqttLinkUp ? "CS handover: session alive"
+                                           : "CS handover: link unknown, kept");
 }
 
 void cmqttTearDown() {
@@ -540,18 +597,29 @@ void cmqttTearDown() {
     cmqttDropAfterReboot();
     return;
   }
-  // Full teardown back to a clean slate. DISC is issued unconditionally (when a
-  // client was ever acquired): our cmqttBrokerUp flag can be false while the
-  // modem still holds the broker connection - a failed publish or a route bounce
-  // clears only our flag, not the module's socket. Skipping DISC in that state
-  // made REL answer ERROR ("client is busy") and STOP answer ERROR too, because
-  // the module refuses to release a connected client. The DISC result is ignored:
-  // a client that never connected just answers ERROR, which is harmless.
+  // Full teardown back to a clean slate. This is the last resort, not a hot
+  // path: LAN taking over for good, three failed CONNECTs, sustained CSQ 99,
+  // the radio recovery ladder, or a credential wipe.
+  //
+  // DISC used to be issued unconditionally because our cmqttBrokerUp flag can be
+  // false while the module still holds the connection, and skipping it made REL
+  // and STOP answer ERROR ("client is busy"). That guess is no longer needed:
+  // ask the module. DISC on a client that is NOT connected is what produced the
+  // documented +CMQTTDISC: 0,11 → CMQTTREL ERROR → CMQTTSTOP-over-boot chain.
   if (cmqttClientAcquired) {
-    sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000);
+    const CmqttLinkState link = cmqttProbeBrokerLink();
     if (modemRebootUrcSeen) {
       cmqttDropAfterReboot();
       return;
+    }
+    if (link == kCmqttLinkDown) {
+      appendModemLogForced("teardown: module reports no session, skip DISC");
+    } else {
+      sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000);
+      if (modemRebootUrcSeen) {
+        cmqttDropAfterReboot();
+        return;
+      }
     }
   }
   cmqttBrokerUp = false;

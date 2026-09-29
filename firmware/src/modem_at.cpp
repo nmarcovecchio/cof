@@ -152,12 +152,29 @@ static void appendModemLogLine(String entry) {
   }
   modemCallLog += entry;
 }
+// The MQTT password and the APN password are the last quoted argument of
+// AT+CMQTTCONNECT= and AT+CGAUTH=, and this log is published to the panel (and
+// stored in the events table) whenever UART debug is ON. Two adjacent quoted
+// arguments (`","`) is what tells those apart from the single-quoted-argument
+// forms - AT+CMQTTCONNECT? and a CONNECT without credentials must stay intact.
+static String redactTrailingCredential(const String& line) {
+  if (line.indexOf("+CMQTTCONNECT=") < 0 && line.indexOf("+CGAUTH=") < 0) {
+    return line;
+  }
+  const int pair = line.indexOf("\",\"");
+  if (pair < 0) {
+    return line;
+  }
+  return line.substring(0, pair + 2) + "<redacted>\"";
+}
 void appendModemLog(char direction, const String& text) {
   // Lab UART debug logs every AT line; call/LTE progress keep the old filter.
   if (!state.callInProgress && !reportTestCallProgress && !reportLteProgress && !modemUartDebug) {
     return;
   }
-  String line = text;
+  // Both directions: a module that rebooted comes back with echo ON, so the
+  // command (with its credentials) also arrives inside the response.
+  String line = redactTrailingCredential(text);
   line.replace("\r", " ");
   line.replace("\n", " | ");
   line.trim();
