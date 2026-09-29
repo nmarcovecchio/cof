@@ -112,8 +112,30 @@ Ahora el gate solo aplica cuando `state.lteMqttTransport` (ahi el publish **es**
 confirmo `CMQTTSTART ok` pero el equipo se reinicio (ESP32: el contador `T+` de
 `millis()` paso de `T+39360` a `T+3164`; el dump siguiente muestra un
 `initModem()` completo) antes de poder publicar que paso disparo el reset. El
-culpable (¿`ACCQ`/`CONNECT`/`DISC`?) queda por reconfirmar con 0.2.112, que
-reporta cada paso en tiempo real.
+culpable (¿`ACCQ`/`CONNECT`/`DISC`?) quedo sin identificar por el bug de reporte
+de arriba.
+
+**Resultado con 0.2.112 (cof-test, 2026-09-29 16:33 UTC): la hipotesis DISC/QUIT
+queda DESMENTIDA en esta unidad (A7672SA-FASE, IMEI 860710055794385).** Con el
+reporte en vivo, el probe corrio la secuencia completa y limpia, paso a paso:
+`CMQTTSTART ok` → `CMQTTACCQ ok` → `CMQTTCONNECT ok` → `before DISC: up` →
+`DISC ok +CMQTTDISC: 0,0` → `REL ok` → `STOP ok` → `no reboot (*ATREADY)`.
+El dump UART lo confirma byte a byte (respuestas canonicas, `+CMQTTDISC: 0,0`,
+`+CMQTTSTOP: 0`, cero `*ATREADY`, contador `T+` continuo: ni el modem ni el
+ESP32 se reiniciaron). **El teardown CMQTT (DISC/REL/STOP) NO resetea este
+modem.** La nota historica de §0.2.106/0.2.110 ("DISC/QUIT reinicia el A7672")
+era una pista falsa o aplicaba a otra unidad/firmware: no es regla general en
+este hardware. La causa real de los reboots de 0.2.106–0.2.108 queda como el
+otro sospechoso: **`CMQTTCONNECT` sobre una sesion ya viva** (ver 0.2.113).
+
+**0.2.113 — probe `cmqtt_probe` gana fase 2: re-CONNECT sobre sesion viva.**
+Tras la fase 1 (DISC/QUIT, ya probada limpia), el probe vuelve a `CMQTTSTART` →
+`CMQTTACCQ` → `CMQTTCONNECT` #1 y luego emite **un segundo `CMQTTCONNECT` sobre
+la sesion recien conectada** (el patron exacto de 0.2.106/0.2.108, donde se
+conectaba sin `DISC` previo). Reporta `P2 reCONNECT ok/fail [+ *ATREADY]` y hace
+cleanup (`DISC`/`REL`/`STOP`) si sobrevive. Es la confirmacion empírica del
+segundo sospechoso, en la misma corrida y sobre LAN para que el resultado
+sobreviva a un reboot.
 
 Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
 hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,

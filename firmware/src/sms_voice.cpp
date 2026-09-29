@@ -509,6 +509,10 @@ void runCmqttProbe(const String& commandId) {
   }
 
   // Bring up a live session so DISC targets a real broker link.
+  const String server = String("tcp://") + state.mqttHost + ":" + String(state.mqttPort);
+  const String connectAt =
+      String("AT+CMQTTCONNECT=0,\"") + server + "\"," + String(kMqttKeepAliveSeconds) + ",1";
+
   const bool started = sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp);
   publishModemProbe(String("CMQTTSTART ") + (started ? "ok" : "fail " + probeFirstLine(resp)),
                     started, commandId);
@@ -516,10 +520,7 @@ void runCmqttProbe(const String& commandId) {
   const bool acquired = sendAT("AT+CMQTTACCQ=0,\"cof-probe\"", "OK", 5000);
   publishModemProbe(String("CMQTTACCQ ") + (acquired ? "ok" : "fail"), acquired, commandId);
 
-  const String server = String("tcp://") + state.mqttHost + ":" + String(state.mqttPort);
-  const bool connected =
-      sendAT(String("AT+CMQTTCONNECT=0,\"") + server + "\"," + String(kMqttKeepAliveSeconds) + ",1",
-             "+CMQTTCONNECT:", 20000, &resp);
+  const bool connected = sendAT(connectAt, "+CMQTTCONNECT:", 20000, &resp);
   publishModemProbe(String("CMQTTCONNECT ") + (connected ? "ok " + server : "fail " + probeFirstLine(resp)),
                     connected, commandId);
 
@@ -560,6 +561,48 @@ void runCmqttProbe(const String& commandId) {
     publishModemProbe("MODEM REBOOTED during DISC/QUIT (*ATREADY seen)", false, commandId);
   } else {
     publishModemProbe("no reboot (*ATREADY) during DISC/QUIT", true, commandId);
+  }
+
+  // Phase 2 — re-CONNECT over a live session. The OTHER historical *ATREADY
+  // suspect: 0.2.106/0.2.108 issued CMQTTCONNECT on a session that was already
+  // up (no DISC first) and the module reset. Phase 1 proved the teardown path
+  // clean; this re-runs "connect again while connected" to see if THAT is the
+  // real trigger. Runs only if phase 1 did not already reboot the module.
+  if (modemRebootUrcSeen) {
+    publishModemProbe("phase2 skipped (module rebooted in phase 1)", false, commandId);
+  } else {
+    publishModemProbe("phase2 re-CONNECT over live session", true, commandId);
+    const bool started2 = sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp);
+    publishModemProbe(String("P2 CMQTTSTART ") + (started2 ? "ok" : "fail " + probeFirstLine(resp)),
+                      started2, commandId);
+    const bool acquired2 = sendAT("AT+CMQTTACCQ=0,\"cof-probe\"", "OK", 5000);
+    publishModemProbe(String("P2 CMQTTACCQ ") + (acquired2 ? "ok" : "fail"), acquired2, commandId);
+    const bool conn1 = sendAT(connectAt, "+CMQTTCONNECT:", 20000, &resp);
+    publishModemProbe(String("P2 CONNECT#1 ") + (conn1 ? "ok " + server : "fail " + probeFirstLine(resp)),
+                      conn1, commandId);
+
+    if (!modemRebootUrcSeen) {
+      if (sendAT("AT+CMQTTCONNECT?", "OK", 5000, &resp)) {
+        publishModemProbe("P2 before reCONNECT: " + cmqttLinkSummary(resp), true, commandId);
+      }
+      // The suspect: CONNECT again on the live session.
+      const bool conn2 = sendAT(connectAt, "+CMQTTCONNECT:", 20000, &resp);
+      publishModemProbe(String("P2 reCONNECT ") + (conn2 ? "ok " : "fail ") + probeFirstLine(resp) +
+                            (modemRebootUrcSeen ? " + *ATREADY (REBOOT)" : ""),
+                        conn2, commandId);
+    }
+
+    if (modemRebootUrcSeen) {
+      publishModemProbe("P2 MODEM REBOOTED during re-CONNECT (*ATREADY seen)", false, commandId);
+    } else {
+      publishModemProbe("P2 no reboot during re-CONNECT", true, commandId);
+      const bool disc2 = sendAT("AT+CMQTTDISC=0,120", "+CMQTTDISC:", 15000, &resp);
+      publishModemProbe(String("P2 DISC ") + (disc2 ? "ok " : "fail ") + probeFirstLine(resp), disc2, commandId);
+      const bool rel2 = sendAT("AT+CMQTTREL=0", "OK", 5000);
+      publishModemProbe(String("P2 REL ") + (rel2 ? "ok" : "fail"), rel2, commandId);
+      const bool stop2 = sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000, &resp);
+      publishModemProbe(String("P2 STOP ") + (stop2 ? "ok" : "fail"), stop2, commandId);
+    }
   }
 
   releaseModemToMqtt(false);
