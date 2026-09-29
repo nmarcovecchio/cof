@@ -230,7 +230,7 @@ void ensureEchoOffIfNeeded(const String& command, const String& response) {
 // a spontaneous reboot with a NUL (`\0\r\n*ATREADY`), so the URC was invisible
 // and 0.2.94 kept sending CMQTTDISC/REL/STOP through the boot (ethernet unplug,
 // 2026-09-26 13:25).
-static bool textHasAtReady(const String& text) {
+bool textHasAtReady(const String& text) {
   static const char kTag[] = "*ATREADY";
   constexpr int kTagLen = 8;
   if (text.length() < kTagLen) {

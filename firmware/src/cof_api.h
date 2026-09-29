@@ -77,8 +77,8 @@ void appendModemLog(char direction, const String& text);
 // Records a line even when no call/LTE handshake is in progress. Used so the
 // device page shows CMQTT URCs and SMS AT that the gated logger drops.
 void appendModemLogForced(const String& text);
-// Persist + apply UART debug (NVS). Only the MQTT Flask command should pass
-// enable=false; OTA boot forces true.
+// Persist + apply UART debug (NVS). Only the MQTT Flask command toggles it;
+// neither boot nor OTA forces it ON.
 void setModemUartDebug(bool enable, const char* reason);
 // Queue a modem_uart_debug event with the current log (lab dumps).
 void snapshotModemUartDebug(const char* reason);
@@ -110,6 +110,9 @@ bool refreshSimReady();
 bool resetModemRadio(uint8_t stage);
 void restoreAutoRadio();
 bool sendAT(const String& command, const String& expected = "OK", uint32_t timeoutMs = 2000, String* responseOut = nullptr);
+// NUL-safe search for the reboot URC: the A7672 prefixes a spontaneous reset
+// with `\0`, so String::indexOf("*ATREADY") (strstr) never sees it.
+bool textHasAtReady(const String& text);
 bool waitForRadioService(uint32_t timeoutMs, bool gsmOnly);
 bool waitUntilModemReady(bool forCall, uint32_t timeoutMs);
 void waitWithMqtt(uint32_t ms);

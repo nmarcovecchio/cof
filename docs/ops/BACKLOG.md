@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.108** (en `ota/manifest.json`).
+Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.109** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -22,8 +22,7 @@ detail). Con ON, ring AT con timestamps, dump cada 30s + snapshot al drop
 `millis()` fresco (el `now` del inicio de `loop()` underflowaba tras un
 reconnect CMQTT largo y republicaba ~2 s despues). En path nativo
 `queryLteIp` ya no llama `AT+IPADDR` (siempre ERROR / 4 s); usa `CGPADDR=1`
-(OLED/IP intactos). Pendiente: causa raiz del `*ATREADY` ~cada minuto en
-solo-LTE.
+(OLED/IP intactos).
 
 **0.2.107 — soft reclaim sin DISC:** el limite de soft-fail PUB ya no manda
 `CMQTTDISC` (0.2.106 lo hizo y reiniciaba el A7672). Solo baja flags y reintenta
@@ -34,6 +33,24 @@ Drop reason admite `pub-soft+atready` si el URC llega despues.
 siguio en `pub-soft+atready` porque `CMQTTCONNECT` sobre sesion viva tambien
 reinicia el modulo. Soft-fail ahora solo pausa PUB 60 s (sin DISC/CONNECT).
 OTA ya no fuerza `uartDbg` ON.
+
+**0.2.109 — `*ATREADY` invisible en sesion viva (causa raiz del offline del
+2026-09-29 01:19):** `cmqttLoop()` solo miraba lineas `+CMQTT*` y **descartaba**
+el resto, incluido el `*ATREADY` del reboot espontaneo del modulo. El cliente
+MQTT del A7672 quedaba muerto con `cmqttBrokerUp` en true, cada PUB posterior
+contaba como soft-fail, y el cooldown de 0.2.108 dejaba el publish en pausa para
+siempre sin reconectar nunca: la unica salida era el watchdog de silencio (6 min
+→ `ESP.restart()`), y ese reboot encontraba el servicio CMQTT viejo, mandaba
+`CMQTTSTOP` y reiniciaba tambien el modem. Repetido, eso dejo la radio colgada.
+
+Tres cambios: (1) `cmqttLoop()` detecta `*ATREADY` (`textHasAtReady`, NUL-safe) y
+levanta `modemRebootUrcSeen` como hace `readModemUntil()`; (2) al llegar al limite
+de soft-fails se consulta `AT+CMQTTCONNECT?` (read-only): si el modulo dice que no
+hay sesion se bajan **solo flags** y se reintenta `CONNECT`, si dice que sigue viva
+se mantiene el cooldown — nunca `DISC`/`STOP`, nunca `CONNECT` a ciegas; (3) si
+`CMQTTSTART` responde `ERROR` ("ya arrancado", tipico tras reboot del ESP32) se
+adopta el servicio via `AT+CMQTTACCQ?` en vez de mandar `CMQTTSTOP`, y si el
+cliente 0 sigue conectado con nuestro client id se reusa la sesion tal cual.
 
 ---
 

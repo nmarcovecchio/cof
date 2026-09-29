@@ -138,11 +138,37 @@ bool cmqttIsConnected() {
 }
 
 // Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
-// Two in a row → publish cooldown only. DISC (0.2.106) and CONNECT-without-DISC
-// on a live session (0.2.107) both rebooted this A7672 (*ATREADY). Keep the
-// CMQTT session; skip PUB until the cooldown elapses, then try again.
+// Two in a row → ask the module whether the session is actually alive, then
+// either cool publishing down (alive) or clear our flags so the next pass can
+// CONNECT again (dead). DISC (0.2.106) and CONNECT-without-DISC on a live
+// session (0.2.107) both rebooted this A7672 (*ATREADY), so neither is issued
+// on a session that might still be up.
 static uint8_t cmqttPubSoftFails = 0;
 static uint32_t cmqttPubCooldownUntilMs = 0;
+
+// Read-only liveness check of the module's own MQTT client, so a recovery does
+// not have to guess. `AT+CMQTTCONNECT?` answers `+CMQTTCONNECT: 0,"tcp://host:port"`
+// for a connected client and `+CMQTTCONNECT: 0,""` - or lists no client 0 at all
+// once the module has reset its CMQTT stack - when it is not. It changes nothing
+// on the module, which is the whole point: DISC (0.2.106) and a blind CONNECT on
+// a live session (0.2.107) are both reboot triggers here.
+enum CmqttLinkState { kCmqttLinkUnknown, kCmqttLinkUp, kCmqttLinkDown };
+
+static CmqttLinkState cmqttProbeBrokerLink() {
+  String resp;
+  if (!sendAT("AT+CMQTTCONNECT?", "OK", 5000, &resp)) {
+    // sendAT refuses AT+CMQTT* after *ATREADY, and a rebooted module has no
+    // session left either way.
+    return modemRebootUrcSeen ? kCmqttLinkDown : kCmqttLinkUnknown;
+  }
+  const int at = resp.indexOf("+CMQTTCONNECT: 0,");
+  if (at < 0) {
+    return kCmqttLinkDown;
+  }
+  const int lineEnd = resp.indexOf('\n', at);
+  const String line = lineEnd < 0 ? resp.substring(at) : resp.substring(at, lineEnd);
+  return line.indexOf("://") >= 0 ? kCmqttLinkUp : kCmqttLinkDown;
+}
 
 static void cmqttNotePubSoftFail(const char* why) {
   cmqttPubSoftFails++;
@@ -151,13 +177,39 @@ static void cmqttNotePubSoftFail(const char* why) {
   if (cmqttPubSoftFails < kCmqttPubSoftFailLimit) {
     return;
   }
+  cmqttPubSoftFails = 0;
+
+  // Two failures in a row are either a busy module or a session that is already
+  // gone, and the two need opposite treatment. 0.2.108 assumed "busy" and only
+  // ever cooled down, so a dead session parked publishing forever: the broker
+  // kept the device "online" until the 6-minute silence watchdog restarted the
+  // ESP32, and that restart met the stale CMQTT service, sent CMQTTSTOP and
+  // rebooted the modem too. Ask the module which case this is.
+  const CmqttLinkState link = cmqttProbeBrokerLink();
+  if (modemRebootUrcSeen) {
+    noteLteSessionDrop("atready");
+    cmqttDropAfterReboot();
+    appendModemLogForced("PUB soft fail: module rebooted, re-init");
+    return;
+  }
+  if (link == kCmqttLinkDown) {
+    // Flags only - no DISC/REL/STOP. The module says there is no session to
+    // release, so the next pass may CMQTTCONNECT (the manual's own recovery)
+    // without the risk that made 0.2.107 reboot the A7672.
+    noteLteSessionDrop("pub-dead");
+    cmqttBrokerUp = false;
+    cmqttPubCooldownUntilMs = 0;
+    appendModemLogForced("PUB soft fail: module reports no session, reconnecting");
+    Serial.println("[cmqtt] soft PUB fail limit: module reports no session, reconnecting");
+    return;
+  }
+  // Still connected (or the probe was inconclusive): keep the session as 0.2.108.
   cmqttPubCooldownUntilMs = millis() + kCmqttPubSoftCooldownMs;
   if (cmqttPubCooldownUntilMs == 0) {
     cmqttPubCooldownUntilMs = 1;
   }
-  cmqttPubSoftFails = 0;
   appendModemLogForced("PUB soft fail limit, cooldown " +
-                        String(kCmqttPubSoftCooldownMs / 1000UL) + "s (no DISC/CONNECT)");
+                        String(kCmqttPubSoftCooldownMs / 1000UL) + "s (session live)");
   Serial.printf("[cmqtt] soft PUB fail limit: cooldown %lu s, session kept\n",
                 static_cast<unsigned long>(kCmqttPubSoftCooldownMs / 1000UL));
 }
@@ -173,10 +225,20 @@ bool cmqttIsRxBusy() {
 // Start the MQTT service. Per the A76XX AT manual (ch.18), AT+CMQTTSTART
 // activates the PDP context itself and answers "OK\r\n+CMQTTSTART: 0" on
 // success; a bare ERROR means the service was already running.
-static bool cmqttStartService() {
+static bool cmqttStartService(bool* alreadyRunning = nullptr) {
+  if (alreadyRunning != nullptr) {
+    *alreadyRunning = false;
+  }
   String resp;
   if (!sendAT("AT+CMQTTSTART", "+CMQTTSTART:", 12000, &resp)) {
-    return false;   // timeout, or bare ERROR ("already started")
+    // Tell the two failures apart. A bare ERROR with no result line is the
+    // module saying the service is already running (our reboot, not its own);
+    // a timeout or a "+CMQTTSTART: <err>" is a real failure to start.
+    if (alreadyRunning != nullptr && resp.indexOf("ERROR") >= 0 &&
+        resp.indexOf("+CMQTTSTART:") < 0) {
+      *alreadyRunning = true;
+    }
+    return false;
   }
   if (cmqttResult(resp, "+CMQTTSTART:") != 0) {
     Serial.printf("[cmqtt] CMQTTSTART err: %s\n", resp.c_str());
@@ -184,6 +246,53 @@ static bool cmqttStartService() {
   }
   cmqttServiceUp = true;
   return true;
+}
+
+// The CMQTT service survived an ESP32 reboot. Read back what the module holds
+// instead of stopping it: AT+CMQTTACCQ? lists the acquired clients and
+// cmqttProbeBrokerLink() says whether client 0 is still connected. Both are read
+// commands, so nothing here can trigger the *ATREADY that CMQTTSTOP does.
+enum CmqttAdoptResult {
+  kCmqttAdoptFailed,    // module would not say; caller falls back to STOP
+  kCmqttAdoptService,   // service (and maybe the client) is ours again; CONNECT next
+  kCmqttAdoptSession,   // client 0 is still connected: nothing left to do
+};
+
+static CmqttAdoptResult cmqttAdoptRunningService(const String& clientId) {
+  String resp;
+  if (!sendAT("AT+CMQTTACCQ?", "OK", 5000, &resp)) {
+    return kCmqttAdoptFailed;
+  }
+  cmqttServiceUp = true;
+  const int at = resp.indexOf("+CMQTTACCQ: 0,");
+  if (at < 0) {
+    // Service running, no client 0: the ACCQ below creates it as usual.
+    appendModemLogForced("adopted CMQTT service (no client)");
+    return kCmqttAdoptService;
+  }
+  const int lineEnd = resp.indexOf('\n', at);
+  const String line = lineEnd < 0 ? resp.substring(at) : resp.substring(at, lineEnd);
+  if (line.indexOf(clientId) < 0) {
+    // Someone else's client id on index 0 (should not happen: it is derived from
+    // the eFuse MAC). Publishing under it would break the broker ACL, so let the
+    // caller take the expensive STOP path.
+    appendModemLogForced("CMQTT client id mismatch on index 0");
+    cmqttServiceUp = false;
+    return kCmqttAdoptFailed;
+  }
+  // Re-issuing ACCQ for an existing index answers ERROR, so take the client too.
+  cmqttClientAcquired = true;
+  if (cmqttProbeBrokerLink() != kCmqttLinkUp) {
+    appendModemLogForced("adopted CMQTT client, no session");
+    return kCmqttAdoptService;
+  }
+  // Live session with our client id, and the module keeps its subscriptions
+  // across our reboot: resume it. This is what turns a silence-watchdog restart
+  // from a ~2 min modem reboot into a few seconds.
+  cmqttBrokerUp = true;
+  appendModemLogForced("adopted live CMQTT session");
+  Serial.println("[cmqtt] adopted live CMQTT session (no STOP, no reconnect)");
+  return kCmqttAdoptSession;
 }
 
 bool cmqttConnect(const String& clientId, const String& willTopic, const String& willPayload,
@@ -204,25 +313,37 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   }
 
   if (!cmqttServiceUp) {
-    if (!cmqttStartService()) {
-      // A bare ERROR from CMQTTSTART means "service already started" (the modem
-      // kept its state across an ESP32 OTA reboot - OTA never resets the modem).
-      // Stop the stale service and retry once.
-      Serial.println("[cmqtt] CMQTTSTART failed; stopping stale service and retrying");
-      if (modemRebootUrcSeen) {
-        cmqttDropAfterReboot();
-        return false;
+    bool alreadyRunning = false;
+    if (!cmqttStartService(&alreadyRunning)) {
+      // A bare ERROR from CMQTTSTART means "service already started": the modem
+      // kept its CMQTT state across an ESP32 reboot (neither OTA nor the silence
+      // watchdog resets the modem). Adopt what is already there instead of
+      // stopping it - CMQTTSTOP is the command that rebooted this A7672 on every
+      // such boot, and each of those reboots costs a full re-registration, which
+      // is what eventually left the radio wedged.
+      const CmqttAdoptResult adopted = (alreadyRunning && !modemRebootUrcSeen)
+                                           ? cmqttAdoptRunningService(clientId)
+                                           : kCmqttAdoptFailed;
+      if (adopted == kCmqttAdoptSession) {
+        return true;
       }
-      sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
-      if (modemRebootUrcSeen) {
-        cmqttDropAfterReboot();
-        return false;
-      }
-      if (!cmqttStartService()) {
+      if (adopted == kCmqttAdoptFailed) {
+        Serial.println("[cmqtt] CMQTTSTART failed; stopping stale service and retrying");
         if (modemRebootUrcSeen) {
           cmqttDropAfterReboot();
+          return false;
         }
-        return false;
+        sendAT("AT+CMQTTSTOP", "+CMQTTSTOP:", 12000);
+        if (modemRebootUrcSeen) {
+          cmqttDropAfterReboot();
+          return false;
+        }
+        if (!cmqttStartService()) {
+          if (modemRebootUrcSeen) {
+            cmqttDropAfterReboot();
+          }
+          return false;
+        }
       }
     }
   }
@@ -483,6 +604,20 @@ void cmqttLoop() {
   String line;
   bool sawCmqtt = false;
   while (cmqttReadLine(line)) {
+    // The module rebooted under a live session. This loop only ever inspected
+    // `+CMQTT*` lines and dropped everything else, so it *consumed* the *ATREADY
+    // and the reboot stayed invisible: the module's client was gone while
+    // cmqttBrokerUp stayed true, every later PUB failed as a "soft" fail, and
+    // nothing ever reconnected. Flag it exactly like readModemUntil() does and
+    // let pollModem() run the re-init.
+    if (textHasAtReady(line)) {
+      appendModemLogForced(line);
+      modemRebootUrcSeen = true;
+      noteLteSessionDrop("atready");
+      cmqttDropAfterReboot();
+      captureLteUrcLog();
+      return;
+    }
     if (line.startsWith("+CMQTT")) {
       appendModemLogForced(line);
       sawCmqtt = true;
