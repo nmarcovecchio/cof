@@ -567,6 +567,12 @@
             title="Estado reportado por el equipo (NVS)">
         UART {% if uart_dbg %}ON{% elif uart_dbg is sameas false %}OFF{% else %}?{% endif %}
       </span>
+      <form method="post" action="{{ url_for('device_clear_events', device_uid=device.device_uid) }}" onsubmit="return confirm('Borrar TODOS los eventos de {{ device.device_uid }} (incluye dumps UART del modem)? La telemetria no se borra.');">
+        {{ csrf_field() }}
+        <button class="btn btn-outline-danger" type="submit" title="Borra el historial de eventos y dumps UART del modem. No toca telemetria.">
+          <i class="bi bi-trash"></i> Limpiar eventos
+        </button>
+      </form>
       <form method="post" action="{{ url_for('device_delete', device_uid=device.device_uid) }}" onsubmit="return confirm('Archivar dispositivo {{ device.device_uid }}? Se conserva el historial y se ignora telemetria nueva.');">
         {{ csrf_field() }}
         <button class="btn btn-outline-danger" type="submit">

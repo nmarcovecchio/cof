@@ -1110,6 +1110,20 @@ def create_app() -> Flask:
 
         return render_template("device_edit.html", device=device, tenants=tenants_rows, sites=sites, error=error)
 
+    @app.post("/devices/<device_uid>/clear-events")
+    @login_required
+    def device_clear_events(device_uid):
+        """Wipe event history for this device (incl. modem UART dumps). Telemetry stays."""
+        device = Device.query.filter_by(device_uid=device_uid).first_or_404()
+        deleted = Event.query.filter_by(device_id=device.id).delete(synchronize_session=False)
+        db.session.commit()
+        flash(
+            f"Se borraron {deleted} evento{'s' if deleted != 1 else ''} "
+            f"(incluye dumps UART del modem). La telemetria no se toco.",
+            "success",
+        )
+        return redirect(url_for("device_detail", device_uid=device.device_uid))
+
     @app.post("/devices/<device_uid>/delete")
     @login_required
     def device_delete(device_uid):
