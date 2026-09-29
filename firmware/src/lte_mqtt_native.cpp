@@ -138,9 +138,14 @@ bool cmqttIsConnected() {
 }
 
 // Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
-// Two in a row → DISC only (keep CMQTT service) so we stop hammering a zombie
-// session; CMQTTSTOP here was historically linked to *ATREADY.
+// Two in a row → clear broker flag only (keep CMQTT service+client). DISC and
+// STOP both reboot this A7672 (*ATREADY); CONNECT again without teardown.
 static uint8_t cmqttPubSoftFails = 0;
+static bool cmqttSoftReclaim = false;
+
+bool cmqttSoftReclaimPending() {
+  return cmqttSoftReclaim;
+}
 
 static void cmqttNotePubSoftFail(const char* why) {
   cmqttPubSoftFails++;
@@ -149,10 +154,11 @@ static void cmqttNotePubSoftFail(const char* why) {
   if (cmqttPubSoftFails < kCmqttPubSoftFailLimit) {
     return;
   }
-  appendModemLogForced("PUB soft fail limit, DISC (no STOP)");
-  Serial.println("[cmqtt] soft PUB fail limit: DISC, will CONNECT again");
+  appendModemLogForced("PUB soft fail limit, flags only (no DISC)");
+  Serial.println("[cmqtt] soft PUB fail limit: clear broker flag, CONNECT again");
   noteLteSessionDrop("pub-soft");
-  cmqttDisconnect();
+  cmqttBrokerUp = false;
+  cmqttSoftReclaim = true;
   cmqttPubSoftFails = 0;
   state.mqttConnected = false;
 }
@@ -259,6 +265,7 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
   }
 
   cmqttBrokerUp = true;
+  cmqttSoftReclaim = false;
   Serial.println("[cmqtt] connected to " + serverAddr);
   return true;
 }
@@ -308,6 +315,7 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else {
       cmqttNotePubSoftFail("PUB topic fail");
     }
@@ -322,6 +330,7 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
     if (modemRebootUrcSeen || ltePdpDown) {
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else {
       cmqttNotePubSoftFail("PUB payload fail");
     }
@@ -338,15 +347,18 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
       noteLteSessionDrop("atready");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else if (resp.indexOf("+CMQTTNONET") >= 0) {
       noteLteSessionDrop("nonet");
       cmqttBrokerUp = false;
       ltePdpDown = true;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else if (resp.indexOf("+CMQTTCONNLOST") >= 0) {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else {
       cmqttNotePubSoftFail("PUB no URC");
     }
@@ -361,6 +373,7 @@ bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool 
       noteLteSessionDrop("pub");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
     } else {
       cmqttNotePubSoftFail("PUB result");
     }
@@ -375,6 +388,7 @@ static void cmqttDropAfterReboot() {
   cmqttClientAcquired = false;
   cmqttBrokerUp = false;
   cmqttPubSoftFails = 0;
+  cmqttSoftReclaim = false;
   cmqttLineBuf = "";
   cmqttRxActive = false;
   cmqttRxInPayload = false;
@@ -437,6 +451,8 @@ void cmqttTearDown() {
   cmqttRxInPayload = false;
   cmqttRxTopic = "";
   cmqttRxPayload = "";
+  cmqttPubSoftFails = 0;
+  cmqttSoftReclaim = false;
 }
 
 // Dispatch a completed inbound message into the shared callback. onMqttMessage
@@ -474,6 +490,7 @@ void cmqttLoop() {
       noteLteSessionDrop("connlost");
       cmqttBrokerUp = false;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
       continue;
     }
     if (line.startsWith("+CMQTTNONET")) {
@@ -484,6 +501,7 @@ void cmqttLoop() {
       cmqttBrokerUp = false;
       ltePdpDown = true;
       cmqttPubSoftFails = 0;
+      cmqttSoftReclaim = false;
       continue;
     }
 

@@ -68,7 +68,7 @@ bool modemCsWorkAllowed();
 String resolveLteMqttPeer(const char* host);
 void restorePacketServices();
 void stopLtePdp();
-// First cause wins until takeLteSessionDrop() publishes it on the next LTE OK.
+// First cause wins; *ATREADY may append ("pub-soft+atready") until take.
 void noteLteSessionDrop(const char* reason);
 const char* takeLteSessionDrop();
 
@@ -121,6 +121,8 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
 void cmqttDisconnect();
 bool cmqttIsConnected();
 bool cmqttIsRxBusy();
+// True after soft PUB reclaim (flags only): CONNECT again, do not STOP/teardown.
+bool cmqttSoftReclaimPending();
 void cmqttLoop();
 bool cmqttPublish(const String& topic, const uint8_t* payload, size_t len, bool retained, uint8_t qos);
 bool cmqttSubscribe(const String& topic, uint8_t qos);

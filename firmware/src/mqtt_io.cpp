@@ -780,6 +780,20 @@ static void connectMqttNativeIfNeeded() {
     setStatus("MQTT fail");
     lteMqttConnectFails++;
     if (lteMqttConnectFails >= kLteMqttConnectFailLimit) {
+      // Soft PUB reclaim left CMQTT service+client up on purpose. STOP/TearDown
+      // here is the same ATREADY path 0.2.106 hit via DISC. Keep retrying CONNECT.
+      if (cmqttSoftReclaimPending()) {
+        Serial.println("[lte] soft reclaim: skip PDP rebuild/STOP after connect fails");
+        lteMqttConnectFails = 0;
+        lteTraceLog = modemCallLog;
+        if (!(pendingLteTracePublish && pendingLteTraceMessage.startsWith("SMS"))) {
+          pendingLteTraceMessage = "LTE MQTT soft reclaim (no STOP)";
+          pendingLteTraceOk = false;
+          pendingLteTracePublish = true;
+        }
+        reportLteProgress = false;
+        return;
+      }
       lteMqttConnectFails = 0;
       Serial.println("[lte] repeated MQTT connect failures, rebuilding PDP");
       noteLteSessionDrop("connect-fail");

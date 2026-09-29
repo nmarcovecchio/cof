@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-27**. Ultimo firmware publicado: **0.2.99** (en `ota/manifest.json`).
+Estado: **2026-09-28**. Ultimo firmware publicado: **0.2.107** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -24,6 +24,11 @@ reconnect CMQTT largo y republicaba ~2 s despues). En path nativo
 `queryLteIp` ya no llama `AT+IPADDR` (siempre ERROR / 4 s); usa `CGPADDR=1`
 (OLED/IP intactos). Pendiente: causa raiz del `*ATREADY` ~cada minuto en
 solo-LTE.
+
+**0.2.107 — soft reclaim sin DISC:** el limite de soft-fail PUB ya no manda
+`CMQTTDISC` (0.2.106 lo hizo y reiniciaba el A7672). Solo baja flags y reintenta
+`CONNECT`; connect-fail no escala a `STOP` mientras haya soft reclaim pendiente.
+Drop reason admite `pub-soft+atready` si el URC llega despues.
 
 ---
 

@@ -2,6 +2,7 @@
 #include "cof_state.h"
 #include <Arduino.h>
 #include <Client.h>
+#include <cstring>
 
 // Extracted verbatim from main.cpp, which used to hold every function
 
@@ -293,22 +294,35 @@ bool ensureLtePdp() {
   lastLteRetryDelayMs = std::min<uint32_t>(lastLteRetryDelayMs * 2U, kLteRetryMaxIntervalMs);
   return false;
 }
-static const char* lteSessionDropReason = nullptr;
+// Mutable so *ATREADY can append after a first cause (e.g. pub-soft+atready).
+static char lteSessionDropBuf[40] = {};
+static bool lteSessionDropSet = false;
 
 void noteLteSessionDrop(const char* reason) {
   if (reason == nullptr || reason[0] == '\0') {
     return;
   }
-  if (lteSessionDropReason == nullptr) {
-    lteSessionDropReason = reason;
+  if (!lteSessionDropSet) {
+    strncpy(lteSessionDropBuf, reason, sizeof(lteSessionDropBuf) - 1);
+    lteSessionDropBuf[sizeof(lteSessionDropBuf) - 1] = '\0';
+    lteSessionDropSet = true;
+  } else if (strcmp(reason, "atready") == 0 &&
+             strstr(lteSessionDropBuf, "atready") == nullptr) {
+    // Soft reclaim / CONNLOST often precedes the reboot URC; keep both labels.
+    const size_t n = strlen(lteSessionDropBuf);
+    if (n + 8 < sizeof(lteSessionDropBuf)) {
+      memcpy(lteSessionDropBuf + n, "+atready", 9);
+    }
   }
   snapshotModemUartDebug(reason);
 }
 
 const char* takeLteSessionDrop() {
-  const char* reason = lteSessionDropReason;
-  lteSessionDropReason = nullptr;
-  return reason;
+  if (!lteSessionDropSet) {
+    return nullptr;
+  }
+  lteSessionDropSet = false;
+  return lteSessionDropBuf;
 }
 
 void stopLtePdp() {
