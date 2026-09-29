@@ -57,7 +57,7 @@ bool netopenResultOk(const String& resp);
 bool parseLteIp(const String& resp, String& ipOut);
 bool queryLteIp(String& ipOut);
 // Logical UART mutex: take before voice/SMS AT, release after. Neither end
-// disconnects CMQTT: the session lives in the module, and DISC/STOP reboot it.
+// disconnects CMQTT: the session lives in the module and survives the handover.
 void takeModemForVoiceSms(ModemUartOwner owner);
 void releaseModemToMqtt(bool wasOnLte);
 bool modemUartOwnedByMqtt();
@@ -133,7 +133,8 @@ void cmqttResumeAfterUartHandover();
 bool cmqttSubscribe(const String& topic, uint8_t qos);
 // Last resort only (LAN takes over for good, 3 failed CONNECTs, CSQ 99, radio
 // ladder, credential wipe): DISC+REL+STOP, and DISC only if the module confirms
-// a live session. Never call this from a hot path - it can reboot the module.
+// a live session (DISC on a non-connected client answers +CMQTTDISC: 0,11 and
+// chains REL/STOP into ERROR). Never call this from a hot path.
 void cmqttTearDown();
 void serviceLteMqttHealth();
 

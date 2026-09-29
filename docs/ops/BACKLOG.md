@@ -137,6 +137,31 @@ cleanup (`DISC`/`REL`/`STOP`) si sobrevive. Es la confirmacion empírica del
 segundo sospechoso, en la misma corrida y sobre LAN para que el resultado
 sobreviva a un reboot.
 
+**Gran descubrimiento (cof-test, 2026-09-29, fw 0.2.112/0.2.113): NI el teardown
+CMQTT NI el re-CONNECT reinician el A7672SA-FASE.** Fase 1: `DISC`/`REL`/`STOP`
+corren limpios de punta a punta (respuestas canonicas, cero `*ATREADY`, contador
+`T+` continuo). Fase 2: el re-`CMQTTCONNECT` sobre sesion viva **no reinicia**,
+responde `+CMQTTCONNECT: 0,19` = **"client is used"** (tabla de codigos de la
+A76XX MQTT(S) Application Note §1.3). La hipotesis historica de 0.2.106–0.2.110
+("DISC/QUIT resetea el modem") queda **desmentida**: era una pista falsa o
+aplicaba a otra unidad/firmware. La causa real de los reboots de 0.2.106–0.2.108
+fue otra: el modem se reiniciaba solo (CFUN/CSFB o espontaneo) y el firmware,
+que no veia el `*ATREADY` por el prefijo `\0` (0.2.94), seguia mandando CMQTT
+**encima del boot** (`CMQTTDISC` codigo 11 → `REL ERROR` → `STOP` sobre boot), lo
+que dejaba la radio en `NO SERVICE`. O sea: los comandos CMQTT no *causaban* el
+reboot; lo *agravaban* sobre un modem que ya estaba reiniciandose.
+
+**0.2.114 — `cmqttConnect()` adopta `0,19` ("client is used") en vez de fallar.**
+Con el codigo 19 identificado, el connect ya no lo trata como error: si el
+modulo dice "client is used", el flag `cmqttBrokerUp` estaba stale (soft-fail que
+probeo "unknown", o un `CONNLOST` transitorio que el modem recupero solo) y la
+sesion esta viva; se adopta (`cmqttBrokerUp = true`) en vez de devolver false y
+caminar el teardown/reconnect contra una sesion viva. Corrige ademas los
+comentarios que afirmaban (mal) que DISC/STOP/CONNECT "reinician" el A7672: la
+postura "probe-first / no DISC en hot path" se mantiene, pero ahora con la razon
+correcta (DISC sobre cliente no conectado = `0,11` + `REL`/`STOP` ERROR, no un
+reboot).
+
 Sigue habiendo `DISC`/`REL`/`STOP`, **solo** como ultimo recurso y nunca en un
 hot path: LAN que toma el relevo definitivo, 3 `CONNECT` fallidos seguidos,
 `CSQ 99` sostenido, el ladder de recuperacion de radio (que resetea el modulo de

@@ -17,8 +17,8 @@ void requestMqttBounce(const char* reason) {
 void bounceMqttForRouteChange() {
 #if COF_LTE_MQTT_NATIVE
   if (state.lteMqttTransport) {
-    // Nothing to bounce on the native path, and CMQTTDISC here is one of the two
-    // commands that reboot this A7672. A route change ends one of two ways: LAN
+    // Nothing to bounce on the native path: a DISC here would only force a PDP
+    // re-registration we don't need. A route change ends one of two ways: LAN
     // proves usable, and then maintainLteFallback() / serviceNetworkPaths() run
     // the one legitimate stopLtePdp(); or LTE stays, and then the session we
     // would have dropped is the one we still need. Only clear the backoff so a
@@ -751,9 +751,10 @@ static void connectMqttNativeIfNeeded() {
     cmqttLoop();
     if (!cmqttIsConnected()) {
       // CONNLOST or NONET cleared the broker flag. For NONET we used to call
-      // stopLtePdp() → CMQTTSTOP, which rebooted the A7672 (*ATREADY) while the
-      // carrier was already re-attaching PDP. Keep the CMQTT service and CONNECT
-      // again on the next reconnect pass.
+      // stopLtePdp() → CMQTTSTOP while the carrier was already re-attaching PDP;
+      // that STOP over a busy client answered ERROR and forced a needless
+      // re-registration. Keep the CMQTT service and CONNECT again on the next
+      // reconnect pass.
       state.mqttConnected = false;
       if (ltePdpDown) {
         ltePdpDown = false;

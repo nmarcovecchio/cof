@@ -451,11 +451,17 @@ void runModemProbe(const String& commandId) {
 
 // --- CMQTT native-path probe ------------------------------------------------
 //
-// Answers the question the native MQTT design hinges on: does DISC (and the
-// REL/STOP teardown) reboot this module (*ATREADY)? The BACKLOG (0.2.106 /
-// 0.2.110) recorded that it does on the A7672, but that was lab history, not a
-// proof on THIS unit. This re-runs the exact sequence against a live session,
-// over LAN so the result still reaches the panel if the modem does reboot.
+// Answers the question the native MQTT design hinged on: does DISC (and the
+// REL/STOP teardown), or a re-CONNECT over a live session, reboot this module
+// (*ATREADY)? The BACKLOG (0.2.106 / 0.2.110) recorded both as reboot triggers
+// on the A7672, but that was lab history, not a proof on THIS unit. This re-runs
+// the exact sequence against a live session, over LAN so the result still
+// reaches the panel if the modem does reboot.
+//
+// Outcome on cof-test (2026-09-29, fw 0.2.112/0.2.113): NEITHER reboots this
+// A7672SA-FASE. Phase 1 (DISC/REL/STOP) is clean end-to-end, and phase 2
+// (re-CONNECT over a live session) is rejected with +CMQTTCONNECT: 0,19
+// ("client is used", A76XX MQTT app note) — a clean refusal, not a crash.
 //
 // LAN-only on purpose: on a LTE-only site the session being DISC'd is the only
 // link the device has, so a reboot would take the reporting path down with it.

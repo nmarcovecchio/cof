@@ -427,10 +427,9 @@ void takeModemForVoiceSms(ModemUartOwner owner) {
   // and it keepalives it by itself, so "taking the UART" only means: stop issuing
   // CMQTT AT and stop draining the UART as MQTT. Both are already enforced by the
   // modemUartOwnedByMqtt() gates in connectMqttIfNeeded / publishMqttJson /
-  // serviceLteMqttHealth. The CMQTTDISC that used to be sent here is one of the
-  // two commands that reboot this module (*ATREADY), and it cost a reboot on
-  // every test SMS and every alarm call. releaseModemToMqtt() asks the module
-  // what survived instead of rebuilding.
+  // serviceLteMqttHealth. The CMQTTDISC that used to be sent here forced a full
+  // PDP re-registration on every test SMS and every alarm call. releaseModemToMqtt()
+  // asks the module what survived instead of rebuilding.
   state.mqttConnected = false;
   appendModemLogForced("CS take: UART borrowed, CMQTT session kept");
 #else
@@ -450,11 +449,12 @@ void releaseModemToMqtt(bool wasOnLte) {
     return;
   }
 #if COF_LTE_MQTT_NATIVE
-  // This used to be stopLtePdp() → cmqttTearDown() → DISC + REL + STOP, i.e. both
-  // known *ATREADY triggers on the way out of every SMS and every alarm call. The
-  // old justification ("DISC-only left the service half-up and the reconnect
-  // CONNECTed over a stale session") no longer holds: nothing was disconnected on
-  // the way in, and the resume path probes the module instead of guessing.
+  // This used to be stopLtePdp() → cmqttTearDown() → DISC + REL + STOP on the way
+  // out of every SMS and every alarm call. The old justification ("DISC-only left
+  // the service half-up and the reconnect CONNECTed over a stale session") no
+  // longer holds: nothing was disconnected on the way in, and the resume path
+  // probes the module instead of guessing. Rebuilding the PDP on every call is
+  // pure waste and risks a DISC over an already-dropped client (+CMQTTDISC: 0,11).
   cmqttResumeAfterUartHandover();
 #else
   stopLtePdp();

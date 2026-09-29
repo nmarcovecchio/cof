@@ -147,9 +147,11 @@ bool cmqttServiceIsUp() {
 // Soft PUB failures (TOPIC/PAYLOAD/no URC) while we still think the broker is up.
 // Two in a row → ask the module whether the session is actually alive, then
 // either cool publishing down (alive) or clear our flags so the next pass can
-// CONNECT again (dead). DISC (0.2.106) and CONNECT-without-DISC on a live
-// session (0.2.107) both rebooted this A7672 (*ATREADY), so neither is issued
-// on a session that might still be up.
+// CONNECT again (dead). Neither DISC nor CONNECT is issued on a session that
+// might still be up: DISC on a non-connected client returns +CMQTTDISC: 0,11 and
+// chaining REL/STOP after it answers ERROR, and a blind CONNECT over a live
+// session is rejected with +CMQTTCONNECT: 0,19 ("client is used"). Probe-first
+// (field-tested on cof-test, 2026-09-29) keeps us out of both traps.
 static uint8_t cmqttPubSoftFails = 0;
 static uint32_t cmqttPubCooldownUntilMs = 0;
 
@@ -157,8 +159,10 @@ static uint32_t cmqttPubCooldownUntilMs = 0;
 // not have to guess. `AT+CMQTTCONNECT?` answers `+CMQTTCONNECT: 0,"tcp://host:port"`
 // for a connected client and `+CMQTTCONNECT: 0,""` - or lists no client 0 at all
 // once the module has reset its CMQTT stack - when it is not. It changes nothing
-// on the module, which is the whole point: DISC (0.2.106) and a blind CONNECT on
-// a live session (0.2.107) are both reboot triggers here.
+// on the module. A blind CONNECT over a live session is not a crash here: the
+// module cleanly answers +CMQTTCONNECT: 0,19 ("client is used", cof-test
+// 2026-09-29), so this probe exists to avoid needless teardown, not to dodge a
+// reboot.
 enum CmqttLinkState { kCmqttLinkUnknown, kCmqttLinkUp, kCmqttLinkDown };
 
 static CmqttLinkState cmqttProbeBrokerLink() {
@@ -258,7 +262,7 @@ static bool cmqttStartService(bool* alreadyRunning = nullptr) {
 // The CMQTT service survived an ESP32 reboot. Read back what the module holds
 // instead of stopping it: AT+CMQTTACCQ? lists the acquired clients and
 // cmqttProbeBrokerLink() says whether client 0 is still connected. Both are read
-// commands, so nothing here can trigger the *ATREADY that CMQTTSTOP does.
+// commands, so they cannot disturb a live session.
 enum CmqttAdoptResult {
   kCmqttAdoptFailed,    // module would not say; caller falls back to STOP
   kCmqttAdoptService,   // service (and maybe the client) is ours again; CONNECT next
@@ -296,9 +300,10 @@ static CmqttAdoptResult cmqttAdoptRunningService(const String& clientId) {
   }
   if (link == kCmqttLinkUnknown) {
     // The module would not say. Continuing would CMQTTCONNECT on a client that
-    // may still be connected - the 0.2.107 reboot trigger. "Unknown" is treated
-    // the same everywhere in this file: never act on it as if it meant "dead".
-    // Fall back to the STOP path, which is the pre-0.2.109 behaviour.
+    // may still be connected (which the module would reject with "client is
+    // used", code 19). "Unknown" is treated the same everywhere in this file:
+    // never act on it as if it meant "dead". Fall back to the STOP path, which
+    // is the pre-0.2.109 behaviour.
     appendModemLogForced("CMQTT link unknown, cannot adopt");
     cmqttClientAcquired = false;
     cmqttServiceUp = false;
@@ -320,9 +325,13 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
     return false;
   }
   // A dropped broker link (CONNLOST, or our flag cleared) still has the CMQTT
-  // service and client. The manual says to CMQTTCONNECT again. DISC+REL+STOP
-  // here releases the PDP CMQTTSTART dialed — new IP every time — and on this
-  // module that teardown is what rebooted it (*ATREADY) about once a minute.
+  // service and client. The manual says to CMQTTCONNECT again. We skip the
+  // DISC+REL+STOP teardown when the service and client are already up: that
+  // teardown releases the PDP CMQTTSTART dialed (new IP every time), and issuing
+  // DISC over a client the module already dropped returns +CMQTTDISC: 0,11 and
+  // chains REL/STOP into ERROR. Field test (cof-test, 2026-09-29) showed a clean
+  // teardown on an idle connected session, but probe-first is still cheaper than
+  // rebuilding the PDP.
   if (!(cmqttServiceUp && cmqttClientAcquired)) {
     cmqttTearDown();
     if (modemRebootUrcSeen) {
@@ -336,9 +345,9 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
       // A bare ERROR from CMQTTSTART means "service already started": the modem
       // kept its CMQTT state across an ESP32 reboot (neither OTA nor the silence
       // watchdog resets the modem). Adopt what is already there instead of
-      // stopping it - CMQTTSTOP is the command that rebooted this A7672 on every
-      // such boot, and each of those reboots costs a full re-registration, which
-      // is what eventually left the radio wedged.
+      // stopping it: STOP over a still-acquired client answers ERROR (there is a
+      // DISC/REL dance to do first), and a needless re-registration here used to
+      // leave the radio wedged.
       const CmqttAdoptResult adopted = (alreadyRunning && !modemRebootUrcSeen)
                                            ? cmqttAdoptRunningService(clientId)
                                            : kCmqttAdoptFailed;
@@ -397,7 +406,22 @@ bool cmqttConnect(const String& clientId, const String& willTopic, const String&
     }
     return false;
   }
-  if (cmqttResult(resp, "+CMQTTCONNECT:") != 0) {
+  const int connectCode = cmqttResult(resp, "+CMQTTCONNECT:");
+  if (connectCode == 19) {
+    // 19 = "client is used" (A76XX MQTT(S) app note result-code table): the
+    // client index is already connected, so our cmqttBrokerUp flag was stale
+    // (cleared by a soft-fail that probed "unknown", or a transient CONNLOST the
+    // module recovered from on its own). The session is actually alive: adopt it
+    // instead of returning failure, which would walk the reconnect/teardown path
+    // against a session that is still up. Proven on cof-test (2026-09-29): a
+    // re-CONNECT over a live session answers +CMQTTCONNECT: 0,19 and does NOT
+    // reboot the module; it is a clean rejection, not a crash trigger.
+    cmqttBrokerUp = true;
+    Serial.println("[cmqtt] CMQTTCONNECT: 0,19 (client is used) -> adopting live session");
+    appendModemLogForced("CONNECT 19 (already connected), adopted");
+    return true;
+  }
+  if (connectCode != 0) {
     Serial.printf("[cmqtt] CMQTTCONNECT err: %s\n", resp.c_str());
     return false;
   }
@@ -542,10 +566,13 @@ static void cmqttDropAfterReboot() {
 }
 
 // Voice/SMS borrowed the UART and gave it back. Nothing was disconnected on the
-// way in (DISC is one of the two commands that reboot this A7672), so the module
-// normally still holds the session it keepalives by itself. Ask what survived
-// instead of rebuilding: that is what used to cost a modem reboot on every test
-// SMS and every alarm call (DISC on take + REL/STOP on release).
+// way in, so the module normally still holds the session it keepalives by
+// itself. Ask what survived instead of rebuilding: tearing down on take/release
+// used to cost a full re-registration on every test SMS and every alarm call
+// (DISC over a client the module already dropped answered +CMQTTDISC: 0,11 and
+// chained REL/STOP into ERROR). Field test (cof-test, 2026-09-29) proved the
+// teardown itself is clean on an idle session, but rebuilding it every call is
+// pure waste.
 void cmqttResumeAfterUartHandover() {
   // Anything half-assembled when the UART was borrowed is unrecoverable: the raw
   // topic/payload bytes went to the voice/SMS reader. Drop it (QoS 1 means the
@@ -573,7 +600,7 @@ void cmqttResumeAfterUartHandover() {
   if (link == kCmqttLinkDown) {
     // A call longer than the keepalive, or a CSFB that dropped the bearer. Flags
     // only: the module says there is nothing to release, so the next pass may
-    // CMQTTCONNECT without the blind-CONNECT risk of 0.2.107.
+    // CMQTTCONNECT (cleanly re-acquired since the module reports no session).
     noteLteSessionDrop("cs-handover");
     cmqttBrokerUp = false;
     cmqttPubSoftFails = 0;
