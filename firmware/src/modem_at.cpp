@@ -553,7 +553,15 @@ void refreshCellularStatus() {
 // CS SMS/SGs and CSFB voice entirely. Called from refreshCellularStatus() once
 // +CIREG has answered, and from restorePacketServices() after a voice/SMS cycle.
 int lastAppliedCemode = -1;
+// While SMS is forcing the combined attach (CEMODE=1), suppress the adaptive
+// switch so refreshCellularStatus() (invoked inside the attach wait loop) does
+// not flip the mode back to 3 and kill the SGs path mid-submit.
+static bool gSmsCsTransportActive = false;
+
 void applyAdaptiveCemode() {
+  if (gSmsCsTransportActive) {
+    return;
+  }
   const int wanted = imsVoiceReady() ? 3 : 1;
   if (wanted == lastAppliedCemode) {
     return;
@@ -573,8 +581,48 @@ void applyAdaptiveCemode() {
   }
 }
 
+// MO SMS does not ride IMS on this operator (the A7672 sends AT+CMGS and the
+// submit times out with +CMS ERROR: Network timeout even with +CIREG registered
+// and the IMS bearer up on CID 8). The working path is CS/SGs, which needs the
+// combined attach (CEMODE=1). Voice, in contrast, stays on VoLTE (CEMODE=3), so
+// the two transports are exclusive and are switched per operation.
+void enableCsSmsTransport() {
+  gSmsCsTransportActive = true;
+  setStatus("SMS CS attach");
+  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEVDP=1", "OK", 3000);
+  // Combined attach: wait until CREG reports registered (the CS/SGs side is up).
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < 30000) {
+    feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
+    refreshCellularStatus();
+    if (csAttached()) {
+      return;
+    }
+    waitWithWatchdog(2000);
+  }
+}
+
+// Return the modem to the idle mode for this site after an SMS: IMS (CEMODE=3,
+// VoLTE) when registered, combined attach (CEMODE=1) on a legacy 2G/CSFB site.
+void restoreImsMode() {
+  gSmsCsTransportActive = false;
+  lastAppliedCemode = -1;
+  if (imsVoiceReady()) {
+    sendAT("AT+CEVDP=3", "OK", 3000);
+    sendAT("AT+CAVIMS=1", "OK", 3000);
+  }
+  applyAdaptiveCemode();
+}
+
 void configureCellularApn() {
   state.apn = COF_MODEM_APN;
+  // A modem reset mid-SMS clears any stale CS-transport override so the adaptive
+  // mode logic can settle the site again on the way back up.
+  gSmsCsTransportActive = false;
   // Reset any forced band/mode. A reboot of the ESP32 or the modem during a stale
   // GSM-only lock (CNMP=13) used to leave the radio stuck at +CPSI: NO SERVICE on
   // a site with no 2G (2026-09-29, cof-test), because restoreAutoRadio()'s in-RAM

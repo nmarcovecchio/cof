@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.126** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.127** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -384,6 +384,36 @@ Cambios de 0.2.126:
 
 Pendiente de campo: confirmar que con CID 2 arriba el `+CMGS` sale por SMSoIP en
 `cof-test`, y que un sitio sin IMS queda en `CEMODE=1` y sigue mandando por CS.
+
+**0.2.127 — 0.2.126 quedó desmentido por el campo: SMSoIP no está provisionado y el
+bearer IMS real es CID 8, no CID 2.** El probe de 0.2.126 en `cof-test` mostró:
+
+- IMS registrado `+CIREG: 2,1,15` (ext_info=0x15 = voz+SMS+video).
+- El IMS bearer real es **CID 8**, auto-creado por el módem y **ya activo**:
+  `+CGDCONT: 8,"IPV4V6","IMS","254.128.0.0...81.203.207.201.1",0,0,0,2,1,1` y `+CGACT: 8,1`.
+  Nuestro `CGDCONT=2,"ims"` era un duplicado muerto.
+- `ensureImsPdp()` activaba CID 2: `AT+CGACT=1,2` -> `+CME ERROR: unknown error` +
+  `+CGEV: ME PDN DEACT 2` + `+CGEV: NW REATTACH` (**dañino: desestabilizaba antes del SMS**).
+- Con IMS arriba, `AT+CMGS` -> `+CMS ERROR: Network timeout` (60 s). El A7672 **no
+  rutea MO SMS por IMS**; Claro no provisiona SMSoIP para este IMEI IoT (igual que
+  VoLTE requirió alta en línea).
+
+Conclusión: MO SMS en este módem sale por **CS/SGs** (combined attach, `CEMODE=1`), y
+la voz por **VoLTE** (`CEMODE=3`). Son excluyentes, así que el firmware conmuta por
+operación. Cambios de 0.2.127:
+
+- Revertido `ensureImsPdp()` (CID 2 fantasma).
+- `enableCsSmsTransport()`: `CEMODE=1` + `CEVDP=1`, espera `csAttached()` (CREG
+  registrado) antes del `CMGS`.
+- `restoreImsMode()`: devuelve `CEMODE=3`+`CEVDP=3`+`CAVIMS=1` si hay IMS (o `CEMODE=1`
+  en sitio 2G) al terminar el SMS, para que la voz siga por VoLTE.
+- `applyAdaptiveCemode()` respeta un override mientras el SMS fuerza CS.
+- Probe: `CGPADDR8` (bearer IMS real) en vez de `CGPADDR2`, y reporta `cs_attached`.
+
+Pendiente de campo: probar SMS (debe salir por SGs con `CEMODE=1` transitorio) y
+llamada (debe seguir por VoLTE). Si el SMS por SGs también falla en cof-test (LTE
+sin 2G y sin SGs en la MME), el siguiente paso es pedir a Claro el alta de
+SMS-over-IMS en la línea, no más firmware.
 
 ---
 

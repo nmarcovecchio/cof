@@ -161,29 +161,31 @@ sin espacio.
 ## SMS
 
 Cuando LTE está asentado: `CMGF=1`, SMSC de la SIM, `CMGS` → evento
-`SMS sent`. El envío MO debe ir por **IMS (SMSoIP)**, no por CS: con VoLTE activo
-(`+CIREG: 2,1,15`, `ext_info` bit 4 = SMSoIP) el modo correcto del módem es
-**`AT+CEMODE=3`** = "PS mode 1" (EPS-only, voice-centric; 3GPP 27.007 §10.1.28).
-`CEMODE=1` es "CS/PS mode 1" (combined attach = CSFB + SGs), y hacía que cada
-`CMGS` hiciera CSFB: soltaba el PDP de datos (`+CGEV: ME PDN DEACT 1`) para bajar a
-2G, que no existe en este sitio → `+CMS ERROR: unknown error`. Acompañan `CSMS=1`
-(Phase 2+) y `CGSMS=2` (PS preferred). `CGSMS=1` es "circuit switched" en el A76XX
-(no "SMS sobre LTE") y fuerza CS. Un CSFB que deja el radio en GSM/`NO SERVICE`
-rompe el SMS hasta restaurar `CNMP=2` + attach.
+`SMS sent`. El MO SMS **NO sale por IMS** en este IMEI: con `+CIREG: 2,1,15`
+(IMS registrado, `ext_info` bit 4 = SMSoIP) el módem igual responde
+`+CMS ERROR: Network timeout` a los 60 s — Claro no provisiona SMS-over-IMS
+(IP-SM-GW) para este IMEI IoT, igual que VoLTE requirió alta en línea (0.2.127).
 
-**El bearer hay que levantarlo: `CEMODE=3` no basta (0.2.126).** `CEMODE` decide el
-dominio, pero el IMS necesita su PDP activo. El `AT+CGDCONT=2,"IPV4V6","ims"` se
-definía siempre y **nunca** se activaba con `AT+CGACT=1,2`, así que con MQTT por
-Ethernet (CID 1 idle, `"lte":{"up":false}`) el SMS quedaba sin bearer y daba
-`+CMS ERROR: unknown error` igual que antes. Ahora `ensureImsPdp()` activa CID 2 y
-verifica `+CGPADDR=2` != `0.0.0.0` antes del `CMGS`.
+El camino que funciona es **CS/SGs (combined attach, `CEMODE=1`)**: `CEMODE=1` es
+"CS/PS mode 1" (combined attach = CSFB + SGs). Con `CEMODE=3` (EPS-only) no hay
+combined attach ni SGs, así que el SMS queda sin transporte. La voz, en cambio, va
+por VoLTE (`CEMODE=3`). **SMS y voz son excluyentes en este módem**, así que el
+firmware conmuta por operación: `enableCsSmsTransport()` (`CEMODE=1` + `CEVDP=1`,
+espera `csAttached()`/CREG registrado) antes del `CMGS`, y `restoreImsMode()`
+(`CEMODE=3`+`CEVDP=3`+`CAVIMS=1`) al terminar. Acompañan `CSMS=1` (Phase 2+) y
+`CGSMS=2` (PS preferred).
+
+**El bearer IMS real es CID 8, no CID 2.** El módem se auto-crea
+`+CGDCONT: 8,"IPV4V6","IMS",...` y lo activa solo (`+CGACT: 8,1`). El `CGDCONT=2,"ims"`
+era un duplicado muerto; activarlo a mano (`AT+CGACT=1,2`) da
+`+CME ERROR: unknown error` + `+CGEV: ME PDN DEACT 2` + `+CGEV: NW REATTACH`
+(desestabiliza). No tocar CID 2; el probe lee `CGPADDR8`.
 
 **`CEMODE` tiene que seguir al sitio, no ser fijo.** `CEMODE=3` apaga el dominio CS
 (`+CREG: 0,0`), que es correcto donde hay IMS pero **rompe los sitios 2G/CSFB**, donde
 el SMS funcionaba por SGs. `applyAdaptiveCemode()` deja `CEMODE=3` solo con
 `imsVoiceReady()` (IMS registrado); sin IMS baja a `CEMODE=1` (combined attach) para
-conservar SMS/CS y CSFB. Tres caminos, en orden: **IMS (CID 2)** si hay registro;
-si no, **PS (CID 1)** cuando MQTT ya lo activó (LTE sin Ethernet); si no, **CS/2G**.
+conservar SMS/CS y CSFB. El SMS fuerza `CEMODE=1` por operación y restaura después.
 
 ## Cosas que no hay que “arreglar” sin otra prueba en vivo
 

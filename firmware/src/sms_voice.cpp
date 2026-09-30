@@ -401,7 +401,7 @@ void runModemProbe(const String& commandId) {
       {"CSCA", "AT+CSCA?"},
       {"CGACT", "AT+CGACT?"},
       {"CGPADDR", "AT+CGPADDR?"},
-      {"CGPADDR2", "AT+CGPADDR=2"},
+      {"CGPADDR8", "AT+CGPADDR=8"},
       {"CGPADDR1", "AT+CGPADDR=1"},
   };
   for (const auto& q : smsQueries) {
@@ -414,9 +414,15 @@ void runModemProbe(const String& commandId) {
       publishModemProbe(String(q.label) + " unsupported/err", false, commandId);
     }
   }
+  // Combined-attach status for the CS/SGs SMS path: CREG registered means the
+  // SGs side is up (the only transport MO SMS uses on this operator).
+  publishModemProbe(String("cs_attached=") + (csAttached() ? "YES" : "NO") +
+                        " creg=" + String(state.cregStat),
+                    true, commandId);
 
-  // PDP definitions (CGDCONT?) — the IMS APN lives on CID 2. Dump it so we can
-  // see whether CID 2 is the "ims" context next to the data CID 1.
+  // PDP definitions (CGDCONT?) — the IMS APN is auto-created by the module on
+  // CID 8 (uppercase "IMS"), not CID 2. Dump it so we can see the real IMS
+  // context next to the data CID 1.
   String cgdcont;
   if (sendAT("AT+CGDCONT?", "OK", 3000, &cgdcont)) {
     String compact = cgdcont;
@@ -1293,16 +1299,16 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     }
   }
 
-  // Pick the bearer for this site before the submit: IMS (CID 2) when the line
-  // is IMS-registered, otherwise leave the CS/PS path the module already has.
-  ensureImsPdp();
+  // MO SMS rides CS/SGs (combined attach), not IMS: switch to CEMODE=1 before the
+  // submit, then restore the IMS/VoLTE mode so voice keeps working afterwards.
+  enableCsSmsTransport();
   String result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
-    // Still holding the UART: restore radio/packet, retry, then reclaim MQTT.
-    restorePacketServices();
-    ensureImsPdp();
+    // Still holding the UART: re-apply the CS attach, retry, then reclaim MQTT.
+    enableCsSmsTransport();
     result = transmitSms(phone, body);
   }
+  restoreImsMode();
   releaseModemToMqtt(wasOnLte);
   return result;
 }

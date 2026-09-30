@@ -295,36 +295,6 @@ bool ensureLtePdp() {
   return false;
 }
 
-bool ensureImsPdp() {
-  // The IMS context (CID 2) is defined in configureCellularApn() but was never
-  // activated, so on a site where MQTT rides Ethernet (CID 1 idle) and CS is off
-  // (CEMODE=3) the MO SMS had no bearer at all: +CMS ERROR: unknown error
-  // (2026-09-30, cof-test after VoLTE was enabled). SMSoIP needs the IMS bearer
-  // up with a real IP. Read-only when it is already active.
-  String resp;
-  if (sendAT("AT+CGPADDR=2", "OK", 3000, &resp)) {
-    String ip = lastQuoted(resp);
-    ip.trim();
-    if (ip.length() >= 7 && ip != "0.0.0.0" && looksLikeIp(ip)) {
-      return true;
-    }
-  }
-  sendAT("AT+CGDCONT=2,\"IPV4V6\",\"ims\"", "OK", 3000);
-  sendAT("AT+CGACT=1,2", "OK", 20000);
-  for (int attempt = 0; attempt < 3; attempt++) {
-    feedWatchdog();
-    if (sendAT("AT+CGPADDR=2", "OK", 3000, &resp)) {
-      String ip = lastQuoted(resp);
-      ip.trim();
-      if (ip.length() >= 7 && ip != "0.0.0.0" && looksLikeIp(ip)) {
-        return true;
-      }
-    }
-    waitWithWatchdog(1000);
-  }
-  return false;
-}
-
 // Mutable so *ATREADY can append after a first cause (e.g. pub-dead+atready).
 static char lteSessionDropBuf[40] = {};
 static bool lteSessionDropSet = false;
