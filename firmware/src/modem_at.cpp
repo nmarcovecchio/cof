@@ -557,7 +557,12 @@ void configureCellularApn() {
   sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 3000);
   sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"", "OK", 3000);
   sendAT("AT+CGATT=1", "OK", 15000);
-  sendAT("AT+CGSMS=1", "OK", 3000);
+  // CGSMS=2 = "GPRS preferred" (SMS over PS/NAS on LTE, fall back to CS only
+  // if PS is unavailable). CGSMS=1 is "circuit switched" (internally mapped to
+  // 3 = CS preferred) and was forcing a 2G CS attempt per SMS, which on an
+  // LTE-only site fails with +CMS ERROR and deactivates the data PDN
+  // (+CGEV: ME PDN DEACT 1). A76XX AT manual §9.2.10.
+  sendAT("AT+CGSMS=2", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
   sendAT("AT+CMGF=1", "OK", 3000);
   sendAT("AT+CNMI=2,1,0,0,0", "OK", 3000);

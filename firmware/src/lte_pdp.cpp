@@ -468,7 +468,7 @@ void restorePacketServices() {
   sendAT("AT+CNMP=2", "OK", 10000);
   waitForRadioService(25000, false);
   sendAT("AT+CGATT=1", "OK", 15000);
-  sendAT("AT+CGSMS=1", "OK", 3000);
+  sendAT("AT+CGSMS=2", "OK", 3000);
   sendAT("AT+CMGF=1", "OK", 3000);
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
   sendAT("AT+CNMI=2,1,0,0,0", "OK", 3000);

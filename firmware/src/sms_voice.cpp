@@ -1163,6 +1163,22 @@ String transmitSms(const String& phone, const String& body) {
   const String response = readModemUntil(60000, "OK");
   Serial.println("[modem] << " + response);
   appendModemLogForced("SMS rsp " + response);
+
+  // A failed submit is reported as +CMS ERROR / +CME ERROR. The old check only
+  // looked for the ABSENCE of +CMGS/OK, so a response that carried both a stale
+  // +CMGS message reference and a +CMS ERROR (or a 60 s timeout with no OK) was
+  // misreported as "SMS sent" (2026-09-30, cof-test after VoLTE was enabled).
+  if (response.indexOf("+CMS ERROR") >= 0 || response.indexOf("+CME ERROR") >= 0) {
+    String err = response;
+    err.replace("\r", " ");
+    err.replace("\n", " ");
+    err.trim();
+    if (err.length() > 80) {
+      err = err.substring(0, 80);
+    }
+    setStatus("SMS failed");
+    return err.length() > 0 ? ("SMS failed: " + err) : "SMS failed";
+  }
   if (response.indexOf("+CMGS") < 0 && response.indexOf("OK") < 0) {
     String err = response;
     err.replace("\r", " ");
