@@ -502,12 +502,24 @@ void refreshCellularStatus() {
     state.imsVoice = extractAtTagValue(response, "+CAVIMS:").toInt();
   }
   if (sendAT("AT+CIREG?", "OK", 2000, &response)) {
+    // +CIREG: <n>,<reg_info>[,<ext_info>]  (3GPP TS 27.007 §8.71).
+    // reg_info (2nd field) is the IMS registration flag: 1 = registered.
+    // ext_info (hex IMS capabilities) only appears when registered, so the
+    // old lastIndexOf(',') read ext_info (e.g. "15") instead of reg_info and
+    // imsVoiceReady() never saw the registration (2026-09-30, VoLTE enabled).
     const String value = extractAtTagValue(response, "+CIREG:");
-    const int comma = value.lastIndexOf(',');
-    if (comma >= 0) {
-      state.imsReg = value.substring(comma + 1).toInt();
-    } else if (value.length() > 0) {
-      state.imsReg = value.toInt();
+    if (value.length() > 0) {
+      String reg = value;
+      const int firstComma = value.indexOf(',');
+      if (firstComma >= 0) {
+        reg = value.substring(firstComma + 1);
+      }
+      const int secondComma = reg.indexOf(',');
+      if (secondComma >= 0) {
+        reg = reg.substring(0, secondComma);
+      }
+      reg.trim();
+      state.imsReg = reg.toInt();
     }
   }
   if (sendAT("AT+CIMI", "OK", 2000, &response)) {
