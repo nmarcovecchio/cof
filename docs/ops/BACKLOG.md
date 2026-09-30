@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-29**. Ultimo firmware publicado: **0.2.115** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.118** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -246,6 +246,52 @@ en Claro AR no registra) o con un target 2G/3G anclable en el sitio. Queda por
 verificar en el manual `A76XX` el rango de `AT+CEVDP`/`AT+CEMODE` (si `CEVDP=3`
 obliga "IMS only" en vez de "CS preferred", es candidato a causa del crash) y
 probar `CEVDP=0/1` + `CEMODE=0` (CS-only).
+
+**0.2.118 — bisect CSFB cerrado: la falla es el entorno, no el firmware; IMS/VoLTE
+investigado.** Se reconstruyo el binario 0.2.39 (publicado como 0.2.117) y el
+`test_call` en `cof-test` dio un resultado distinto al de 0.2.115/116, que separa
+los dos problemas que veniamos mezclando:
+
+- **La llamada no conecta (entorno, no codigo).** El 0.2.39 marco (`ATD`), bajo
+  el TTS (`audio_url`, no el `call_audio` por regla), y a los ~40 s recibio
+  `+CLCC: 1,0,6` (desconexion limpia, sin ring). El **mismo binario 0.2.39** que
+  el 06-09 estaba documentado con ringing + audio (`claro-ar.md`) hoy no llega a
+  ring ⇒ el target CSFB de 2G se cayo del sitio. Sin 2G (CSFB) + sin VoLTE
+  (`ims_reg=0`) + sin 3G (A7672SA-FASE no tiene WCDMA) **no queda camino de voz**.
+  Ninguna version de firmware arregla esto.
+
+- **El modem crashea al marcar (regresion de firmware).** Solo 0.2.115/116
+  (`*ATREADY` ~12-15 s tras `ATD`); 0.2.39 marco y obtuvo `CLCC 6` limpio, sin
+  crash. Candidato: la sesion CMQTT/PDP nativa (desde 0.2.79) + teardown CSFB.
+  Arreglar esto evita el crash pero **no** hace conectar la llamada.
+
+**No es el AMR/VPS.** El 0.2.39 bajo el TTS bien; el fallo es en el radio (`CLCC 6`
+antes de ring), antes de cualquier `CCMXPLAY`. Los cambios de audio por regla del
+23-09 (`dfa75ef`, `74456ee`, `ab68306`, `659818c`, `7e100f1`) corren **despues**
+de que la llamada conecta.
+
+**IMS/VoLTE (`ims_reg=0`):** el A7672 (ASR1603) **si soporta VoLTE** (pagina de
+SIMCom lista `VoLTE` en funciones), pero el manual `A76XX` V1.12 que tenemos no
+documenta `AT+CAVIMS`/`AT+CIREG`/`AT+CEMODE`/`AT+CEVDP` (son comandos ASR1603, de
+un manual V2.x). El firmware ya configura lo correcto (`CAVIMS=1`, `CEMODE=1`,
+`CEVDP=3`, `CIREG=2`, `CGDCONT=2,"IPV4V6","ims"`). El registro no ocurre por
+razones de **operador/vendor**, no de codigo:
+
+1. **Pack VoLTE en la linea (SIM).** Claro AR exige la funcionalidad
+   `Funcionalidad VoLTE` activa en la linea (se pide gratis por Mi Claro). Sin
+   ella, IMS no registra.
+2. **Whitelist de equipo.** "activo en todo dispositivo comercializado por Claro
+   desde 2019" ⇒ Claro habilita VoLTE en equipos vendidos por ellos; el A7672 es
+   un modulo IoT, su IMEI no esta whitelisted para VoLTE.
+3. **Perfil IMS/MBN del operador en el modulo.** En ASR1603 el VoLTE es
+   MBN/XML-based; el firmware del A7672 debe traer el perfil IMS de Claro AR, y
+   los modulos Cat1 LatAm normalmente no lo traen.
+
+**Camino de voz en este hardware+operador = dead end.** Las salidas son de
+hardware/operador: (a) modem con 3G/WCDMA para CSFB a 3G (Claro mantiene 3G mas
+tiempo que 2G); (b) lograr VoLTE (Pack VoLTE en el SIM + whitelist del IMEI +
+perfil IMS de Claro en el modulo — poco probable para IoT); o (c) aceptar voz solo
+2G donde aun haya 2G (menguante).
 
 ---
 
