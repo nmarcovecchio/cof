@@ -384,6 +384,49 @@ void runModemProbe(const String& commandId) {
           " play=" + String(state.modemAudioPlaybackSupported ? "YES" : "NO"),
       true, commandId);
 
+  // SMS / IMS bearer state — read-only. Answers "why is MO SMS going over CS
+  // (2G) instead of PS(SGs)/IMS?" without a serial console: CSMS phase, CGSMS
+  // service, CEMODE/CEVDP domain preference, active PDP contexts, and the IMS
+  // capability mask.
+  const struct {
+    const char* label;
+    const char* cmd;
+  } smsQueries[] = {
+      {"CSMS", "AT+CSMS?"},
+      {"CGSMS", "AT+CGSMS?"},
+      {"CEMODE", "AT+CEMODE?"},
+      {"CEVDP", "AT+CEVDP?"},
+      {"CIREG", "AT+CIREG?"},
+      {"CSCA", "AT+CSCA?"},
+      {"CGACT", "AT+CGACT?"},
+  };
+  for (const auto& q : smsQueries) {
+    String out;
+    if (sendAT(q.cmd, "OK", 3000, &out)) {
+      const String line = probeFirstLine(out);
+      publishModemProbe(String(q.label) + " " + (line.length() > 0 ? line : "ok"),
+                        true, commandId);
+    } else {
+      publishModemProbe(String(q.label) + " unsupported/err", false, commandId);
+    }
+  }
+
+  // PDP definitions (CGDCONT?) — the IMS APN lives on CID 2. Dump it so we can
+  // see whether CID 2 is the "ims" context next to the data CID 1.
+  String cgdcont;
+  if (sendAT("AT+CGDCONT?", "OK", 3000, &cgdcont)) {
+    String compact = cgdcont;
+    compact.replace("\r", " ");
+    compact.replace("\n", " ");
+    compact.trim();
+    if (compact.length() > 180) {
+      compact = compact.substring(0, 180);
+    }
+    publishModemProbe("CGDCONT " + compact, true, commandId);
+  } else {
+    publishModemProbe("CGDCONT unsupported/err", false, commandId);
+  }
+
   // The actual question the LTE-only design turns on: can the modem open HTTP
   // on its own, and does it support writing the response body to a file?
   const bool httpOk = sendAT("AT+HTTPINIT", "OK", 8000);

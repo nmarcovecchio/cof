@@ -557,6 +557,10 @@ void configureCellularApn() {
   sendAT(String("AT+CGDCONT=1,\"IP\",\"") + COF_MODEM_APN + "\"", "OK", 3000);
   sendAT(String("AT+CGAUTH=1,1,\"") + COF_MODEM_APN_USER + "\",\"" + COF_MODEM_APN_PASS + "\"", "OK", 3000);
   sendAT("AT+CGATT=1", "OK", 15000);
+  // CSMS=1 = Phase 2+ (GSM 07.05 phase 2+), which is required for SMS over
+  // GPRS/PS. The module defaults to Phase 2 (CS-only SMS), so CGSMS=2 below has
+  // no effect unless CSMS=1 is set first (A76XX AT manual §9.2.1).
+  sendAT("AT+CSMS=1", "OK", 3000);
   // CGSMS=2 = "GPRS preferred" (SMS over PS/NAS on LTE, fall back to CS only
   // if PS is unavailable). CGSMS=1 is "circuit switched" (internally mapped to
   // 3 = CS preferred) and was forcing a 2G CS attempt per SMS, which on an
