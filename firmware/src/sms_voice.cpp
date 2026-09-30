@@ -786,53 +786,6 @@ void bounceRadioForCsfb() {
   waitForRadioService(45000, false);
   waitUntilModemReady(true, 30000);
 }
-// Locks the radio to GSM-only and waits for it to attach. Returns false when the
-// site has no usable 2G, i.e. when the lock would leave the radio on NO SERVICE
-// with no call placed. In that case the modem is already restored to auto (CNMP=2)
-// before returning, so the caller must not run another radio escalation.
-//
-// History: 2026-09-29 (cof-test, 0.2.114) a call over LTE never dialed, went silent
-// ~4 min and rebooted the modem. The trace showed `+CNMP: 13` and
-// `+CPSI: NO SERVICE` afterwards: the unconditional lock burned 45 s + 30 s of
-// blocking waits (no telemetry, no MQTT watchdog) and the reboot re-ran initModem()
-// with CNMP still at 13. Gate on real 2G evidence and bound the budget.
-bool lockGsmForCall() {
-  setStatus("GSM lock");
-  Serial.println("[call] lock GSM (CNMP=13) after prepared CSFB failed");
-  publishTestCallProgress("Checking 2G availability");
-  if (!gsmAccessPlausible()) {
-    // No operator advertises GSM here: locking to CNMP=13 can only end in
-    // NO SERVICE. Do not touch the radio; let the caller finish with the result
-    // of the dial that already ran.
-    Serial.println("[call] no 2G in scan, skipping GSM lock");
-    appendModemLogForced("GSM lock skipped: no 2G in COPS scan");
-    publishTestCallProgress("No 2G here, skipping GSM lock");
-    return false;
-  }
-  sendAT("ATH", "OK", 3000);
-  sendAT("AT+CHUP", "OK", 3000);
-  sendAT("AT+CNMP=13", "OK", 10000);
-  state.forcedGsmForCall = true;
-  // Only pay the second (modem-ready) wait if the radio actually found GSM. The
-  // old sequence spent 45 s + 30 s regardless, which starved the cooperative loop.
-  if (!waitForRadioService(45000, true)) {
-    Serial.println("[call] GSM lock found no service, restoring auto");
-    appendModemLogForced("GSM lock timed out, restoring CNMP=2");
-    publishTestCallProgress("GSM lock timed out");
-    restoreAutoRadio();
-    return false;
-  }
-  waitUntilModemReady(true, 30000);
-  return true;
-}
-bool shouldRetryVoice(const String& result) {
-  return result.startsWith("Call failed") ||
-         result.startsWith("Call no carrier") ||
-         result.startsWith("Call not connected") ||
-         result.startsWith("Call dial timeout") ||
-         result.startsWith("Call not ready") ||
-         result.startsWith("No voice radio");
-}
 String dialAndMaybePlay(const String& phone, const String& bearer) {
   if (!waitUntilModemReady(true, 25000)) {
     return "Call not ready" + voiceContextSuffix(bearer);
@@ -929,6 +882,13 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
     pendingCallUrcs = "";
     urc += readModemUntil(800, "");
     appendModemLog('<', urc);
+    if (modemRebootUrcSeen) {
+      // The module reset itself mid-call (spontaneous CSFB crash). The call is
+      // gone; abort now instead of waiting out the full timeout, which used to
+      // burn ~120 s of dead air after the module had already rebooted.
+      publishTestCallProgress("Modem rebooted during call");
+      return "Call not connected (modem reboot)";
+    }
     const String urcResult = classifyCallUrc(urc);
     const int clccStat = lastClccStat(urc);
     if (urcResult.length() > 0 || clccStat == 6) {
@@ -1150,40 +1110,11 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
   }
   publishTestCallProgress("Dialing, waiting for voice");
   String result = dialAndMaybePlay(phone, bearer);
-  bool gsmLockSkipped = false;
-  if (shouldRetryVoice(result) && !state.skipGsmVoice) {
-    publishTestCallProgress("Locking GSM");
-    // Only retry through the GSM lock when it actually took: lockGsmForCall()
-    // returns false when there is no 2G here and already restored the radio, so
-    // the call ends with the first attempt's result instead of dialing again on a
-    // radio that is still on LTE (or, worse, on NO SERVICE).
-    if (lockGsmForCall()) {
-      refreshCellularStatus();
-      bearer = "gsm lock";
-      publishTestCallProgress("Retrying call");
-      result = dialAndMaybePlay(phone, bearer);
-    } else {
-      // No GSM lock happened: do not run the CFUN bounce either, or a LTE-only
-      // site pays bounce + failed lock + bounce for a single alarm call.
-      Serial.println("[call] GSM lock not possible, keeping first result");
-      gsmLockSkipped = true;
-    }
-  } else if (shouldRetryVoice(result) && !preparedCs) {
-    publishTestCallProgress("Resetting radio");
-    bounceRadioForCsfb();
-    refreshCellularStatus();
-    bearer = imsVoiceReady() ? "ims after bounce" : "csfb retry";
-    publishTestCallProgress("Retrying call");
-    result = dialAndMaybePlay(phone, bearer);
-  }
-
-  // Make the reason discoverable in the panel even when the call could not be
-  // published live: the result event carries the modem log, but a one-line tag on
-  // the message is what a reader sees first (this is exactly what was missing on
-  // 2026-09-29, when the call over LTE just went silent).
-  if (gsmLockSkipped) {
-    result += " (no 2G here, GSM lock skipped)";
-  }
+  // 2G is not usable on this operator (Claro AR: CNMP=13 -> NO SERVICE, documented
+  // since 0.2.39). Never lock to GSM: the LTE/CSFB dial is the only voice path.
+  // Report the dial result as-is (including a spontaneous modem reboot mid-CSFB)
+  // instead of burning radio escalations (bounce + GSM lock + bounce) that cannot
+  // recover a site with no CS fallback target.
 
   restoreAutoRadio();
   restorePacketServices();

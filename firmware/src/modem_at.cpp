@@ -534,11 +534,11 @@ void refreshCellularStatus() {
 }
 void configureCellularApn() {
   state.apn = COF_MODEM_APN;
-  // Reset any forced band/mode from a previous call. A reboot of the ESP32 or the
-  // modem during lockGsmForCall() used to leave CNMP=13 (GSM-only) applied while
-  // restoreAutoRadio()'s in-RAM flag was gone, so the radio came up on a site with
-  // no 2G stuck at +CPSI: NO SERVICE (2026-09-29, cof-test). initModem() has no
-  // latch that forces this, so make it part of the APN/mode configuration.
+  // Reset any forced band/mode. A reboot of the ESP32 or the modem during a stale
+  // GSM-only lock (CNMP=13) used to leave the radio stuck at +CPSI: NO SERVICE on
+  // a site with no 2G (2026-09-29, cof-test), because restoreAutoRadio()'s in-RAM
+  // flag was gone. initModem() has no latch that forces this, so make it part of
+  // the APN/mode configuration.
   sendAT("AT+CNMP=2", "OK", 10000);
   state.forcedGsmForCall = false;
   sendAT("AT+COPS=0", "OK", 5000);
@@ -719,64 +719,6 @@ bool waitForRadioService(uint32_t timeoutMs, bool gsmOnly) {
   }
   return radioHasService() && (!gsmOnly || radioIsGsm());
 }
-// Can this site plausibly place a voice call on 2G? A network scan reports the
-// access technology of every operator it can see; a GSM/2G hit means the CNMP=13
-// lock has something to attach to. Used to gate lockGsmForCall() so a LTE-only
-// site (no 2G, e.g. B2/B28 with CSFB unusable) does not get locked to NO SERVICE.
-//
-// AT+COPS=? can take several seconds, so the answer is cached for the rest of the
-// boot; radio topology does not change between two calls minutes apart. A previous
-// successful "gsm" call path is accepted without paying for the scan again.
-bool gsmAccessPlausible() {
-  if (state.observedVoicePath == "gsm") {
-    return true;
-  }
-  static int8_t scanVerdict = -1;   // -1 unknown, 0 no 2G, 1 2G present
-  if (scanVerdict >= 0) {
-    return scanVerdict == 1;
-  }
-  String resp;
-  if (!sendAT("AT+COPS=?", "OK", 60000, &resp)) {
-    // Unknown is not "no": a scan that did not answer must not be the reason a
-    // site that could call is refused. Fall back to "allow".
-    Serial.println("[call] COPS=? scan failed, not gating GSM lock");
-    return true;
-  }
-  // Entries look like `(1,"722310","Claro","722310",7)`: the last field is the
-  // access technology. A76XX returns the 27.007 enum (0/1/3 = 2G GSM, 2 = UTRAN,
-  // 4..6 = HSDPA/HSUPA/HSPA, 7 = LTE, 8 = EC-GSM-IoT), but some SIMCom builds
-  // return a bitmask instead (bit0=GSM, bit1=UTRAN, bit2=LTE). The two overlap on
-  // the value 7 (LTE in the enum, GSM+LTE as a bitmask), so treat a bare 7 as NOT
-  // evidence. Only values that are 2G under both readings count: 0/1/3 (enum 2G)
-  // and any mask with bit0 set that is not just LTE.
-  bool found = false;
-  int from = 0;
-  while (from >= 0 && from < static_cast<int>(resp.length())) {
-    const int open = resp.indexOf('(', from);
-    if (open < 0) {
-      break;
-    }
-    const int close = resp.indexOf(')', open + 1);
-    if (close < 0) {
-      break;
-    }
-    const String entry = resp.substring(open + 1, close);
-    const int lastComma = entry.lastIndexOf(',');
-    if (lastComma >= 0) {
-      const long acts = entry.substring(lastComma + 1).toInt();
-      const bool enum2g = (acts == 0 || acts == 1 || acts == 3);
-      const bool mask2g = acts > 0 && (acts & 0x01L) != 0 && acts != 7;
-      if (enum2g || mask2g) {
-        found = true;
-        break;
-      }
-    }
-    from = close + 1;
-  }
-  scanVerdict = found ? 1 : 0;
-  appendModemLogForced(String("GSM scan: 2G ") + (found ? "present" : "absent"));
-  return found;
-}
 int queryCpas() {
   String response;
   if (!sendAT("AT+CPAS", "OK", 3000, &response)) {
@@ -806,8 +748,8 @@ bool waitUntilModemReady(bool forCall, uint32_t timeoutMs) {
 }
 void restoreAutoRadio() {
   // The flag is in RAM and is lost across a modem reboot, so it cannot be the only
-  // trigger: after a reset during lockGsmForCall() the module would stay GSM-only
-  // (CNMP=13) on a site with no 2G and come up on NO SERVICE (2026-09-29). Ask the
+  // trigger: after a reset during a stale GSM-only lock the module would stay
+  // CNMP=13 on a site with no 2G and come up on NO SERVICE (2026-09-29). Ask the
   // module what mode it is actually in and clear a stale GSM-only lock regardless.
   if (!state.forcedGsmForCall && state.cnmp >= 0 && state.cnmp != 13) {
     return;

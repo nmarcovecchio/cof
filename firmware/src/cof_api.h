@@ -112,7 +112,6 @@ bool sendAT(const String& command, const String& expected = "OK", uint32_t timeo
 // NUL-safe search for the reboot URC: the A7672 prefixes a spontaneous reset
 // with `\0`, so String::indexOf("*ATREADY") (strstr) never sees it.
 bool textHasAtReady(const String& text);
-bool gsmAccessPlausible();
 bool waitForRadioService(uint32_t timeoutMs, bool gsmOnly);
 bool waitUntilModemReady(bool forCall, uint32_t timeoutMs);
 void waitWithMqtt(uint32_t ms);
@@ -229,7 +228,6 @@ String inferVoicePath();
 bool isCallReady();
 bool isSmsReady();
 int lastClccStat(const String& response);
-bool lockGsmForCall();
 String observeVoicePath(const String& radioDial, const String& radioConnect);
 int parseClccStatAt(const String& response, int tag);
 void persistObservedVoicePath(const String& path);
@@ -246,7 +244,6 @@ void runCmqttProbe(const String& commandId = "");
 int queryClccStat();
 String resolveTestPhone(const String& phoneOverride);
 String sendTestSms(const String& phoneOverride, const String& text);
-bool shouldRetryVoice(const String& result);
 bool smsStackReady();
 String stopPlaybackAndCollect();
 String takePendingCallUrcs();

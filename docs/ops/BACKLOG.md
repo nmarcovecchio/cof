@@ -220,6 +220,33 @@ Cambios en 0.2.115:
 desenchufado) no debe producir silencio > 20 s ni reboot del modem, debe publicar el
 motivo; y con Ethernet debe seguir andando perfecto (sin regresion).
 
+**0.2.116 — sacar el lock 2G: siempre LTE/CSFB + abortar rapido en reboot.** Campo
+2026-09-29 (cof-test, 0.2.115, LTE **y** Ethernet): el `ATD` devolvia `+CLCC dialing`
+y a los ~12-15 s el modem se reiniciaba solo (`\0` + `*ATREADY`) — el handoff CSFB
+no tiene target alcanzable en este sitio (IMS `ims_reg=0`; 2G anunciado en `COPS=?`
+pero `CNMP=13` → `NO SERVICE`). No es el audio: el `Rule audio not on device, using
+fallback` es normal (usa `cof_fallback.wav`), y nunca se llega al `CCMXPLAY` porque
+el modem crashea antes de conectar.
+
+Cambios en 0.2.116:
+
+- **No mas lock GSM:** se elimina `lockGsmForCall()` y `gsmAccessPlausible()` (el
+  scan `COPS=?` de 60 s que ademas mentia con torres lejanas). 2G nunca anduvo en
+  Claro AR (`claro-ar.md`, 0.2.39); el camino de voz es **siempre LTE/CSFB**
+  (bounce `CFUN=4/1` + un `ATD`), sin escaladas de radio en el retry. Un `test_call`
+  fallido termina con el resultado del primer intento, rapido y sin tocar el radio.
+- **Abortar en reboot:** `conductOutgoingCall()` ahora vuelve inmediatamente con
+  `Call not connected (modem reboot)` si `modemRebootUrcSeen` se activa durante la
+  llamada, en vez de esperar el timeout de 120 s. Una llamada fallida pasa de
+  ~4 min + reboot-loop a ~12-15 s y modem sano.
+
+**Pendiente (raiz):** el ciclo ya no cuelga ni lockea 2G, pero el modem **sigue
+crasheando en el CSFB** si no hay target CS. La voz solo vuelve con VoLTE/IMS (que
+en Claro AR no registra) o con un target 2G/3G anclable en el sitio. Queda por
+verificar en el manual `A76XX` el rango de `AT+CEVDP`/`AT+CEMODE` (si `CEVDP=3`
+obliga "IMS only" en vez de "CS preferred", es candidato a causa del crash) y
+probar `CEVDP=0/1` + `CEMODE=0` (CS-only).
+
 ---
 
 ## P0 — Pipeline de OTA
