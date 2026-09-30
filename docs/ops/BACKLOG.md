@@ -325,6 +325,26 @@ MO sobre LTE:
   ("GPRS preferred" = SMS sobre PS/NAS) en `configureCellularApn()` y
   `restorePacketServices()`.
 
+**0.2.124 — `CGSMS=2` NO bastó: el SMS seguía por CS (2G). `CSMS=1` + probe.** El
+re-test en `cof-test` (0.2.123, 21:23) siguió fallando igual:
+`SMS rsp ... +CGEV: ME PDN DEACT 1 | +CMGS: 72 | +CMS ERROR: unknown error`. La
+clave es el `+CGEV: ME PDN DEACT 1` = el módem **desactiva el PDP de datos** al
+enviar el SMS → está haciendo **CSFB a 2G** para el SMS, no SMS sobre PS/IMS. Con
+2G caído del sitio, `+CMS ERROR` y no llega el mensaje.
+
+Por qué `CGSMS=2` no alcanza: `CGSMS` (manual §9.2.10) solo elige **CS vs GPRS/PS**;
+el SMS sobre PS requiere además **`AT+CSMS=1`** (Phase 2+, manual §9.2.1), que el
+firmware **nunca seteaba** (queda en Phase 2 = solo CS). Se agregó `CSMS=1` antes de
+`CGSMS=2` en `configureCellularApn()` y `restorePacketServices()`.
+
+El otro dato: `+CIREG: 2,1,15` con `ext_info=15` = **0xF** = bits 1 (MMTEL voz) + 2
+(texto) + 4 (**SMS using IMS functionality**, SMSoIP) + 8 (video) — o sea Claro
+**sí anuncia SMSoIP**. Si `CSMS=1` no alcanza (SGs no disponible en la red), el
+camino correcto con VoLTE activo es **SMS over IMS (SMSoIP)**, que es automático
+cuando el módem registra con `+g.3gpp.smsip`; no hay comando AT dedicado para
+forzarlo. El probe de "Sondear modem" ahora reporta `CSMS`/`CGSMS`/`CEMODE`/`CEVDP`/
+`CIREG`/`CSCA`/`CGACT`/`CGDCONT` para ver el estado real en una sola pasada.
+
 ---
 
 ## P0 — Pipeline de OTA
