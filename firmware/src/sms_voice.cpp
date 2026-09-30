@@ -395,10 +395,12 @@ void runModemProbe(const String& commandId) {
       {"CSMS", "AT+CSMS?"},
       {"CGSMS", "AT+CGSMS?"},
       {"CEMODE", "AT+CEMODE?"},
+      {"CEMODE_SUP", "AT+CEMODE=?"},
       {"CEVDP", "AT+CEVDP?"},
       {"CIREG", "AT+CIREG?"},
       {"CSCA", "AT+CSCA?"},
       {"CGACT", "AT+CGACT?"},
+      {"CGPADDR", "AT+CGPADDR?"},
   };
   for (const auto& q : smsQueries) {
     String out;
@@ -822,7 +824,7 @@ void bounceRadioForCsfb() {
   waitWithWatchdog(3000);
   sendAT("AT+CFUN=1", "OK", 15000);
   sendAT("AT+CNMP=2", "OK", 10000);
-  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEMODE=3", "OK", 3000);
   sendAT("AT+CEVDP=3", "OK", 3000);
   state.forcedGsmForCall = false;
   persistSkipGsm(false);
@@ -842,7 +844,7 @@ String dialAndMaybePlay(const String& phone, const String& bearer) {
   sendAT("AT+CVHU=0", "OK", 2000);
   sendAT("AT+COLP=1", "OK", 2000);
   sendAT("AT+CLCC=1", "OK", 2000);
-  sendAT("AT+CEMODE=1", "OK", 3000);
+  sendAT("AT+CEMODE=3", "OK", 3000);
   sendAT("AT+CEVDP=3", "OK", 3000);
 
   setStatus("Calling");

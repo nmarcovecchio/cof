@@ -49,7 +49,7 @@ bool resetModemRadio(uint8_t stage) {
       sendAT("AT+CFUN=0", "OK", 10000);
       waitWithWatchdog(2000);
       sendAT("AT+CFUN=1", "OK", 15000);
-      sendAT("AT+CEMODE=1", "OK", 3000);
+      sendAT("AT+CEMODE=3", "OK", 3000);
       sendAT("AT+CEVDP=3", "OK", 3000);
       sendAT("AT+COPS=0", "OK", 30000);
       break;
@@ -570,7 +570,13 @@ void configureCellularApn() {
   sendAT("AT+CSMP=17,167,0,0", "OK", 3000);
   sendAT("AT+CMGF=1", "OK", 3000);
   sendAT("AT+CNMI=2,1,0,0,0", "OK", 3000);
-  sendAT("AT+CEMODE=1", "OK", 3000);
+  // CEMODE=3 = "PS mode 1 of operation" (3GPP TS 27.007 §10.1.28): EPS-only,
+  // voice-centric. Voice AND SMS go over IMS (VoLTE/SMSoIP); there is no CS
+  // attach, so no CSFB and no SMS-over-SGs. CEMODE=1 was "CS/PS mode 1"
+  // (combined attach = CSFB + SGs enabled) and made every MO SMS do CSFB: the
+  // module dropped the data PDN (+CGEV: ME PDN DEACT 1) to reach 2G, which is
+  // gone on this site, so the submit failed with +CMS ERROR (2026-09-30).
+  sendAT("AT+CEMODE=3", "OK", 3000);
   sendAT("AT+CEVDP=3", "OK", 3000);
   sendAT("AT+CAVIMS=1", "OK", 3000);
   sendAT("AT+CIREG=2", "OK", 2000);
