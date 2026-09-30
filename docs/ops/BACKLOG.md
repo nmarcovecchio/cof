@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.123** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.126** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -356,6 +356,34 @@ el PDP de datos, `+CGEV: ME PDN DEACT 1`) para bajar a 2G, que no existe en el s
 es el modo correcto para operar "todo IMS". `CSMS=1` + `CGSMS=2` quedan (no molestan),
 pero el arreglo es `CEMODE=3`. El probe ahora agrega `CEMODE?`/`CEMODE=?`/`CGPADDR?`
 para confirmar el modo y que el PDP IMS (CID 2) tenga IP.
+
+**0.2.126 — `CEMODE=3` correcto pero insuficiente: el PDP IMS (CID 2) nunca se
+activaba, y `CEMODE` fijo rompía los sitios 2G.** El re-test en 0.2.125 (22:28) con
+VoLTE activo dio `+CREG: 0,0` (CS apagado, esperado con PS mode 1) pero el SMS
+**seguía** fallando con `+CMS ERROR: unknown error`. Diagnóstico: hay **tres**
+caminos de SMS y el firmware no dejaba vivo ninguno.
+
+| Escenario | CS | PS (CID 1) | IMS (CID 2) | Antes de 0.2.126 |
+|---|---|---|---|---|
+| Sitio 2G / CSFB | CS off (CEMODE=3) | — | nunca activado | **roto** por el `CEMODE=3` fijo |
+| LTE sin Ethernet (CMQTT nativo) | CS off | activo (CMQTTSTART) | nunca activado | SMS por PS, pero CID 2 sin levantar |
+| LTE + Ethernet (este sitio, `cof-test`) | CS off | **inactivo** (`"lte":{"up":false}`) | nunca activado | **sin bearer** -> `+CMS ERROR` |
+
+El `AT+CGDCONT=2,"IPV4V6","ims"` se definía desde siempre pero **nunca** se activaba
+con `AT+CGACT=1,2`, así que con MQTT por Ethernet (CID 1 idle) el IMS no tenía IP.
+Cambios de 0.2.126:
+
+- `ensureImsPdp()` (`lte_pdp.cpp`): si CID 2 no tiene IP, `CGDCONT`+`CGACT=1,2` y
+  espera `+CGPADDR=2` != `0.0.0.0`. Se llama antes del primer `CMGS` y en el
+  reintento de `sendTestSms()`.
+- `applyAdaptiveCemode()` (`modem_at.cpp`): **el `CEMODE` sigue al sitio, no es fijo.**
+  Con IMS registrado (`imsVoiceReady()`) mantiene `CEMODE=3` (todo IMS); sin IMS baja
+  a `CEMODE=1` (combined attach) para no matar el SMS/CSFB de los sitios 2G. Se
+  re-evalúa en `refreshCellularStatus()` y `restorePacketServices()`.
+- Probe: `CGPADDR=2` y `CGPADDR=1` por CID, para confirmar qué bearer tiene IP.
+
+Pendiente de campo: confirmar que con CID 2 arriba el `+CMGS` sale por SMSoIP en
+`cof-test`, y que un sitio sin IMS queda en `CEMODE=1` y sigue mandando por CS.
 
 ---
 

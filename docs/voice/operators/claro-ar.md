@@ -171,6 +171,20 @@ Cuando LTE está asentado: `CMGF=1`, SMSC de la SIM, `CMGS` → evento
 (no "SMS sobre LTE") y fuerza CS. Un CSFB que deja el radio en GSM/`NO SERVICE`
 rompe el SMS hasta restaurar `CNMP=2` + attach.
 
+**El bearer hay que levantarlo: `CEMODE=3` no basta (0.2.126).** `CEMODE` decide el
+dominio, pero el IMS necesita su PDP activo. El `AT+CGDCONT=2,"IPV4V6","ims"` se
+definía siempre y **nunca** se activaba con `AT+CGACT=1,2`, así que con MQTT por
+Ethernet (CID 1 idle, `"lte":{"up":false}`) el SMS quedaba sin bearer y daba
+`+CMS ERROR: unknown error` igual que antes. Ahora `ensureImsPdp()` activa CID 2 y
+verifica `+CGPADDR=2` != `0.0.0.0` antes del `CMGS`.
+
+**`CEMODE` tiene que seguir al sitio, no ser fijo.** `CEMODE=3` apaga el dominio CS
+(`+CREG: 0,0`), que es correcto donde hay IMS pero **rompe los sitios 2G/CSFB**, donde
+el SMS funcionaba por SGs. `applyAdaptiveCemode()` deja `CEMODE=3` solo con
+`imsVoiceReady()` (IMS registrado); sin IMS baja a `CEMODE=1` (combined attach) para
+conservar SMS/CS y CSFB. Tres caminos, en orden: **IMS (CID 2)** si hay registro;
+si no, **PS (CID 1)** cuando MQTT ya lo activó (LTE sin Ethernet); si no, **CS/2G**.
+
 ## Cosas que no hay que “arreglar” sin otra prueba en vivo
 
 - Forzar GSM (`CNMP=13`) como voz primaria en este sitio.

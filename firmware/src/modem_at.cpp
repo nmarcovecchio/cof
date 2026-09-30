@@ -448,6 +448,7 @@ void noteSubscriberIdentity() {
   state.voiceIdentity = identity;
   preferences.putString("voiceId", identity);
 }
+void applyAdaptiveCemode();
 void refreshCellularStatus() {
   String response;
   if (sendAT("AT+CREG?", "OK", 2000, &response)) {
@@ -543,7 +544,35 @@ void refreshCellularStatus() {
                 state.cregStat,
                 state.ceregStat,
                 state.operatorName.c_str());
+  applyAdaptiveCemode();
 }
+
+// CEMODE has to follow the site, not a fixed choice: an IMS-registered site wants
+// EPS-only (CEMODE=3) so voice/SMS ride VoLTE/SMSoIP, while a legacy site (2G or
+// LTE with CSFB but no IMS) must keep the combined attach (CEMODE=1) or it loses
+// CS SMS/SGs and CSFB voice entirely. Called from refreshCellularStatus() once
+// +CIREG has answered, and from restorePacketServices() after a voice/SMS cycle.
+int lastAppliedCemode = -1;
+void applyAdaptiveCemode() {
+  const int wanted = imsVoiceReady() ? 3 : 1;
+  if (wanted == lastAppliedCemode) {
+    return;
+  }
+  String resp;
+  if (sendAT("AT+CEMODE?", "OK", 2000, &resp)) {
+    const int current = extractAtTagValue(resp, "+CEMODE:").toInt();
+    if (current == wanted) {
+      lastAppliedCemode = wanted;
+      return;
+    }
+  }
+  if (sendAT(String("AT+CEMODE=") + wanted, "OK", 3000)) {
+    lastAppliedCemode = wanted;
+    Serial.printf("[modem] CEMODE=%d (%s)\n", wanted,
+                  wanted == 3 ? "IMS/VoLTE" : "CS/PS (2G/CSFB)");
+  }
+}
+
 void configureCellularApn() {
   state.apn = COF_MODEM_APN;
   // Reset any forced band/mode. A reboot of the ESP32 or the modem during a stale
@@ -576,6 +605,10 @@ void configureCellularApn() {
   // (combined attach = CSFB + SGs enabled) and made every MO SMS do CSFB: the
   // module dropped the data PDN (+CGEV: ME PDN DEACT 1) to reach 2G, which is
   // gone on this site, so the submit failed with +CMS ERROR (2026-09-30).
+  //
+  // Boot applies 3 provisionally; applyAdaptiveCemode() (called from
+  // refreshCellularStatus(), where +CIREG is known) downgrades to 1 on any site
+  // without IMS so the legacy 2G/CS path (and CSFB voice) keeps working.
   sendAT("AT+CEMODE=3", "OK", 3000);
   sendAT("AT+CEVDP=3", "OK", 3000);
   sendAT("AT+CAVIMS=1", "OK", 3000);

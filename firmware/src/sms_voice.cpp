@@ -401,6 +401,8 @@ void runModemProbe(const String& commandId) {
       {"CSCA", "AT+CSCA?"},
       {"CGACT", "AT+CGACT?"},
       {"CGPADDR", "AT+CGPADDR?"},
+      {"CGPADDR2", "AT+CGPADDR=2"},
+      {"CGPADDR1", "AT+CGPADDR=1"},
   };
   for (const auto& q : smsQueries) {
     String out;
@@ -1291,10 +1293,14 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     }
   }
 
+  // Pick the bearer for this site before the submit: IMS (CID 2) when the line
+  // is IMS-registered, otherwise leave the CS/PS path the module already has.
+  ensureImsPdp();
   String result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
     // Still holding the UART: restore radio/packet, retry, then reclaim MQTT.
     restorePacketServices();
+    ensureImsPdp();
     result = transmitSms(phone, body);
   }
   releaseModemToMqtt(wasOnLte);
