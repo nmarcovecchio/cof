@@ -342,8 +342,20 @@ El otro dato: `+CIREG: 2,1,15` con `ext_info=15` = **0xF** = bits 1 (MMTEL voz) 
 **sí anuncia SMSoIP**. Si `CSMS=1` no alcanza (SGs no disponible en la red), el
 camino correcto con VoLTE activo es **SMS over IMS (SMSoIP)**, que es automático
 cuando el módem registra con `+g.3gpp.smsip`; no hay comando AT dedicado para
-forzarlo. El probe de "Sondear modem" ahora reporta `CSMS`/`CGSMS`/`CEMODE`/`CEVDP`/
-`CIREG`/`CSCA`/`CGACT`/`CGDCONT` para ver el estado real en una sola pasada.
+forzarlo.
+
+**0.2.125 — la causa real era `CEMODE=1` (combined attach), no `CSMS`.** El re-test
+a las 22:03 siguió en **0.2.123** (el OTA de 0.2.124 nunca se aplicó en el device),
+y el dump repite `+CMGS: 74 | +CMS ERROR: unknown error | +CGEV: ME PDN DEACT 1`
+(×3). `AT+CEMODE` (3GPP TS 27.007 §10.1.28) es **"UE modes of operation for EPS"**:
+`0`=PS mode 2, `1`=**CS/PS mode 1** (combined attach = CSFB + SMS-over-SGs), `2`=CS/PS
+mode 2, `3`=**PS mode 1** (EPS-only, voice-centric). El firmware seteaba `CEMODE=1`,
+o sea **combined attach** con CSFB habilitado; por eso cada MO SMS hacía CSFB (soltaba
+el PDP de datos, `+CGEV: ME PDN DEACT 1`) para bajar a 2G, que no existe en el sitio.
+`CEMODE=3` (PS mode 1) fuerza voz **y** SMS por IMS (VoLTE/SMSoIP) sin dominio CS:
+es el modo correcto para operar "todo IMS". `CSMS=1` + `CGSMS=2` quedan (no molestan),
+pero el arreglo es `CEMODE=3`. El probe ahora agrega `CEMODE?`/`CEMODE=?`/`CGPADDR?`
+para confirmar el modo y que el PDP IMS (CID 2) tenga IP.
 
 ---
 

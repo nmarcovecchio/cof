@@ -161,16 +161,15 @@ sin espacio.
 ## SMS
 
 Cuando LTE está asentado: `CMGF=1`, SMSC de la SIM, `CMGS` → evento
-`SMS sent`. El envío MO debe ir por **PS/NAS (`AT+CGSMS=2`) con `AT+CSMS=1`**
-(Phase 2+, requisito del manual §9.2.1 para SMS sobre GPRS): `CGSMS=1` es
-"circuit switched" en el A76XX (no "SMS sobre LTE") y fuerza un intento CS que
-falla con `+CMS ERROR` y desactiva el PDP (`+CGEV: ME PDN DEACT 1`). Un CSFB que
-deja el radio en GSM/`NO SERVICE` rompe el SMS hasta restaurar `CNMP=2` + attach.
-
-Con VoLTE activo (`+CIREG: 2,1,15`, `ext_info` bit 4 = SMSoIP) el camino natural es
-**SMS over IMS**; el módem lo toma automáticamente al registrar con `+g.3gpp.smsip`
-(no hay AT para forzarlo). Pendiente de confirmar en vivo (0.2.124) si `CSMS=1`
-basta o si hay que ir por SMSoIP.
+`SMS sent`. El envío MO debe ir por **IMS (SMSoIP)**, no por CS: con VoLTE activo
+(`+CIREG: 2,1,15`, `ext_info` bit 4 = SMSoIP) el modo correcto del módem es
+**`AT+CEMODE=3`** = "PS mode 1" (EPS-only, voice-centric; 3GPP 27.007 §10.1.28).
+`CEMODE=1` es "CS/PS mode 1" (combined attach = CSFB + SGs), y hacía que cada
+`CMGS` hiciera CSFB: soltaba el PDP de datos (`+CGEV: ME PDN DEACT 1`) para bajar a
+2G, que no existe en este sitio → `+CMS ERROR: unknown error`. Acompañan `CSMS=1`
+(Phase 2+) y `CGSMS=2` (PS preferred). `CGSMS=1` es "circuit switched" en el A76XX
+(no "SMS sobre LTE") y fuerza CS. Un CSFB que deja el radio en GSM/`NO SERVICE`
+rompe el SMS hasta restaurar `CNMP=2` + attach.
 
 ## Cosas que no hay que “arreglar” sin otra prueba en vivo
 
