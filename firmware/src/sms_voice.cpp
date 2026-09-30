@@ -796,7 +796,11 @@ bool isCallReady() {
     return false;
   }
   refreshCellularStatus();
-  return csAttached() &&
+  // Voice readiness has two independent transports: the legacy CS domain
+  // (CSFB/2G, +CREG registered) or IMS/VoLTE (+CIREG registered). A VoLTE-only
+  // site in CEMODE=3 reports +CREG: 0,0, so requiring csAttached() alone would
+  // block every call even though the IMS bearer is up and registered.
+  return (csAttached() || imsVoiceReady()) &&
          radioHasService() &&
          radioIsOnline() &&
          state.signalQuality >= 1 &&
