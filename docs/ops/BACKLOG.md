@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.127** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.128** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -414,6 +414,15 @@ Pendiente de campo: probar SMS (debe salir por SGs con `CEMODE=1` transitorio) y
 llamada (debe seguir por VoLTE). Si el SMS por SGs también falla en cof-test (LTE
 sin 2G y sin SGs en la MME), el siguiente paso es pedir a Claro el alta de
 SMS-over-IMS en la línea, no más firmware.
+
+**0.2.128 — la llamada VoLTE se bloqueaba en `isCallReady()`: exigía `csAttached()`
+(`+CREG` stat 1/5/9/10), que en un sitio solo-VoLTE (`CEMODE=3`) es `+CREG: 0,0`.** El
+re-test en `cof-test` (23:49) mostró IMS arriba (`+CIREG: 2,1,15`) y EPS registrado
+(`+CEREG: 0,1`), pero `waitUntilModemReady(true)` agotaba los 25 s y la llamada nunca
+marcaba ("Call not ready", sin `ATD`). La voz tiene dos transportes independientes:
+CS (CSFB/2G) o IMS (VoLTE); `isCallReady()` ahora acepta `csAttached() || imsVoiceReady()`.
+Los sitios CSFB legacy no cambian (`imsVoiceReady()` es falso ahí). El SMS por CS/SGs
+sigue fallando en cof-test (sin 2G/SGs): queda pendiente el alta SMSoIP en Claro.
 
 ---
 
