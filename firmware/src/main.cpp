@@ -92,6 +92,7 @@ String pendingCmqttProbeCommandId = "";
 bool pendingTestCallCommand = false;
 String pendingTestCallPhone = "";
 String pendingTestCallAudioSha = "";
+String pendingTestCallAudioUrl = "";
 String pendingTestCallCommandId = "";
 bool pendingTestCallIsAdmin = false;
 bool reportTestCallProgress = false;
@@ -457,6 +458,7 @@ void handleButton() {
       pendingTestCallCommand = true;
       pendingTestCallPhone = "";
       pendingTestCallAudioSha = "";
+      pendingTestCallAudioUrl = "";
       pendingTestCallCommandId = "";
       pendingTestCallIsAdmin = false;
       setStatus("Call queued");
@@ -685,6 +687,7 @@ void handleSerialCommand(const String& command) {
         pendingTestCallCommand = true;
         pendingTestCallPhone = "";
         pendingTestCallAudioSha = "";
+        pendingTestCallAudioUrl = "";
         pendingTestCallCommandId = "";
         pendingTestCallIsAdmin = false;
         Serial.println("[serial] call queued (waits modem STABLE)");
@@ -856,15 +859,17 @@ void loop() {
   if (pendingTestCallCommand && modemCsWorkAllowed()) {
     const String callPhone = pendingTestCallPhone;
     const String callAudioSha = pendingTestCallAudioSha;
+    const String callAudioUrl = pendingTestCallAudioUrl;
     const String callCommandId = pendingTestCallCommandId;
     const bool callAdmin = pendingTestCallIsAdmin;
     pendingTestCallCommand = false;
     pendingTestCallPhone = "";
     pendingTestCallAudioSha = "";
+    pendingTestCallAudioUrl = "";
     pendingTestCallCommandId = "";
     pendingTestCallIsAdmin = false;
     reportTestCallProgress = callAdmin;
-    const String result = placeCallAndPlayAudio(callPhone, callAdmin, callAudioSha);
+    const String result = placeCallAndPlayAudio(callPhone, callAdmin, callAudioSha, callAudioUrl);
     reportTestCallProgress = false;
     connectMqttIfNeeded();
     if (callAdmin) {

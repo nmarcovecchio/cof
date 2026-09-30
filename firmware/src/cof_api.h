@@ -197,6 +197,8 @@ bool applyDesiredConfig(JsonDocument& doc);
 void checkManifest(bool allowFirmwareUpdate);
 // Modem path of the pre-recorded audio for a text sha, or "" if not on device.
 String ruleAudioPathForSha(const String& sha);
+// ruleAudioPathForSha() plus an on-demand download of ``url`` when missing.
+String ensureRuleAudio(const String& sha, const String& url);
 void clearMqttConfig();
 bool httpGetString(const String& url, String& out, uint32_t timeoutMs = 15000);
 void initOtaRollbackGuard();
@@ -232,7 +234,7 @@ String observeVoicePath(const String& radioDial, const String& radioConnect);
 int parseClccStatAt(const String& response, int tag);
 void persistObservedVoicePath(const String& path);
 void persistSkipGsm(bool skip);
-String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioSha = "");
+String placeCallAndPlayAudio(const String& phoneOverride = "", bool adminTest = false, const String& audioSha = "", const String& audioUrl = "");
 void pollIncomingSms();
 String prepareVoiceBearer();
 void processPendingSmsUrcs();

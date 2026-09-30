@@ -7,8 +7,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from .alarm_log import append_alarm_step, call_outcome, update_alarm_step
 from .extensions import db
 from .models import Device, DeviceModemJob, Event, utcnow
+from .call_audio import prepare_call_audio
 from .mqtt_util import publish_mqtt
-from .tts import public_audio_url, synthesize_call_audio
 
 logger = logging.getLogger("callonfail.modem_queue")
 
@@ -239,18 +239,24 @@ def pump_modem_queue(device: Device) -> DeviceModemJob | None:
     }
     if next_job.command == "test_call":
         text = str(extra.get("text") or "CallOnFail alarma")
-        try:
-            _path, audio_id = synthesize_call_audio(text)
-            mqtt_payload["audio_url"] = public_audio_url(audio_id)
-            mqtt_payload["audio_format"] = "amr_nb_8000"
-        except Exception as exc:
-            logger.exception("Queued TTS failed device=%s", device.device_uid)
-            next_job.status = "failed"
-            next_job.result = f"TTS failed ({exc})"
-            next_job.finished_at = now
-            _note_alarm_job(next_job, next_job.result)
-            db.session.flush()
-            return pump_modem_queue(device)
+        call_audio = extra.get("call_audio") or {}
+        if not (call_audio.get("text_sha256") and call_audio.get("url")):
+            # Manual test call (or a legacy job with no rule audio): pre-record the
+            # exact text now into the same content-addressed store the rules use.
+            # The device then downloads this asset and speaks THIS text instead of
+            # the canned fallback. audio_url/audio_format are no longer read by
+            # the firmware, so nothing else needs to be sent here.
+            try:
+                call_audio = prepare_call_audio(text) or {}
+            except Exception as exc:
+                logger.exception("Queued call audio failed device=%s", device.device_uid)
+                next_job.status = "failed"
+                next_job.result = f"TTS failed ({exc})"
+                next_job.finished_at = now
+                _note_alarm_job(next_job, next_job.result)
+                db.session.flush()
+                return pump_modem_queue(device)
+        mqtt_payload["call_audio"] = call_audio
 
     try:
         publish_mqtt(f"devices/{device.device_uid}/command", mqtt_payload, qos=1, retain=False)

@@ -131,10 +131,14 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
           pendingTestCallCommand = true;
           pendingTestCallPhone = doc["phone"] | "";
           pendingTestCallPhone.trim();
-          // audio_url / audio_format are still sent by the server but no longer
-          // read: the call only ever plays the pre-recorded file on the modem.
+          // Pre-recorded rule audio wins when present (alarm calls, offline-safe).
+          // A panel test call has no rule audio; its text is pre-recorded by the
+          // backend at call time and sent back as call_audio.url, which the admin
+          // test path downloads and plays on Ethernet/WiFi.
           pendingTestCallAudioSha = doc["call_audio"]["text_sha256"] | "";
           pendingTestCallAudioSha.trim();
+          pendingTestCallAudioUrl = doc["call_audio"]["url"] | "";
+          pendingTestCallAudioUrl.trim();
           pendingTestCallCommandId = pendingCommandId;
           pendingTestCallIsAdmin = true;
           pendingCommandStatus = "accepted";

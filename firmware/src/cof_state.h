@@ -204,6 +204,7 @@ extern String pendingCmqttProbeCommandId;
 extern bool pendingTestCallCommand;
 extern String pendingTestCallPhone;
 extern String pendingTestCallAudioSha;
+extern String pendingTestCallAudioUrl;
 extern String pendingTestCallCommandId;
 extern bool pendingTestCallIsAdmin;
 extern bool reportTestCallProgress;

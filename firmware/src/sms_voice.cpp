@@ -1016,7 +1016,7 @@ String conductOutgoingCall(uint32_t timeoutMs, String* ceerOut) {
   }
   return "Call not connected";
 }
-String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha) {
+String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const String& audioSha, const String& audioUrl) {
   // Validate first; only then take the UART mutex. Early exits used to DISC
   // MQTT and leave reclaim to the caller, and could break LAN checkManifest.
   if (!modemCsWorkAllowed()) {
@@ -1058,19 +1058,23 @@ String placeCallAndPlayAudio(const String& phoneOverride, bool adminTest, const 
 
   const String previousAudioPath = state.modemAudioPath;
   if (adminTest) {
-    // A pre-recorded file already on the modem is the best case, and the only
-    // one that matters: every asset is self-contained, because all placeholders
-    // are resolved at save time. Playing it needs no internet at all, which is
-    // the whole point of the feature.
+    // A pre-recorded file already on the modem is the best case: every asset is
+    // self-contained (all placeholders resolved at save time), so playing it
+    // needs no internet - the whole point of the feature.
     //
-    // If the device does not have it yet, the audio cannot be played from the
-    // URL: downloading needs lwIP, and a site whose only path is LTE has no
-    // route (MQTT rides the modem's AT socket). So ask for a config sync and
-    // fall back to whatever is on the modem, rather than attempting a download
-    // that can only fail and used to leave the alarm with no call at all.
-    const String localRuleAudio = ruleAudioPathForSha(audioSha);
+    // A manual test call enters its text at the moment of the call, so the
+    // backend pre-records it *then* and sends it back as call_audio.url. If the
+    // device does not have it yet, download it now (needs lwIP, i.e. Ethernet or
+    // WiFi); a site whose only uplink is LTE has no route and keeps the canned
+    // fallback, exactly as before.
+    const String onDevice = ruleAudioPathForSha(audioSha);
+    String localRuleAudio = onDevice;
+    if (localRuleAudio.length() == 0) {
+      localRuleAudio = ensureRuleAudio(audioSha, audioUrl);
+    }
     if (localRuleAudio.length() > 0) {
-      publishTestCallProgress("Using call audio on device");
+      publishTestCallProgress(onDevice.length() > 0 ? "Using call audio on device"
+                                                    : "Downloaded call audio");
       state.modemAudioPath = localRuleAudio;
     } else if (fallbackAudioAvailable()) {
       publishTestCallProgress("Rule audio not on device, using fallback");

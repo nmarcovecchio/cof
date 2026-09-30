@@ -609,6 +609,38 @@ String ruleAudioPathForSha(const String& sha) {
 // without downloading anything.
 String ruleAudioPathForSha(const String& sha);
 
+// Like ruleAudioPathForSha(), but downloads the asset from ``url`` when it is
+// not on the modem yet. Used by the admin test call, whose text is entered at
+// call time and pre-recorded by the backend only then, so it can never be part
+// of the config the device synced at save time. Returns "" when the device
+// cannot hold it (no modem FS, no lwIP route, or download error), leaving the
+// caller free to play the canned fallback.
+String ensureRuleAudio(const String& sha, const String& url) {
+  if (sha.length() < 16 || url.length() == 0) {
+    return "";
+  }
+  const String key = ruleAudioKey(sha);
+  auto found = state.ruleAudioPaths.find(key);
+  if (found != state.ruleAudioPaths.end() && found->second.length() > 0) {
+    return found->second;
+  }
+  // Downloading needs an lwIP interface (Ethernet/WiFi). On an LTE-only site
+  // HTTPClient has no route and MQTT rides the modem's AT socket, so do not
+  // even attempt it: return "" and let the caller keep the canned fallback.
+  if (!lanConnected() || !state.modemReady || !state.modemFileTransferSupported) {
+    return "";
+  }
+  const String modemPath = String("C:/") + kRuleAudioPrefix + key + ".amr";
+  const String err = uploadAudioToModem(url, modemPath, key);
+  if (err.length() > 0) {
+    Serial.printf("[audio] test call audio %s failed: %s\n", key.c_str(), err.c_str());
+    return "";
+  }
+  state.ruleAudioPaths[key] = modemPath;
+  persistRuleAudioIndex();
+  return modemPath;
+}
+
 void checkManifest(bool allowFirmwareUpdate) {
   String payload;
   setStatus("Check manifest");
