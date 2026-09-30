@@ -14,8 +14,8 @@ Related: [VOICE_SMS.md](../VOICE_SMS.md), [modem docs](../modem/README.md).
 | APN datos | `internet.claro.com.ar` / `clarogprs` / `clarogprs777` |
 | SMSC (SIM) | `+5491115030500` — no pisar; un SMSC forzado ya rompió SMS |
 | Idle radio | `AT+CNMP=2` (automático) → LTE **B4** (AWS), CSQ alto |
-| Voz IMS | **No registra.** `AT+CAVIMS=1` / `AT+CIREG` → `ims_reg=0` |
-| Voz usable | **CSFB**: LTE + `CREG=1`, sin IMS |
+| Voz IMS | **Registra (desde 2026-09-30).** `AT+CIREG?` → `+CIREG: 2,1,15` (`reg_info=1`) tras activar `Funcionalidad VoLTE` en la línea |
+| Voz usable | **VoLTE** (IMS) sin rebote CS; CSFB solo como fallback si no hay IMS |
 | 2G en este sitio | **No.** `AT+CNMP=13` (GSM only) → `NO SERVICE` |
 
 Config en firmware: `firmware/include/cof_config.h` (`COF_MODEM_APN*`, `COF_MODEM_SMSC`).
@@ -161,13 +161,16 @@ sin espacio.
 ## SMS
 
 Cuando LTE está asentado: `CMGF=1`, SMSC de la SIM, `CMGS` → evento
-`SMS sent`. Un CSFB que deja el radio en GSM/`NO SERVICE` rompe el SMS
-hasta restaurar `CNMP=2` + attach.
+`SMS sent`. Desde 0.2.123 el envío MO va por PS/NAS (`AT+CGSMS=2`): `CGSMS=1`
+es "circuit switched" en el A76XX (no "SMS sobre LTE") y forzaba un intento CS
+que fallaba con `+CMS ERROR` y desactivaba el PDP. Un CSFB que deja el radio en
+GSM/`NO SERVICE` rompe el SMS hasta restaurar `CNMP=2` + attach.
 
 ## Cosas que no hay que “arreglar” sin otra prueba en vivo
 
 - Forzar GSM (`CNMP=13`) como voz primaria en este sitio.
-- Tratar IMS/`CAVIMS` como VoLTE listo (`ims_reg` sigue en 0).
+- Tratar IMS/`CAVIMS` como VoLTE listo: el flag real es `+CIREG` `reg_info=1`
+  (el parser lo lee bien desde 0.2.122; `ims_reg=15` era `ext_info`).
 - Inventar `Call rejected` por duración corta de ring.
 - Polls AT durante la llamada “para ver si contestó”.
 - Cambiar el SMSC compilado.

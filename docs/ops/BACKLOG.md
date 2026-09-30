@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.118** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.123** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -292,6 +292,38 @@ hardware/operador: (a) modem con 3G/WCDMA para CSFB a 3G (Claro mantiene 3G mas
 tiempo que 2G); (b) lograr VoLTE (Pack VoLTE en el SIM + whitelist del IMEI +
 perfil IMS de Claro en el modulo — poco probable para IoT); o (c) aceptar voz solo
 2G donde aun haya 2G (menguante).
+
+**Giro 2026-09-30: VoLTE SI quedó activo en la línea.** El usuario llamó a Claro
+(*611) con el IMEI y activaron `Funcionalidad VoLTE` en la línea. Con eso el módem
+reporta `+CIREG: 2,1,15` (registrado + capacidades IMS `0xF` = voz MMTEL + SMS).
+La llamada de prueba sale por IMS **sin** rebote CS (`Preparing CS radio` ya no
+aparece en el `test_call`), así que el PDP/CMQTT nativo no se toca. Desmiente la
+conclusión "dead end" de arriba: era falta de activación en la línea, no whitelist
+de IMEI ni perfil MBN.
+
+**0.2.122 — parser de `+CIREG` leía `ext_info` en vez de `reg_info`.** Según
+3GPP TS 27.007 §8.71, `AT+CIREG?` devuelve `+CIREG: <n>,<reg_info>[,<ext_info>]`;
+`reg_info` (2º campo) es el flag de registro (`1` = registrado) y `ext_info` es la
+máscara hex de capacidades que **solo aparece cuando ya está registrado**. El parser
+hacía `lastIndexOf(',')` y se quedaba con `"15"` (ext_info) en vez de `"1"`, así que
+`imsVoiceReady()` (`state.imsReg == 1`) nunca daba true pese al registro. Fix en
+[`modem_at.cpp`](../firmware/src/modem_at.cpp): tomar el 2º campo.
+
+**0.2.123 — SMS: falso "SMS sent" + `CGSMS` mal puesto.** Dos hallazgos en el envío
+MO sobre LTE:
+
+- `transmitSms()` ([`sms_voice.cpp`](../firmware/src/sms_voice.cpp)) solo miraba la
+  *ausencia* de `+CMGS`/`OK` para fallar. El dump mostraba
+  `SMS rsp ... +CMGS: 70 | +CMS ERROR: unknown error | +CGEV: ME PDN DEACT 1` y aun
+  así devolvía `SMS sent` (y el `readModemUntil(60000,"OK")` agotaba el timeout sin
+  `OK`). Ahora `+CMS ERROR`/`+CME ERROR` se tratan como falla antes de evaluar éxito,
+  lo que además activa el retry de `sendTestSms()`.
+- `AT+CGSMS=1` en el manual A76XX §9.2.10 es **"circuit switched"** (mapeado a 3 =
+  CS preferred), no "SMS sobre LTE NAS/IMS" como daba por sentado el código. En un
+  sitio solo-LTE eso forzaba un intento CS por 2G que fallaba con
+  `+CMS ERROR: unknown error` y desactivaba el PDP de datos. Se pasó a `CGSMS=2`
+  ("GPRS preferred" = SMS sobre PS/NAS) en `configureCellularApn()` y
+  `restorePacketServices()`.
 
 ---
 
