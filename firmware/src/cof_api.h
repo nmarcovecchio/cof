@@ -146,7 +146,8 @@ void serviceLteMqttHealth();
 void bounceMqttForRouteChange();
 void configureMqttClientTransport();
 void connectMqttIfNeeded();
-void deferDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId);
+void deferDeviceEvent(const char* type, const char* severity, const String& message,
+                      const String& commandId, const String& transport = "");
 void enforceMqttSilenceWatchdog();
 void fillCellularJson(JsonObject cellular);
 void fillConnectivityJson(JsonDocument& doc);
@@ -154,7 +155,8 @@ void fillNetworkJson(JsonObject network);
 void flushDeferredEvents();
 bool mqttUsesTls();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
-bool publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId = "");
+bool publishDeviceEvent(const char* type, const char* severity, const String& message,
+                        const String& commandId = "", const String& transport = "");
 void publishDeviceStatus(const char* status, bool retained = true);
 void publishLteDataTrace();
 bool publishMqttJson(const String& suffix, JsonDocument& doc, bool retained = false, uint8_t qos = 0);

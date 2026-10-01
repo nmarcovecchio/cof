@@ -363,7 +363,8 @@ void publishDeviceStatus(const char* status, bool retained) {
 
   publishMqttJson("status", doc, retained, 1);
 }
-void deferDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId) {
+void deferDeviceEvent(const char* type, const char* severity, const String& message,
+                      const String& commandId, const String& transport) {
   // Coalesce duplicates: the radio recovery ladder and the LTE trace can emit the
   // same message repeatedly while MQTT is down, and without this the deferred
   // queue fills with near-identical events that then flush in a burst on
@@ -387,6 +388,7 @@ void deferDeviceEvent(const char* type, const char* severity, const String& mess
   slot.severity = severity;
   slot.message = message;
   slot.commandId = commandId;
+  slot.transport = transport;
   Serial.printf("[event] deferred %s: %s\n", type, message.c_str());
 }
 void flushDeferredEvents() {
@@ -396,7 +398,8 @@ void flushDeferredEvents() {
   if (!publishDeviceEvent(deferredEvents[0].type.c_str(),
                           deferredEvents[0].severity.c_str(),
                           deferredEvents[0].message,
-                          deferredEvents[0].commandId)) {
+                          deferredEvents[0].commandId,
+                          deferredEvents[0].transport)) {
     return;
   }
   for (size_t i = 1; i < deferredEventCount; i++) {
@@ -404,7 +407,8 @@ void flushDeferredEvents() {
   }
   deferredEventCount--;
 }
-bool publishDeviceEvent(const char* type, const char* severity, const String& message, const String& commandId) {
+bool publishDeviceEvent(const char* type, const char* severity, const String& message,
+                        const String& commandId, const String& transport) {
   JsonDocument doc;
   doc["device_id"] = state.mqttDeviceId;
   doc["firmware"] = COF_FIRMWARE_VERSION;
@@ -414,11 +418,14 @@ bool publishDeviceEvent(const char* type, const char* severity, const String& me
   if (commandId.length() > 0) {
     doc["command_id"] = commandId;
   }
+  if (transport.length() > 0) {
+    doc["transport"] = transport;
+  }
   if (!publishMqttJson("event", doc, false, 1)) {
     // Queue instead of dropping: this used to silently discard the result of an
     // SMS test (sendTestSms takes the UART mutex; result is deferred until MQTT is back)
     // and the backend would then time the command out with no explanation.
-    deferDeviceEvent(type, severity, message, commandId);
+    deferDeviceEvent(type, severity, message, commandId, transport);
     return false;
   }
   flushDeferredEvents();

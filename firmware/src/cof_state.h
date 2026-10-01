@@ -132,6 +132,7 @@ struct DeferredEvent {
   String severity;
   String message;
   String commandId;
+  String transport;
 };
 
 enum CallEndSource {

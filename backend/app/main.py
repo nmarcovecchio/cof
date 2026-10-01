@@ -2338,6 +2338,37 @@ def redact_command_secrets(payload: dict) -> dict:
     return stored
 
 
+def event_transport_code(event) -> str:
+    """Stable radio/domain path code from payload.transport or message suffix.
+
+    Codes: volte | csfb | gsm | smsoip | sgs | cs  (see claro-ar.md).
+    """
+    payload = getattr(event, "payload", None)
+    if isinstance(payload, dict):
+        code = str(payload.get("transport") or "").strip().lower()
+        if code:
+            return code
+    message = str(getattr(event, "message", "") or "")
+    # "Call done [volte LTE IMS=…] [0.2.129]" / "SMS sent [sgs] [0.2.130]"
+    match = re.search(r"\[([a-z][a-z0-9_]*)(?:\s|\])", message.lower())
+    if not match:
+        return ""
+    code = match.group(1)
+    if code in TRANSPORT_BADGE_LABELS:
+        return code
+    return ""
+
+
+TRANSPORT_BADGE_LABELS = {
+    "volte": "VoLTE",
+    "csfb": "CSFB",
+    "gsm": "2G",
+    "smsoip": "SMSoIP",
+    "sgs": "SGs",
+    "cs": "CS",
+}
+
+
 def event_badge_meta(event) -> dict:
     """Badge class/label for an event row (shared by SSR and events.json)."""
     sev = event_display_severity(
@@ -2347,16 +2378,21 @@ def event_badge_meta(event) -> dict:
     )
     message = str(getattr(event, "message", "") or "")
     etype = str(getattr(event, "type", "") or "")
+    transport = event_transport_code(event)
+    transport_label = TRANSPORT_BADGE_LABELS.get(transport, "")
     if sev == "warning":
+        # Prefer the transport when we know it (failed SMSoIP probe still useful).
+        if transport_label and etype in {"test_call", "test_sms"}:
+            return {"class": "text-bg-warning text-dark", "label": transport_label}
         return {"class": "text-bg-warning text-dark", "label": sev}
     if sev == "error":
         return {"class": "text-bg-danger", "label": sev}
     if etype == "test_call" and message.startswith("Remote hangup"):
-        return {"class": "text-bg-success", "label": "corte"}
+        return {"class": "text-bg-success", "label": transport_label or "corte"}
     if etype == "test_call" and message.startswith("Call done"):
-        return {"class": "text-bg-success", "label": "ok"}
+        return {"class": "text-bg-success", "label": transport_label or "ok"}
     if etype == "test_sms" and message.startswith("SMS sent"):
-        return {"class": "text-bg-success", "label": "ok"}
+        return {"class": "text-bg-success", "label": transport_label or "ok"}
     if etype == "modem_probe" and message.startswith("modem_probe: end"):
         return {"class": "text-bg-success", "label": "fin"}
     if etype == "modem_probe" and "SUPPORTED" in message:

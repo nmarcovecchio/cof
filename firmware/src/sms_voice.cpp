@@ -1321,7 +1321,7 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     result = transmitSms(phone, body, 10000);
     if (result.startsWith("SMS sent")) {
       releaseModemToMqtt(wasOnLte);
-      return result;
+      return "SMS sent [smsoip]";
     }
     appendModemLogForced("SMS SMSoIP fail, drop IMS for CS");
     if (!dropImsForSms()) {
@@ -1340,5 +1340,9 @@ String sendTestSms(const String& phoneOverride, const String& text) {
   }
   restoreImsMode();
   releaseModemToMqtt(wasOnLte);
+  if (result.startsWith("SMS sent")) {
+    // LTE + CS domain = SGs; pure GSM radio = 2G CS.
+    return radioIsGsm() ? "SMS sent [gsm]" : "SMS sent [sgs]";
+  }
   return result;
 }

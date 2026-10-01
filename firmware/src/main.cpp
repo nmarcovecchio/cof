@@ -228,6 +228,25 @@ void publishTestCallResult(const String& result, bool ok, const String& commandI
   if (commandId.length() > 0) {
     doc["command_id"] = commandId;
   }
+  // Prefer the observed path from the call suffix: "Call done [volte LTE IMS=…]".
+  // Codes: volte | csfb | gsm (see docs/voice/operators/claro-ar.md).
+  {
+    const int open = result.indexOf('[');
+    if (open >= 0) {
+      int end = result.indexOf(' ', open + 1);
+      const int close = result.indexOf(']', open + 1);
+      if (end < 0 || (close >= 0 && close < end)) {
+        end = close;
+      }
+      if (end > open + 1) {
+        String transport = result.substring(open + 1, end);
+        transport.trim();
+        if (transport.length() > 0) {
+          doc["transport"] = transport;
+        }
+      }
+    }
+  }
   if (modemCallLog.length() > 0) {
     doc["modem_log"] = modemCallLog;
   }
@@ -849,11 +868,20 @@ void loop() {
     appendModemLogForced("SMS result " + result);
     lteTraceLog = modemCallLog;
     pendingLteTraceMessage = "SMS " + result;
-    pendingLteTraceOk = result == "SMS sent";
+    pendingLteTraceOk = result.startsWith("SMS sent");
     pendingLteTracePublish = true;
     connectMqttIfNeeded();
-    const bool ok = result == "SMS sent";
-    publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId);
+    const bool ok = result.startsWith("SMS sent");
+    // Transport code lives in the message suffix "SMS sent [smsoip|sgs|gsm]" and
+    // is also published as payload.transport for the panel badge.
+    String transport;
+    const int open = result.indexOf('[');
+    const int close = result.indexOf(']', open + 1);
+    if (open >= 0 && close > open + 1) {
+      transport = result.substring(open + 1, close);
+      transport.trim();
+    }
+    publishDeviceEvent("test_sms", ok ? "info" : "warning", result, smsCommandId, transport);
   }
 
   if (pendingTestCallCommand && modemCsWorkAllowed()) {

@@ -1,6 +1,10 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.129** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.130** (en `ota/manifest.json`).
+
+**Validado en campo (cof-test, 0.2.129):** llamada **y** SMS funcionan por **Ethernet**
+y por **LTE**. Voz por VoLTE; SMS prueba SMSoIP (10 s) y cae a CS/SGs con drop de
+IMS cuando hace falta. Ver entrada 0.2.129 abajo.
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -440,6 +444,16 @@ tope 10 s + early `ERROR`; si falla, `dropImsForSms()` (`CGACT=0,8` + `CAVIMS=0`
 espera `!imsVoiceReady` ~15 s); si IMS no baja → `SMS failed: IMS still up`; si baja,
 `enableCsSmsTransport()` + `CMGS` por CS/SGs; al final `restoreImsMode()` re-arma
 VoLTE. Sin IMS al inicio, directo a CS/SGs (sitios 2G/CSFB). No toca el path de voz.
+
+**Campo (cof-test, 0.2.129):** confirmado por el usuario — **llamada OK por Ethernet
+y por LTE**; **SMS OK por Ethernet y por LTE**. El path de voz observado es VoLTE;
+el de SMS es CS/SGs (SMSoIP sigue sin provisionar en esta línea, el probe falla en
+≤10 s y el fallback manda el SMS).
+
+**0.2.130 — badge de transporte en call/SMS.** El evento MQTT lleva `payload.transport`
+(`volte`/`csfb`/`gsm`/`smsoip`/`sgs`/`cs`) y el panel muestra el badge (VoLTE, CSFB,
+2G, SMSoIP, SGs, CS) en lugar del genérico "ok". SMS exitoso publica
+`SMS sent [smsoip|sgs|gsm]`.
 
 ---
 

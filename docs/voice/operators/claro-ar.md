@@ -179,7 +179,27 @@ firmware conmuta por operación. Desde **0.2.129** el orden es:
 3. `enableCsSmsTransport()` (`CEMODE=1` + `CEVDP=1`, espera CREG) + `CMGS` por CS/SGs.
 4. `restoreImsMode()` re-arma VoLTE (`CAVIMS=1`/`CEVDP=3`/`CEMODE=3`/`CIREG=2`).
 
+**Campo (0.2.129, cof-test):** llamada y SMS OK por Ethernet **y** por LTE. Voz =
+VoLTE; SMS = CS/SGs vía fallback (SMSoIP no provisionado aún en esta línea).
+
 Acompañan `CSMS=1` (Phase 2+) y `CGSMS=2` (PS preferred).
+
+### Nombres de transporte (badge en el panel)
+
+Códigos estables en el evento MQTT (`payload.transport`) y en el sufijo del mensaje.
+El badge del panel muestra la etiqueta corta:
+
+| Código | Badge | Qué es |
+|---|---|---|
+| `volte` | VoLTE | Llamada por IMS |
+| `csfb` | CSFB | Llamada con fallback CS (LTE→2G) |
+| `gsm` | 2G | Llamada o SMS en radio GSM |
+| `smsoip` | SMSoIP | SMS over IMS |
+| `sgs` | SGs | SMS por dominio CS en LTE (SGs), sin bajar a 2G |
+| `cs` | CS | SMS por circuito (genérico / legacy) |
+
+Así se puede distinguir a futuro un sitio que manda SMS por SMSoIP de uno que sigue
+por SGs o por 2G puro.
 
 **Por qué hace falta el drop (0.2.128 campo):** `CEMODE=1` solo suelta IMS cuando el
 data PDP (CID 1) está inactivo:
