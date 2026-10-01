@@ -1,6 +1,6 @@
 # Backlog de ingenieria — CallOnFail
 
-Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.128** (en `ota/manifest.json`).
+Estado: **2026-09-30**. Ultimo firmware publicado: **0.2.129** (en `ota/manifest.json`).
 
 Este archivo es la lista de trabajo tecnico pendiente (deuda, bugs conocidos,
 hardening de proceso). **No** es el roadmap de producto: las funciones que
@@ -433,6 +433,13 @@ y el `CMGS` respondió `OK`. Después de que el MQTT subió a LTE nativo/CMQTT
 el módem conserva `+CIREG: 2,1,15` aun con `CEMODE=1`, y el `CMGS` se rutea por IMS
 (SMSoIP no provisionado). Ver `docs/voice/operators/claro-ar.md`. Salida limpia:
 alta SMSoIP en Claro; workaround firmware: bajar IMS (`AT+CGACT=0,1`) antes del `CMGS`.
+
+**0.2.129 — SMS: SMSoIP primero (10 s), fallback CS/SGs con drop de IMS.** Tras
+revalidar Ethernet (SMS OK), el fix LTE es: si `imsVoiceReady()`, probar `CMGS` con
+tope 10 s + early `ERROR`; si falla, `dropImsForSms()` (`CGACT=0,8` + `CAVIMS=0`,
+espera `!imsVoiceReady` ~15 s); si IMS no baja → `SMS failed: IMS still up`; si baja,
+`enableCsSmsTransport()` + `CMGS` por CS/SGs; al final `restoreImsMode()` re-arma
+VoLTE. Sin IMS al inicio, directo a CS/SGs (sitios 2G/CSFB). No toca el path de voz.
 
 ---
 

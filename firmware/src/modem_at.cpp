@@ -304,7 +304,7 @@ void flushModemInput() {
     modemRebootUrcSeen = true;
   }
 }
-String readModemUntil(uint32_t timeoutMs, const String& token) {
+String readModemUntil(uint32_t timeoutMs, const String& token, const String& errorToken) {
   String response;
   bool rebootSeen = false;
   const uint32_t startedAt = millis();
@@ -354,6 +354,17 @@ String readModemUntil(uint32_t timeoutMs, const String& token) {
         // to a modem that was still emitting SMS DONE / PB DONE (2026-09-26,
         // clear_wifi -> *ATREADY inside CMQTTCONNECT, then NO SERVICE).
         modemRebootUrcSeen = true;
+        return response;
+      }
+      // Optional early-exit token: stop draining the moment an error marker
+      // appears, instead of burning the whole timeout waiting for a success
+      // token that will never arrive (e.g. +CMGS answered with +CMS ERROR, no
+      // "OK"). Checked per char like the success token so a slow error does not
+      // pin us to the full timeout.
+      if (errorToken.length() > 0 && response.indexOf(errorToken) >= 0) {
+        if (rebootSeen) {
+          modemRebootUrcSeen = true;
+        }
         return response;
       }
       if (token.length() == 0) {
@@ -606,11 +617,54 @@ void enableCsSmsTransport() {
   }
 }
 
+// Force IMS down so a retry MO SMS routes over CS/SGs instead of SMSoIP. On a
+// VoLTE site whose data PDP (CID 1) is active (native MQTT), CEMODE=1 + CEVDP=1
+// alone does NOT deregister IMS: the module keeps +CIREG: 2,1,15 and the CMGS
+// keeps riding the unprovisioned SMSoIP path (+CMS ERROR: unknown error).
+// Deactivating the IMS bearer (CID 8, auto-created by the module) and reporting
+// "IMS voice not available" (CAVIMS=0) is what drops it. Best-effort: each
+// command is ignored if unsupported; restoreImsMode() re-arms VoLTE afterwards.
+static bool gImsDroppedForSms = false;
+bool dropImsForSms() {
+  gImsDroppedForSms = true;
+  setStatus("SMS drop IMS");
+  sendAT("AT+CGACT=0,8", "OK", 5000);
+  sendAT("AT+CAVIMS=0", "OK", 3000);
+  // Wait until +CIREG reports deregistered so the following CMGS cannot still
+  // ride SMSoIP. ~15 s is enough for the IMS bearer teardown on A7672/Claro.
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < 15000) {
+    feedWatchdog();
+    if (state.mqttConnected) {
+      mqttClient.loop();
+    }
+    refreshCellularStatus();
+    if (!imsVoiceReady()) {
+      return true;
+    }
+    waitWithWatchdog(1000);
+  }
+  refreshCellularStatus();
+  return !imsVoiceReady();
+}
+
 // Return the modem to the idle mode for this site after an SMS: IMS (CEMODE=3,
 // VoLTE) when registered, combined attach (CEMODE=1) on a legacy 2G/CSFB site.
 void restoreImsMode() {
   gSmsCsTransportActive = false;
   lastAppliedCemode = -1;
+  if (gImsDroppedForSms) {
+    // dropImsForSms() took IMS down for the CS/SGs SMS; bring VoLTE back
+    // explicitly. imsVoiceReady() is still false right now, so the adaptive
+    // branch below would otherwise leave the site stuck CS-only.
+    gImsDroppedForSms = false;
+    sendAT("AT+CAVIMS=1", "OK", 3000);
+    sendAT("AT+CEVDP=3", "OK", 3000);
+    sendAT("AT+CIREG=2", "OK", 3000);
+    sendAT("AT+CEMODE=3", "OK", 3000);
+    lastAppliedCemode = 3;
+    return;
+  }
   if (imsVoiceReady()) {
     sendAT("AT+CEVDP=3", "OK", 3000);
     sendAT("AT+CAVIMS=1", "OK", 3000);
@@ -623,6 +677,7 @@ void configureCellularApn() {
   // A modem reset mid-SMS clears any stale CS-transport override so the adaptive
   // mode logic can settle the site again on the way back up.
   gSmsCsTransportActive = false;
+  gImsDroppedForSms = false;
   // Reset any forced band/mode. A reboot of the ESP32 or the modem during a stale
   // GSM-only lock (CNMP=13) used to leave the radio stuck at +CPSI: NO SERVICE on
   // a site with no 2G (2026-09-29, cof-test), because restoreAutoRadio()'s in-RAM

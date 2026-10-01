@@ -170,26 +170,25 @@ El camino que funciona es **CS/SGs (combined attach, `CEMODE=1`)**: `CEMODE=1` e
 "CS/PS mode 1" (combined attach = CSFB + SGs). Con `CEMODE=3` (EPS-only) no hay
 combined attach ni SGs, así que el SMS queda sin transporte. La voz, en cambio, va
 por VoLTE (`CEMODE=3`). **SMS y voz son excluyentes en este módem**, así que el
-firmware conmuta por operación: `enableCsSmsTransport()` (`CEMODE=1` + `CEVDP=1`,
-espera `csAttached()`/CREG registrado) antes del `CMGS`, y `restoreImsMode()`
-(`CEMODE=3`+`CEVDP=3`+`CAVIMS=1`) al terminar. Acompañan `CSMS=1` (Phase 2+) y
-`CGSMS=2` (PS preferred).
+firmware conmuta por operación. Desde **0.2.129** el orden es:
 
-**Ojo (0.2.128): `CEMODE=1` solo manda el SMS por CS/SGs si el módem realmente suelta
-IMS.** El desenlace depende de si el data PDP (CID 1) está activo:
+1. Si IMS registrado: probar SMSoIP primero (`CMGS` con tope **10 s** + early
+   `ERROR`). Si Claro provisione IP-SM-GW, sale por acá sin otro FW.
+2. Si falla: `dropImsForSms()` (`AT+CGACT=0,8` + `AT+CAVIMS=0`), esperar
+   `+CIREG` deregistrado (~15 s). Si IMS no baja → `SMS failed: IMS still up`.
+3. `enableCsSmsTransport()` (`CEMODE=1` + `CEVDP=1`, espera CREG) + `CMGS` por CS/SGs.
+4. `restoreImsMode()` re-arma VoLTE (`CAVIMS=1`/`CEVDP=3`/`CEMODE=3`/`CIREG=2`).
 
-- **MQTT por Ethernet (CID 1 inactivo):** `CEMODE=1`+`CEVDP=1` hace que la red desactive
-  CID 1 (`+CGEV: NW PDN DEACT 1`), el IMS cae a `+CIREG: 2,0,0` y el `CMGS` sale por
-  CS/SGs → `SMS sent` (00:01:15Z, primer SMS de 0.2.128).
-- **MQTT por LTE nativo/CMQTT (CID 1 activo, socket MQTT abierto):** la red NO desactiva
-  CID 1, el módem conserva IMS (`+CIREG: 2,1,15`) aun con `CEMODE=1`, y el `CMGS` se
-  rutea por IMS (SMSoIP no provisionado) → `+CMS ERROR: unknown error` a los 60 s
-  (00:04:52Z y 00:17:33Z, 0.2.128).
+Acompañan `CSMS=1` (Phase 2+) y `CGSMS=2` (PS preferred).
 
-Es decir, en LTE el SMS queda atrapado entre SMSoIP (no provisionado) y CSFB/2G
-(inexistente en el sitio). Salida limpia: alta de SMSoIP en Claro para esta línea.
-Workaround por firmware: forzar la baja de IMS antes del `CMGS` (desactivar CID 1 con
-`AT+CGACT=0,1`), que corta el MQTT LTE transitoriamente hasta re-activarlo.
+**Por qué hace falta el drop (0.2.128 campo):** `CEMODE=1` solo suelta IMS cuando el
+data PDP (CID 1) está inactivo:
+
+- **MQTT por Ethernet (CID 1 inactivo):** `CEMODE=1` provoca `+CGEV: NW PDN DEACT 1`,
+  IMS cae a `+CIREG: 2,0,0`, `CMGS` por CS/SGs → `SMS sent`.
+- **MQTT por LTE/CMQTT (CID 1 activo):** IMS queda en `+CIREG: 2,1,15` y el `CMGS`
+  va por SMSoIP no provisionado → `+CMS ERROR`. Por eso 0.2.129 baja CID 8 (bearer
+  IMS) en vez de CID 1 (no corta el PDP de datos/MQTT).
 
 **El bearer IMS real es CID 8, no CID 2.** El módem se auto-crea
 `+CGDCONT: 8,"IPV4V6","IMS",...` y lo activa solo (`+CGACT: 8,1`). El `CGDCONT=2,"ims"`

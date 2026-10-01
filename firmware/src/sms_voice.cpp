@@ -1193,7 +1193,7 @@ String resolveTestPhone(const String& phoneOverride) {
   }
   return phone;
 }
-String transmitSms(const String& phone, const String& body) {
+String transmitSms(const String& phone, const String& body, uint32_t timeoutMs) {
   // Caller must hold the UART (takeModemForVoiceSms) when MQTT rides LTE.
   // Do not DISC/reconnect here: a half teardown + CONNECT was what wedged SMS.
   if (!sendAT("AT+CMGF=1", "OK", 3000)) {
@@ -1217,13 +1217,17 @@ String transmitSms(const String& phone, const String& body) {
 
   ModemSerial.print(body);
   ModemSerial.write(static_cast<uint8_t>(0x1A));
-  const String response = readModemUntil(60000, "OK");
+  // Stop draining as soon as the submit errors (+CMS ERROR / +CME ERROR arrive
+  // WITHOUT an "OK", so waiting only for "OK" burned the whole timeout on every
+  // SMSoIP failure). errorToken short-circuits; timeoutMs caps a silent stall
+  // (SMSoIP probe uses 10 s; CS/SGs keeps the full 60 s).
+  const String response = readModemUntil(timeoutMs, "OK", "ERROR");
   Serial.println("[modem] << " + response);
   appendModemLogForced("SMS rsp " + response);
 
   // A failed submit is reported as +CMS ERROR / +CME ERROR. The old check only
   // looked for the ABSENCE of +CMGS/OK, so a response that carried both a stale
-  // +CMGS message reference and a +CMS ERROR (or a 60 s timeout with no OK) was
+  // +CMGS message reference and a +CMS ERROR (or a timeout with no OK) was
   // misreported as "SMS sent" (2026-09-30, cof-test after VoLTE was enabled).
   if (response.indexOf("+CMS ERROR") >= 0 || response.indexOf("+CME ERROR") >= 0) {
     String err = response;
@@ -1303,12 +1307,34 @@ String sendTestSms(const String& phoneOverride, const String& text) {
     }
   }
 
-  // MO SMS rides CS/SGs (combined attach), not IMS: switch to CEMODE=1 before the
-  // submit, then restore the IMS/VoLTE mode so voice keeps working afterwards.
+  // Two mutually-exclusive MO SMS transports on this module:
+  //   1. SMSoIP (IMS registered) - preferred; when Claro provisions IP-SM-GW it
+  //      just works. Cap at 10 s + early ERROR so an unprovisioned line does not
+  //      burn 60 s before the fallback.
+  //   2. CS/SGs (CEMODE=1) - proven path, but needs IMS actually DOWN. With the
+  //      data PDP (CID 1) active for native MQTT, CEMODE=1 alone leaves
+  //      +CIREG: 2,1,15 and CMGS still rides SMSoIP. After a failed SMSoIP probe
+  //      we drop IMS (CID 8 + CAVIMS=0), wait for deregister, then submit CS.
+  String result;
+  if (imsVoiceReady()) {
+    appendModemLogForced("SMS try SMSoIP (10s)");
+    result = transmitSms(phone, body, 10000);
+    if (result.startsWith("SMS sent")) {
+      releaseModemToMqtt(wasOnLte);
+      return result;
+    }
+    appendModemLogForced("SMS SMSoIP fail, drop IMS for CS");
+    if (!dropImsForSms()) {
+      restoreImsMode();
+      releaseModemToMqtt(wasOnLte);
+      setStatus("SMS IMS stuck");
+      return "SMS failed: IMS still up";
+    }
+  }
+
   enableCsSmsTransport();
-  String result = transmitSms(phone, body);
+  result = transmitSms(phone, body);
   if (!result.startsWith("SMS sent")) {
-    // Still holding the UART: re-apply the CS attach, retry, then reclaim MQTT.
     enableCsSmsTransport();
     result = transmitSms(phone, body);
   }
