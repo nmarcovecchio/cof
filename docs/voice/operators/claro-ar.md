@@ -175,6 +175,22 @@ espera `csAttached()`/CREG registrado) antes del `CMGS`, y `restoreImsMode()`
 (`CEMODE=3`+`CEVDP=3`+`CAVIMS=1`) al terminar. Acompañan `CSMS=1` (Phase 2+) y
 `CGSMS=2` (PS preferred).
 
+**Ojo (0.2.128): `CEMODE=1` solo manda el SMS por CS/SGs si el módem realmente suelta
+IMS.** El desenlace depende de si el data PDP (CID 1) está activo:
+
+- **MQTT por Ethernet (CID 1 inactivo):** `CEMODE=1`+`CEVDP=1` hace que la red desactive
+  CID 1 (`+CGEV: NW PDN DEACT 1`), el IMS cae a `+CIREG: 2,0,0` y el `CMGS` sale por
+  CS/SGs → `SMS sent` (00:01:15Z, primer SMS de 0.2.128).
+- **MQTT por LTE nativo/CMQTT (CID 1 activo, socket MQTT abierto):** la red NO desactiva
+  CID 1, el módem conserva IMS (`+CIREG: 2,1,15`) aun con `CEMODE=1`, y el `CMGS` se
+  rutea por IMS (SMSoIP no provisionado) → `+CMS ERROR: unknown error` a los 60 s
+  (00:04:52Z y 00:17:33Z, 0.2.128).
+
+Es decir, en LTE el SMS queda atrapado entre SMSoIP (no provisionado) y CSFB/2G
+(inexistente en el sitio). Salida limpia: alta de SMSoIP en Claro para esta línea.
+Workaround por firmware: forzar la baja de IMS antes del `CMGS` (desactivar CID 1 con
+`AT+CGACT=0,1`), que corta el MQTT LTE transitoriamente hasta re-activarlo.
+
 **El bearer IMS real es CID 8, no CID 2.** El módem se auto-crea
 `+CGDCONT: 8,"IPV4V6","IMS",...` y lo activa solo (`+CGACT: 8,1`). El `CGDCONT=2,"ims"`
 era un duplicado muerto; activarlo a mano (`AT+CGACT=1,2`) da

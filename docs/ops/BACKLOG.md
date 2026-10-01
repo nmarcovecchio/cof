@@ -421,8 +421,18 @@ re-test en `cof-test` (23:49) mostró IMS arriba (`+CIREG: 2,1,15`) y EPS regist
 (`+CEREG: 0,1`), pero `waitUntilModemReady(true)` agotaba los 25 s y la llamada nunca
 marcaba ("Call not ready", sin `ATD`). La voz tiene dos transportes independientes:
 CS (CSFB/2G) o IMS (VoLTE); `isCallReady()` ahora acepta `csAttached() || imsVoiceReady()`.
-Los sitios CSFB legacy no cambian (`imsVoiceReady()` es falso ahí). El SMS por CS/SGs
-sigue fallando en cof-test (sin 2G/SGs): queda pendiente el alta SMSoIP en Claro.
+Los sitios CSFB legacy no cambian (`imsVoiceReady()` es falso ahí).
+
+**0.2.128 — SMS: sale por Ethernet, falla por LTE. La causa es que IMS no se suelta
+cuando el data PDP (CID 1) está activo.** En cof-test el primer SMS tras el OTA
+(00:01:15Z, MQTT por Ethernet) salió por **CS/SGs**, no por IMS: `CEMODE=1`+`CEVDP=1`
+provocó `+CGEV: NW PDN DEACT 1`, el IMS cayó a `+CIREG: 2,0,0`, `CREG` pasó a `0,1`
+y el `CMGS` respondió `OK`. Después de que el MQTT subió a LTE nativo/CMQTT
+(00:02:24Z "LTE MQTT OK"), los SMS de 00:04:52Z y 00:17:33Z fallaron con
+`+CMS ERROR: unknown error` (60 s): con CID 1 activo la red NO desactiva el PDP,
+el módem conserva `+CIREG: 2,1,15` aun con `CEMODE=1`, y el `CMGS` se rutea por IMS
+(SMSoIP no provisionado). Ver `docs/voice/operators/claro-ar.md`. Salida limpia:
+alta SMSoIP en Claro; workaround firmware: bajar IMS (`AT+CGACT=0,1`) antes del `CMGS`.
 
 ---
 
