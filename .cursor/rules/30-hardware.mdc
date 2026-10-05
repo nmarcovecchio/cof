@@ -15,4 +15,7 @@ alwaysApply: false
 - After `gen_sch.py`: `sch upgrade` the three sheets, `sch erc`, `sch export pdf`.
   Skip SVG export by default.
 - Prefer labels over long wires; never route across IC bodies (rules in `gen_sch.py`).
-- Hardware v1.4 is frozen. GPIO map: `docs/hardware/HARDWARE_V1.md` §10.
+- Hardware **v1.5.3** GPIO/nuclear map: `docs/hardware/HARDWARE_V1.md` §10.
+  Nuclear = 74HCT123→Q1; no Q3; TPL@5V_BUS; P12=`SYS_KILL`↓.
+- Layout rules live in `gen_sch.py` docstring + plan checklist (KiCad 10 50 mil
+  grid, labels between blocks, no wires across IC bodies, T-junctions, ERC gate).

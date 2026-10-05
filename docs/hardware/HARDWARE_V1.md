@@ -1,19 +1,22 @@
 # Hardware v1 — CallOnFail
 
-**Hardware trabado en rev 1.4** (2026-09-12). No rediseñar alimentación / OR /
+**Hardware trabado en rev 1.5** (2026-10-04). No rediseñar alimentación / OR /
 MOSFET / enlace A↔B salvo bug real. Fuente de verdad: `gen_sch.py` + este doc +
 `hardware/COMPRA_V1.md`. El PDF se genera local con `kicad-cli sch export pdf`;
 no va en git.
 
 **Software / lab:** Telegram y email ya andan. Falta **probar el ciclo de alarma**.
-Firmware de I/O, RESET, WDT y LEDs de gabinete todavía no.
+Firmware de I/O, RESET, WDT y LEDs de gabinete todavía no (driver **PCF8575**).
 
 Placa: WT32-ETH01 + A7672SA-FASE. Perfil `cof-wt32-a7672-v1`.
 
 Esquemático KiCad 10: `hardware/kicad/cof-v1.kicad_pro`
 (hoja Alimentacion + hoja ESP32/modem/sensores).
-BOM: `hardware/kicad/cof-v1-bom.csv`. Compra: `hardware/COMPRA_V1.md`. Rev **1.4**
-(THT: 2× NDP6020P + 74HCT14; OR = módulo **LM66200**. Sin 2N7000 / HCT125).
+BOM: `hardware/kicad/cof-v1-bom.csv`. Compra: `hardware/COMPRA_V1.md`. Rev **1.5.3**
+(THT: **1×** NDP6020P + **2× 2N3904**; OR = **LM66200**; WDT = **TPL5010**@`5V_BUS`
++ NPN DONE; nuclear = **74HCT123** ~2 s → Q1; módem en `5V_SYS`; P12 = `SYS_KILL`↓;
+EN = lab only; I/O = **PCF8575** @ 3V3; campo = PC817 + relé opto 2CH + water;
+prog = **FT232** + BOOT/EN; RS485 auto IO12/IO39).
 Proto en dos placas unidas por bornera / Molex (no cinta IDC); después, una sola placa.
 
 **Lab** = ya cableado y en firmware. **v1** = placa a armar según este doc.
@@ -30,12 +33,13 @@ No usar GPIO21/22 para I2C. No alimentar el WT32 por 5V y 3V3 a la vez.
 | Temp ×4 (máx. de venta)     | DS18B20 en un bus, ~15–20 m, cadena                             |
 | Humedad + temp ambiente     | SHT31 en la placa                                               |
 | 220 V                       | ZMPT101B (no conectar 220 hasta validar)                        |
-| Fuga de agua                | IN1 (contacto seco)                                             |
-| 1 entrada más               | IN2                                                             |
-| 2 salidas de campo          | OUT1 / OUT2 relé                                                |
-| Buzzer de gabinete          | PCF P3, independiente de los relés                              |
-| LEDs de **gabinete**        | PWR, NET, ALARMA (frente; no los OUT de bornes)                 |
-| Botón **RESET** de gabinete | Hundido; corta `5V_SYS` ~2 s (placa + PHY). No silencia alarmas |
+| Fuga de agua                | Water Detector contacto seco → PCF **P00** (sin PC817)          |
+| Entradas de campo ×2        | IN1/IN2 vía PC817 2CH → PCF **P01** / **P13**                   |
+| 2 salidas de campo          | Módulo 2 relés opto (PCF P04/P05)                               |
+| Buzzer de gabinete          | PCF P03 → NPN → buzzer 5 V activo                               |
+| LEDs de **gabinete**        | PWR, NET, ALARMA, **LTE** (frente)                              |
+| Botón **RESET** de gabinete | Hundido; dispara one-shot ~2 s (corta `5V_SYS` + módem)         |
+| RS485                       | Módulo TTL↔RS485 auto (IO12 TX / IO39 RX)                       |
 | OLED                        | Servicio / lab, adentro, no en el frente                        |
 | Backup 4 h                  | Gel 6 V 7 Ah (VRLA). LiFePO4 queda para después                 |
 
@@ -72,20 +76,17 @@ vivo cuando se corta `5V_SYS`.
           │     └────────────────────────────────────────────── LM66200 ── 5V_BUS
           │                                                       (VIN1=PSU, VIN2=backup)
 5V_BUS  (+2200 µF + 100 nF)
-  ├── Supervisor WDT + one-shot RESET     (siempre que haya 5V_BUS)
+  ├── TPL5010 WDT (~10 min) + 74HCT123 one-shot (~2 s) → Q1
   │
-  ├── NDP6020P  →  5V_SYS
-  │     WT32 pin 5V
-  │     LED PWR
-  │     3V3 del WT32 → OLED, SHT31, PCF, DS18B20
-  │
-  └── NDP6020P  →  5V_MODEM
-        A7672 VCC (placa de lab, entra 5 V)
-        +1000 µF + 100 nF junto al módulo (placa B)
+  └── NDP6020P (Q1)  →  5V_SYS
+        WT32 pin 5V
+        A7672 VCC (+1000 µF + 100 nF en placa B)
+        LED PWR
+        3V3 del WT32 → OLED, SHT31, PCF, DS18B20
 ```
 
 Hay 220: la fuente de 5 V lleva todo. El XY-SJVA deja la gel en flote a
-6,85 V / 0,6 A. El buck-boost de backup está apagado (EN a GND vía 74HCT14).
+6,85 V / 0,6 A. El buck-boost de backup está apagado (EN a GND vía **2N3904**).
 
 Se corta la 220: se muere la fuente y el cargador. El EN del buck-boost se
 suelta (pull-up a Gel+), el LM66200 pasa a VIN2, la gel a 5,1 V en el bus.
@@ -119,42 +120,39 @@ Fuente 5V− ──── GND                        ├── VOUT ── 5V_BU
                  │   GND  ── VIN−
                  │           VOUT+ ── LM66200 VIN2 ─┘
                  │           VOUT− ── GND
-                 │           EN ── R2 10k a Gel+ ; D10 a 74HCT14 1Y (baja EN si hay PSU)
+                 │           EN ── R2 10k a Gel+ ; Q_EN 2N3904 hunde EN si hay PSU
                  │
-                 └── 10k ── PSU_DET ── 100k a GND ── 74HCT14 1A
+                 └── 10k ── PSU_DET ── 100k a GND ── base Q_EN (vía 10k)
 
 
 5V_BUS ── 2200 µF + 100 nF a GND
-       ├── WDT + one-shot RESET
-       ├── NDP6020P ── 5V_SYS    → WT32 5V, LED PWR, 3V3
-       └── NDP6020P ── 5V_MODEM  → A7672 VCC +1000 µF (en placa B)
+       ├── TPL5010 + 74HCT123 → gate Q1 (~2 s SYS off)
+       └── NDP6020P (Q1) ── 5V_SYS → WT32 5V, A7672 VCC, LED PWR, 3V3
 ```
 
 XY-SJVA: **CV 6,85 V / CC 0,6 A** (vacío, después gel). Buck-boost de
-backup: **5,1 V**. EN: pull-up a Gel+; con PSU el HCT14 + D10 lo baja a ~0.
+backup: **5,1 V**. EN: pull-up a Gel+; con PSU el **2N3904** lo baja a ~0.
 
-### Cortes (WDT / RESET / módem)
+### Cortes (WDT / RESET / nuclear)
 
 IRF4905 / IRF9540 no cierran bien a 5 V (quieren Vgs ≈ −10 V). Usar
 **P-MOSFET logic NDP6020P** (TO-220): source = `5V_BUS`, drain = carga,
 gate a GND = ON, gate a `5V_BUS` = OFF. Pinout de frente G-D-S. Arranca
-en el banco sin gel. No usar la gel 6 V como “12 V de gate” para un
-P-MOSFET de 5 V: no alcanza Vgs. Si no hay NDP6020P, **IRF5305** TO-220
-(peor Rds a −5 V; alcanza para el proto). **No** IRF4905 / IRF9540.
+en el banco sin gel. Si no hay NDP6020P, **IRF5305** TO-220. **No** IRF4905.
 
 
 | Qué        | Quién lo corta                                             | Default           |
 | ---------- | ---------------------------------------------------------- | ----------------- |
-| `5V_SYS`   | WDT timeout **o** botón RESET del gabinete (one-shot ~2 s) | ON                |
-| `5V_MODEM` | ESP32 IO (después AT / RESET del A7672)                    | ON                |
+| `5V_SYS`   | 74HCT123 (~2 s): TPL timeout / P12 `SYS_KILL` / BTN RESET  | ON                |
+| Módem      | Mismo Q1 (`5V_SYS`); soft = AT / RESET / PWRKEY            | ON                |
 | Gel        | Nadie                                                      | Siempre conectada |
 
 
-Un pulso a `EN` del ESP32 **no** resetea el PHY LAN8720. Por eso el RESET
-de gabinete corta `5V_SYS`, no el pin EN.
+Un pulso a `EN` del ESP32 **no** resetea el PHY LAN8720. Por eso el nuclear
+corta `5V_SYS` (ESP + PHY + módem). `EN` queda solo para lab (SW_EN).
 
-Durante una llamada hay que seguir pateando el WDT. Timeout 4–5 min
-(> llamada + TTS).
+Durante una llamada hay que seguir pateando el WDT. Timeout **~10 min**
+(REXT 57,6 kΩ tabla TI; > llamada + TTS + margen).
 
 ### Por qué 6 V y por qué buck-boost
 
@@ -201,7 +199,7 @@ Todo a 3V3 del WT32 (riel `5V_SYS`).
 | ----------- | --------- | ----------------------------- |
 | OLED SH1106 | 0x3C      | Lab / adentro del gabinete    |
 | SHT31       | 0x44      | Humedad + temp ambiente       |
-| PCF8574     | 0x20–0x27 | 2 IN, 2 OUT, buzzer, 2 LEDs de frente |
+| PCF8575     | 0x20–0x27 | 16 I/O: campo, buzzer, LEDs, SYS_KILL, ETH_RST. **VDD=3V3** |
 
 
 ---
@@ -222,35 +220,44 @@ No parásito. Cable tipo UTP, par DATA+GND.
 ## 5. ZMPT101B — IO36 (lab, 220 después)
 
 ```text
-ZMPT OUT  →  1 kΩ  → IO36
-             └── 100 nF a GND
+ZMPT VCC  →  5V_SYS
+ZMPT OUT  →  10 kΩ  → IO36
+                  ├── 15 kΩ a GND
+                  └── 100 nF a GND
 ZMPT GND  →  GND
 ```
 
+No conectar 220 V hasta validar el divisor en lab.
+
 ---
 
-## 6. Bornes de campo — PCF8574 (v1)
+## 6. Bornes de campo — PCF8575 (v1.5)
 
-Hoy el firmware solo usa P0 como botón de lab. En v1:
+VDD del PCF = **3V3** (no 5 V: I2C al ESP32). Firmware de gabinete aún no.
 
-
-| PCF | I/O | Qué                                                              |
-| --- | --- | ---------------------------------------------------------------- |
-| P0  | IN  | IN1 fuga (borne)                                                 |
-| P1  | IN  | IN2 extra (borne)                                                |
-| P2  | —   | Spare, 10 k a 3V3, sin borne                                     |
-| P3  | OUT | **Buzzer** 5 V (ULN O3). Adentro. Regla aparte, no es OUT de campo |
-| P4  | OUT | OUT1 relé (ULN O1)                                               |
-| P5  | OUT | OUT2 relé (ULN O2)                                               |
-| P6  | OUT | LED NET (sink)                                                   |
-| P7  | OUT | LED ALARMA (sink)                                                |
+**Módulo 2 relés opto:** `VCC` (lógica/opto) a **3V3**, `JD-VCC` (bobinas) a
+**5V_SYS**. Jumper **VCC–JD-VCC OFF** (aislado).
 
 
-Entradas: contacto seco a GND. **10 k a 3V3 en la placa** (R27 R28), no
-confiar solo en el pull-up débil del PCF. El firmware igual escribe 0xFF.
+| PCF | I/O | Qué |
+| --- | --- | --- |
+| P00 | IN | Fuga agua: Water Detector NO→P00, COM→GND (sin opto) |
+| P01 | IN | Campo IN1 vía PC817 ch1 |
+| P02 | IN | Botón **servicio** (lab/mantenimiento; no RESET, no silencia) |
+| P03 | OUT | Buzzer: →1k→ Q_BZ 2N3904 (coll. a buzzer−; + = 5V_SYS) |
+| P04 | OUT | Relé módulo IN1 (activo LOW típico) |
+| P05 | OUT | Relé módulo IN2 |
+| P06 | OUT | LED NET (ánodo **3V3**, cátodo P06) |
+| P07 | OUT | LED ALARMA (ánodo **3V3**, cátodo P07) |
+| P10 | OUT | LED LTE (ánodo **3V3**, cátodo P10) |
+| P11 | OUT | ETH_RST → 1N4148 → LAN8720 nRST (soldado en módulo) |
+| P12 | OUT | SYS_KILL → TRIG_N (pulso **bajo** = nuclear ~2 s) |
+| P13 | IN | Campo IN2 vía PC817 ch2 (10k PU) |
+| P14–P17 | — | Spare NC |
 
-Los 2 IN + 2 OUT de bornes son **campo**. El buzzer es P3. LEDs P6/P7 al
-frente. No usar bornes para LEDs ni RESET.
+
+Campo IN1/IN2 vía **PC817** (los 2 canales). Agua **no** usa opto (contacto
+seco a P00). Pull-ups 10 k a 3V3 en lado MCU.
 
 ---
 
@@ -259,38 +266,34 @@ frente. No usar bornes para LEDs ni RESET.
 Tres LEDs y un botón, cable a un conector de la placa. No usar OUT1/OUT2 ni IN1–2.
 
 
-| Frente | Color / tipo          | Qué hace                     | Origen                                   |
-| ------ | --------------------- | ---------------------------- | ---------------------------------------- |
-| PWR    | LED verde             | Hay `5V_SYS`                 | 5V_SYS + resistor, **sin** el ESP32      |
-| NET    | LED verde/azul        | Ethernet o MQTT OK           | PCF **P6** (sink)                        |
-| ALARMA | LED rojo              | Alarma abierta               | PCF **P7** (sink)                        |
-| RESET  | Botón NA, **hundido** | Power cycle de `5V_SYS` ~2 s | Al supervisor / MOSFET, **sin** el ESP32 |
+| Frente | Color / tipo          | Qué hace                     | Origen |
+| ------ | --------------------- | ---------------------------- | ------ |
+| PWR    | LED verde             | Hay `5V_SYS`                 | 5V_SYS + R → GND (sin PCF) |
+| NET    | LED verde/azul        | Ethernet o MQTT OK           | **3V3** + R → PCF **P06** |
+| ALARMA | LED rojo              | Alarma abierta               | **3V3** + R → PCF **P07** |
+| LTE    | LED (ámbar/azul)      | Enlace LTE / MQTT LTE        | **3V3** + R → PCF **P10** |
+| RESET  | Botón NA, **hundido** | `5V_SYS` off mientras se mantiene | BTN → gate Q1 |
 
 
-Hundido (agujero, clip o botón bajo) para que no lo dispare un palo de escoba.
-**No silencia alarmas.** Es “reiniciá la caja”. Al volver, si el sensor sigue mal, la alarma se vuelve a armar.
+Hundido. **No silencia alarmas.**
 
-No atarlo solo a `EN` del WT32: eso no resetea el PHY.
-
-Conector de panel (5 pines):
+Conector de panel (**6 pines**):
 
 ```text
 1  GND
-2  LED_PWR
-3  LED_NET      P6
-4  LED_ALARMA   P7
-5  BTN_RESET    NA a GND; el otro lado dispara el one-shot de 5V_SYS
+2  LED_PWR      ánodo (5V_SYS→330Ω en placa; cátodo del LED de frente a GND)
+3  LED_NET      P06 (cátodo; ánodo en placa a 3V3→330Ω)
+4  LED_ALARMA   P07 (cátodo; ánodo en placa a 3V3→330Ω)
+5  LED_LTE      P10 (cátodo; ánodo en placa a 3V3→330Ω)
+6  BTN_RESET    → TRIG_N (NA a GND; nuclear ~2 s)
 ```
 
-**Buzzer** adentro, PCF **P3** → ULN O3. Una regla puede pedirlo **sin** cerrar OUT1/OUT2.
+**Buzzer** adentro: `5V_SYS` → buzzer+ ; buzzer− → collector **Q_BZ** 2N3904;
+P03 → 1 kΩ → base; emitter GND. PCF nunca ve 5 V. Servicio: táctil → **PCF P02**.
 
-El RJ45 del WT32 puede traer LED de link: se queda en el jack (además del NET de frente).
+Prog lab: **FT232** + **SW_BOOT** (IO0) + **SW_EN** (EN). No 5 V USB al WT32.
 
-Opcional más adelante: LED LTE. No en v1.
-
-Botón de **servicio** (llamada corta / OTA larga): táctil **adentro**, a **IO39** → GND,
-con **10 k a 3V3** (IO39 no tiene pull interno).
-No es el RESET del frente.
+PHY soft-reset: PCF P11 → 1N4148 → nRST LAN8720 (hilo a pad R43 del WT32).
 
 ---
 
@@ -302,7 +305,7 @@ UART lab, 115200:
 A7672 TXD  →  WT32 IO5
 A7672 RXD  →  WT32 IO17
 GND comun
-5V_MODEM   →  A7672 VCC
+5V_SYS     →  A7672 VCC
 ```
 
 Control v1 (open-collector a GND; el módulo ya tiene pull-up). **1 k en
@@ -317,76 +320,55 @@ serie** en RESET y PWRKEY. No >100 nF en estos pines. No bajar RESET y PWRKEY a 
 
 `USIM_RST` es la SIM, no el módem.
 
-Si RESET no alcanza: MOSFET corta `5V_MODEM` y después PWRKEY.
+Si RESET soft no alcanza: `SYS_KILL` (nuclear) o botón gabinete; luego PWRKEY.
 
 ---
 
-## 9. WDT externo + RESET (v1)
+## 9. WDT externo + nuclear RESET (v1.5.3)
 
-Alimentado de `5V_BUS` (no de `5V_SYS`). DIP: **CD4541** (timeout ~4–5 min)
-+ **TLC555** (CMOS, one-shot ~2 s). No NE555 bipolar (HIGH ≈ 3,7 V, no
-apaga el NDP6020P). Vale 7555 / LMC555 / TS555, mismo encapsulado DIP-8.
+**TPL5010** a **`5V_BUS`** (siempre vivo con fuente/gel). Intervalo **~10 min**
+vía REXT **57,6 kΩ** (tabla TI). `WAKE` NC. `RSTn` → net `TRIG_N` (OR open-drain
+con P12 / BTN). Sin TLC555. **No** ata `EN`.
 
-```text
-IO15 ──┤ ├── (acople, no DC) ── reset del CD4541     patada
-                                 │
-                                 timeout 4–5 min
-                                 │
-BTN_RESET (NA a GND) ────────────┴── trigger TLC555
-                                      │
-                                      Q ~2 s HIGH ≈ 5 V
-                                      ├── reset del CD4541
-                                      └── 1k ── gate Q1 NDP6020P (100k a GND)
-                                            → 5V_SYS OFF ~2 s → ON
+**DONE (nivel):** VDD=5 V exige DONE ≥ ~3,5 V. IO15 solo da 3,3 V → **NPN
+open-drain** (`Q_DONE` 2N3904): colector = DONE + PU 10 k a `5V_BUS`; base ←
+IO15 vía 1 k. Idle firmware: IO15 **alto** (DONE bajo). Pateo: pulso IO15
+**bajo** (DONE sube = clear WDT).
 
-MODEM_CUT (GPIO 3,3 V, HIGH=corte) ── 1k + 100k PD
-                      ── 74HCT14 (2A→2Y→3A→3Y, buffer)
-                      ── gate Q3 NDP6020P (100k a GND)
-                      → 5V_MODEM OFF
-```
+**74HCT123** @ `5V_BUS`: trig en **A1** ← `TRIG_N` (flanco bajada; B1=VCC).
+**Q** → net `HCT_Q` → 1 k → gate Q1 ~2 s (R 100 k + C 47 µF en RCx).
+A1 y Q son nodos distintos (no se unen). Mitad 2: A2=VCC, B2=GND, `/CLR2`=GND.
 
-- Patada **acoplada por capacitor**: IO15 es strapping; no puede quedar a GND
-en el reset del ESP32.
-- El one-shot **reinicia el 4541**: después de un RESET hay otros 4–5 min
-para bootear y volver a patear.
-- El botón dispara el **mismo** one-shot. Funciona con el firmware muerto.
-- No silencia alarmas. Al volver `5V_SYS`, si el sensor sigue mal, se rearma.
+**/CLR blank:** al enchufar, RC 100 k + 2,2 µF mantiene `/CLR` bajo ~220 ms
+(> POR TPL ~120 ms) para no disparar el one-shot por el POR del TPL.
 
-### MOSFET high-side (los dos rieles 5 V)
-
-**`5V_SYS`:** el TLC555 sale a 5 V. 1 k al gate, 100 k a GND (default ON).
-Idle LOW → ON. Pulso HIGH → gate a 5 V → OFF.
-
-**`5V_MODEM`:** el GPIO es 3,3 V. **74HCT14** DIP-14 (Schmitt): dos
-inversores en serie = buffer 0/5 V al gate. Entrada TTL (3,3 V = HIGH).
-Puertas libres: entradas a GND. Reemplaza el 74HCT125.
+**RESET gabinete / P12:** bajan `TRIG_N` a GND → flanco en A → nuclear ~2 s.
 
 ```text
-5V_BUS ── S NDP6020P D ── 5V_SYS
-              G ── 100k GND ── 1k ── TLC555 OUT
-
-5V_BUS ── S NDP6020P D ── 5V_MODEM
-              G ── 100k GND ── 3Y 74HCT14
-                               3A ← 2Y ; 2A ── 1k ── MODEM_CUT ── 100k GND
-                               VCC=5V_BUS   GND pin 7
+IO15 ──1k── Q_DONE ── DONE ── TPL5010@BUS ── RSTn ──┐
+                                                    ├── TRIG_N ──► A1 74HCT123
+SYS_KILL (P12 pulso bajo) ──────────────────────────┤              Q ──► HCT_Q ──1k── Q1 gate
+BTN_RESET / SW1 ── GND ─────────────────────────────┘
+/CLR1 ── RC blank (100k+2.2u a BUS/GND)
 ```
 
-Cinta suelta: A a GND vía 100 k → buffer=0 → módem ON. No TXS0102.
+### MOSFET high-side
 
-Quedan **solo Q1 y Q3** (NDP6020P). El OR lo hace el LM66200.
+```text
+5V_BUS ── S NDP6020P D ── 5V_SYS (= módem)
+              G ── 100k GND ── 1k ← HCT_Q ← Q (74HCT123)
+```
 
-NDP6020P: Rds ~50 mΩ a Vgs = −4,5 V, aguanta el pico de 2 A del A7672.
+Solo **Q1** (sin Q3). OR rieles = LM66200.
 
 ### EN del buck-boost
 
 ```text
-5V_PSU ── 10k ── PSU_DET ── 100k a GND ── 74HCT14 1A
-Gel+ ── 10k ── EN (HIGH = backup ON)
-EN ──|>|── 1Y   (D10 1N4148: HCT solo baja EN; no pelea el pull-up)
+5V_PSU ── 10k ── PSU_DET ── 100k a GND ── 10k ── base Q_EN
+Gel+ ── 10k ── BB_EN ── collector Q_EN (emitter GND)
 ```
 
-Hay fuente de 5 V → 1Y bajo → EN ≈ 0 → backup apagado. Sin 5V_PSU → EN a
-Gel+ → backup.
+Hay PSU → Q_EN ON → EN≈0 → backup off. Sin PSU → EN a Gel+ → backup on.
 
 Usar la gel en un corte es normal. Lo que la mata es seguir chupando
 cuando ya está vacía (menos de ~5,5 V, sulfato). El convertidor de backup
@@ -412,28 +394,30 @@ si el ESP está muerto, no alcanza.
 
 ---
 
-## 10. GPIO WT32 — mapa
+## 10. GPIO WT32 — mapa (v1.5.3)
+
+Header útil **lleno** (0 libres). `SYS_KILL` va por PCF P12.
 
 
-| GPIO       | Uso                              |
-| ---------- | -------------------------------- |
-| 0          | ETH CLK + boot                   |
-| 2          | A7672 PWRKEY (v1)                |
-| 4          | A7672 RESET (v1)                 |
-| 5          | UART módem RX                    |
-| 14         | DS18B20                          |
-| 15         | WDT kick (v1)                    |
-| 16, 18, 23 | Ethernet                         |
-| 17         | UART módem TX                    |
-| 32         | I2C SDA                          |
-| 33         | I2C SCL                          |
-| 35         | ADC gel (v1)                     |
-| 36         | ZMPT                             |
-| 39         | Botón de servicio (v1, opcional) |
+| GPIO | Uso |
+| ---- | --- |
+| 0 | ETH REFCLK + SW_BOOT |
+| 1 / 3 | UART0 ↔ FT232 |
+| 2 | A7672 PWRKEY |
+| 4 | A7672 RESET |
+| 5 / 17 | UART módem RX / TX |
+| 12 | RS485 TX |
+| 14 | DS18B20 |
+| 15 | TPL5010 DONE (vía NPN; idle alto, pateo bajo) |
+| 16, 18, 23 | Ethernet (interno) |
+| 32 / 33 | I2C SDA / SCL |
+| 35 | ADC gel |
+| 36 | ZMPT |
+| 39 | RS485 RX |
+| EN | SW_EN lab only |
 
 
-IO2 / IO4 / IO15 / IO35 / IO39: propuesta de PCB, no están en firmware.
-`MODEM_CUT` (J3): GPIO de salida TBD; no IO39, no IO2, no strapping. HIGH = corta `5V_MODEM`.
+`SYS_KILL`: PCF **P12** (pulso **bajo** = nuclear). Servicio: PCF **P02**.
 
 ---
 
@@ -445,8 +429,8 @@ cinta IDC-10.** Cable a cable, pinout marcado en ambos lados. 5 V en
 **0,75 mm²**. Cuando A y B anden, esas nets pasan a pistas en **una sola
 placa** y J7–J10 desaparecen.
 
-`5V_BUS`, `5V_PSU` y el WDT se quedan en A. `3V3` se queda en B (sale del
-WT32). No pasar `GEL+`.
+`5V_BUS` y `5V_PSU` se quedan en A. TPL5010 y 74HCT123 viven de `5V_BUS` en A
+(no necesitan 3V3 de B). Pin 6 `3V3` queda por si hace falta. No pasar `GEL+`.
 
 **J7 / J8 — 5 V (bornera 5,08)**
 
@@ -455,7 +439,7 @@ WT32). No pasar `GEL+`.
 | 1   | GND         | —         |
 | 2   | `5V_SYS`    | A → B     |
 | 3   | GND         | —         |
-| 4   | `5V_MODEM`  | A → B     |
+| 4   | `5V_SYS`    | A → B     |
 
 **J9 / J10 — señales (Molex KK o bornera)**
 
@@ -463,14 +447,16 @@ WT32). No pasar `GEL+`.
 | --- | ----------- | --------- |
 | 1   | `GEL_ADC`   | A → B     |
 | 2   | `IO15`      | B → A     |
-| 3   | `MODEM_CUT` | B → A     |
-| 4   | `LED_PWR`   | A → B     |
-| 5   | `BTN_RESET` | B → A     |
-| 6   | GND         | —         |
+| 3   | `TRIG_N`    | B → A (P12 SYS_KILL) |
+| 4   | `SPARE`     | —         |
+| 5   | `TRIG_N`    | B → A (BTN panel) |
+| 6   | `3V3`       | B → A     |
+| 7   | `SPARE2`    | —         |
+| 8   | GND         | —         |
 
-Si un pin de señal queda abierto: el equipo falla (WDT, ADC, corte de módem)
-pero no se quema: gates con 100 k a GND **en A**, `MODEM_CUT` con pull-down
-al HCT. Si falta **GND** y sigue habiendo 5 V, sí se puede romper el ESP.
+Si un pin de señal queda abierto: el equipo falla (WDT, ADC, nuclear) pero no
+se quema: gate Q1 con 100 k a GND **en A**; `TRIG_N` con PU 100 k a BUS. Si
+falta **GND** y sigue habiendo 5 V, sí se puede romper el ESP.
 
 ---
 
@@ -478,8 +464,8 @@ al HCT. Si falta **GND** y sigue habiendo 5 V, sí se puede romper el ESP.
 
 1. AT (CFUN, hangup).
 2. RESET del A7672 (~2,5 s).
-3. Cortar `5V_MODEM` + PWRKEY.
-4. Cortar `5V_SYS` (placa + PHY): WDT o **botón RESET del gabinete**.
+3. PWRKEY cycle.
+4. Nuclear `5V_SYS` (ESP + PHY + módem): TPL timeout, `SYS_KILL`, o **BTN RESET**.
 
 ---
 
@@ -488,58 +474,31 @@ al HCT. Si falta **GND** y sigue habiendo 5 V, sí se puede romper el ESP.
 **Frente (gabinete):** LEDs PWR, NET, ALARMA. Botón RESET hundido. Bornes IN1–2, OUT1–2. Jack Ethernet. Buzzer adentro. (SIM / SMA antena según mecánica.)
 
 **Adentro:** WT32, A7672, OLED, SHT31, PCF, ZMPT, fuente 5 V 5 A, XY-SJVA
-(carga gel), buck-boost 5 A (backup), WDT (4541+555), NDP6020P, divisor gel
-en IO35, botón de servicio (IO39), USB-serial de fábrica.
+(carga gel), buck-boost 5 A (backup), TPL5010, 74HCT123, NDP6020P×1, divisor
+gel en IO35, botón de servicio (PCF P02), USB-serial FT232.
 
 ### Pedido AE (un prototipo)
 
-Igual a `hardware/COMPRA_V1.md`. Alineado al BOM. Gel **6 V 7 Ah** (NP7-6):
-acá, no China. Fuente **5 V 5 A**: ya comprada.
+Igual a `hardware/COMPRA_V1.md` (rev **1.5.3**). Gel **6 V 7 Ah** acá. Fuente **5 V 5 A**: ya comprada.
 
+Piezas clave vs 1.4: **2N3904×2**, **TPL5010**, **74HCT123**, **PCF8575**, PC817
+2CH, water detector, relé opto 2CH, RS485 auto, FT232, LED LTE. Salen: HCT14,
+CD4541, TLC555, ULN2003, PCF8574, Q3/MODEM_CUT, relés sueltos.
 
-| Cant. pedido | Buscar | Usa el proto | Para |
-| ------------ | ------ | ------------ | ---- |
-| 1 | **XY-SJVA** (o XY-SJVA-4) CC/CV 3 A 35 W, **dos potes** | 1 | Carga gel **6,85 V / 0,6 A** desde `5V_PSU` |
-| 1 | Buck-boost auto **XL6019** (no XL6009 de un pote, no ZK-4KX) | 1 | Backup gel → **5,1 V** |
-| 5–10 | **NDP6020P** TO-220 (alt **IRF5305**) | **2** | Q1 SYS, Q3 módem. No IRF4905 |
-| 1 | **LM66200** módulo dual ideal-diode (pines 2,54) | 1 | OR `5V_PSU` + XL6019 → `5V_BUS` |
-| 5–10 | **74HCT14** DIP-14 | **1** | EN backup + buffer MODEM_CUT. No HCT125 |
-| 5–10 | **CD4541BE** DIP-16 | 1 | WDT ~4–5 min |
-| 10 | **TLC555** (7555 / LMC555) DIP-8 **CMOS** | 1 | One-shot ~2 s. **No NE555 bipolar** |
-| pack | **1N4148** | **4** | D3 D4 D5 WDT + D10 EN |
-| pack | **1N4007** | **2** | Flyback relés. No en el riel de 5 V |
-| 4 | DS18B20 waterproof | 4 | Temps |
-| 1 | SHT31 I2C | 1 | Humedad |
-| 1 | PCF8574 módulo | 1 | 2 IN + 2 OUT + buzzer P3 + LEDs NET/ALARMA |
-| 1 | OLED 1.3" SH1106 | 1 | Si no está el del lab |
-| 1 | ULN2003 + 2 relés 5 V | 1 | OUT1 / OUT2 |
-| 5–10 | **Buzzer activo 5 V** | **1** | PCF **P3** → ULN O3. Independiente de OUT1/OUT2 |
-| 5+1 | Fusible 5×20 **5 A** + porta | 1 | Gel+ |
-| 10 c/u | 1000 µF y 2200 µF / 16 V | 1+1 | `5V_BUS`, A7672 |
-| 10 | 100 µF, 10 µF | 1+1 | 555 y `5V_SYS` |
-| packs | 10 k, 100 k, 47 k, 22 k, 4k7, **1 k**, 330, **1 M**, 100 nF / 10 nF **paso 2,54** | ver BOM | |
-| 20 c/u | LED 5 mm verde / rojo / azul | 3 | PWR / ALARMA / NET |
-| 1 | Pulsador panel NA hundido + táctiles 6×6 | 2 | RESET + servicio |
-| 1 set | Bornera 5,08 mm | — | IN/OUT |
-| 1 set | **Bornera 5,08** 4 polos ×2 | 2 | J7 / J8 enlace 5 V A↔B. No IDC |
-| 1 set | **Molex KK 2,54** 6p + housing ×2 (o bornera 6) | 2 | J9 / J10 señales A↔B |
-
-
-No ZK-S4. No XL4015. No XL6009 de un pote. No IRF4905/IRF9540. **No cinta IDC**. **No SB560**.
-**No 2N7000** (EN/OR los hace HCT14 + LM66200). **No 74HCT125**. **No NE555 bipolar**.
-No 1N4007 en el riel de 5 V. No shifter I2C para el módem. No SOT-23 suelto en
-proto (salvo el SMD del módulo LM66200). 100 nF / 10 nF en paso 2,54 mm, no 0805.
+No ZK-S4 / XL4015 / XL6009 1-pote / IRF4905 / cinta IDC / SB560 / 2N7000 /
+HCT125 / TLC555 / NE555 / shifter I2C.
 
 XY-SJVA: CV **6,85 V**, CC **0,6 A**, vacío primero. No unir IN−/OUT− si el
 tester los ve abiertos. LED verde de “lleno” no vale para gel.
 
-### Seguridad en el proto (rev 1.4)
+### Seguridad en el proto (rev 1.5.3)
 
-- Gates de MOSFET definidos **en la placa que tiene el FET**, no del otro lado del enlace.
-- `MODEM_CUT` y WDT: 1 k serie + 100 k a GND. Default = riel ON. **R20 100 k** baja MR del 4541 (si no, queda en reset).
-- EN backup: R2 a Gel+; HCT14+D10 baja EN si hay PSU. Sin PSU el backup arranca.
-- **LM66200**: OR de PSU y backup. Nunca puentear `5V_PSU` con `5V_BUS`. EN del módulo a GND.
-- 100 nF junto a 4541, 555, PCF, WT32 5 V, A7672; 10 µF en `5V_SYS`; 1000 µF del módem **en B**.
-- IO39 e IN1–2: pull-up 10 k a 3V3 en placa.
-- RESET/PWRKEY del A7672: 1 k serie. ZMPT: 1 k + 100 nF.
-- Enlace proto: bornera / Molex, no cinta IDC. Dos GND en 5 V. No hot-plug. No 5 V y 3V3 a la vez en el WT32.
+- Gate Q1 definido **en A** (100 k a GND; idle ON).
+- EN backup: R2 a Gel+; **Q_EN** baja EN si hay PSU.
+- **SYS_KILL** (P12 pulso bajo) + BTN + TPL RSTn → `TRIG_N` → 74HCT123 → Q1.
+- LEDs NET/ALARM/LTE a **3V3** (mismo dominio que PCF). Buzzer 5 V solo vía **Q_BZ**.
+- **LM66200**: OR PSU+backup. No puentear `5V_PSU` con `5V_BUS`.
+- TPL5010 a `5V_BUS`; DONE vía NPN OD; REXT 57,6 kΩ (~10 min); `/CLR` blank.
+- PHY nRST: solo sink vía 1N4148; no pelear el RC del módulo.
+- FT232: GND+TX+RX; **no** 5 V USB al WT32.
+- Enlace proto: bornera / Molex, no IDC. No hot-plug. No 5 V y 3V3 a la vez en el WT32.
