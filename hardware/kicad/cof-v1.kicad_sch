@@ -11,68 +11,139 @@
 		(company "CallOnFail")
 		(comment 1 "WT32 + A7672 + gel 6V + TPL5010 + 74HCT123 + PCF8575. Ver docs/HARDWARE_V1.md")
 	)
-	(lib_symbols
-	)
+	(lib_symbols)
 	(text "CallOnFail hardware v1.5.3"
 		(exclude_from_sim no)
-		(at 50.80 30.48 0)
-		(effects (font (size 3.81 3.81)) (justify left bottom))
+		(at 50.8 30.48 0)
+		(effects
+			(font
+				(size 3.81 3.81)
+			)
+			(justify left bottom)
+		)
 		(uuid "2867a136-e51f-45b2-bd89-383189c978fa")
-	)
-	(text "Dos hojas: A alimentacion+TPL+123 + B I/O. Enlace proto bornera/Molex. Luego una placa."
-		(exclude_from_sim no)
-		(at 50.80 40.64 0)
-		(effects (font (size 1.27 1.27)) (justify left bottom))
-		(uuid "be286f12-85e3-4e1e-925c-b1a364277361")
 	)
 	(text "5V_PSU  5V_BUS  5V_SYS  3V3  GEL_P  GEL_ADC  IO15  TRIG_N  HCT_Q  PHY_NRST"
 		(exclude_from_sim no)
-		(at 50.80 48.26 0)
-		(effects (font (size 1.27 1.27)) (justify left bottom))
+		(at 50.8 48.26 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
 		(uuid "b0a174bf-d296-43e4-93fc-c0b539af45ed")
 	)
 	(text "Rev 1.5.3: sin Q3; modem=SYS; TPL@BUS+NPN; 74HCT123~2s→Q1; P12 SYS_KILL↓; EN=lab."
 		(exclude_from_sim no)
-		(at 50.80 55.88 0)
-		(effects (font (size 1.27 1.27)) (justify left bottom))
+		(at 50.8 55.88 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
 		(uuid "bcf32510-6e15-4180-a86f-4f2176a6ab31")
 	)
+	(text "Dos hojas: A alimentacion+TPL+123 + B I/O. Enlace proto bornera/Molex. Luego una placa."
+		(exclude_from_sim no)
+		(at 50.8 40.64 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "be286f12-85e3-4e1e-925c-b1a364277361")
+	)
 	(sheet
-		(at 50.80 76.20)
+		(at 50.8 76.2)
 		(size 71.12 40.64)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(stroke (width 0.1524) (type solid))
-		(fill (color 0 0 0 0.0000))
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
 		(uuid "a2222222-2222-4222-8222-222222222222")
 		(property "Sheetname" "Alimentacion"
-			(at 50.80 75.00 0)
-			(effects (font (size 1.27 1.27)) (justify left bottom))
+			(at 50.8 75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
 		)
 		(property "Sheetfile" "01-alimentacion.kicad_sch"
-			(at 50.80 117.50 0)
-			(effects (font (size 1.27 1.27)) (justify left top))
+			(at 50.8 117.5 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "cof-v1"
+				(path "/a1111111-1111-4111-8111-111111111111"
+					(page "2")
+				)
+			)
 		)
 	)
 	(sheet
-		(at 160.02 76.20)
+		(at 160.02 76.2)
 		(size 81.28 40.64)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(stroke (width 0.1524) (type solid))
-		(fill (color 0 0 0 0.0000))
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
 		(uuid "a3333333-3333-4333-8333-333333333333")
 		(property "Sheetname" "ESP32 modem sensores"
-			(at 160.02 75.00 0)
-			(effects (font (size 1.27 1.27)) (justify left bottom))
+			(at 160.02 75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
 		)
 		(property "Sheetfile" "02-io.kicad_sch"
-			(at 160.02 117.50 0)
-			(effects (font (size 1.27 1.27)) (justify left top))
+			(at 160.02 117.5 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "cof-v1"
+				(path "/a1111111-1111-4111-8111-111111111111"
+					(page "3")
+				)
+			)
 		)
 	)
 	(sheet_instances
